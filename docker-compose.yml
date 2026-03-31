@@ -1,6 +1,6 @@
 version: '3.9'
-# Production deployment — pulls pre-built image from GitHub Container Registry
-# First-time setup: see README.md
+# Production — pulls pre-built image from GitHub Container Registry
+# Setup: see README.md
 
 services:
   db:
@@ -43,8 +43,6 @@ services:
       SMTP_PASS:          ${SMTP_PASS:-}
       SMTP_FROM:          ${SMTP_FROM:-noreply@localhost}
       HASH_SALT:          ${HASH_SALT}
-    volumes:
-      - ./td-game.html:/app/client/build/td-game.html:ro
 
 volumes:
   pgdata:

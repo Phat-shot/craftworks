@@ -40,8 +40,6 @@ services:
       SMTP_PASS:          ""
       SMTP_FROM:          noreply@localhost
       HASH_SALT:          local_salt_changeme
-    volumes:
-      - ./td-game.html:/app/client/build/td-game.html:ro
 
 volumes:
   pgdata_local:

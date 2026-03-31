@@ -34,9 +34,6 @@ Node.js · React · PostgreSQL · Socket.io · Docker.
 git clone https://github.com/YOURNAME/YOURREPO.git
 cd YOURREPO
 
-# TD-Spiel ablegen
-cp /pfad/zu/td-mobile.html ./td-game.html
-
 # Starten – kein .env nötig
 docker compose -f docker-compose.local.yml up --build
 
@@ -60,9 +57,6 @@ mkdir gameplatform && cd gameplatform
 curl -O https://raw.githubusercontent.com/YOURNAME/YOURREPO/main/docker-compose.yml
 curl -O https://raw.githubusercontent.com/YOURNAME/YOURREPO/main/.env.example
 mv .env.example .env
-
-# TD-Spiel hochladen
-scp /pfad/zu/td-mobile.html user@server:~/gameplatform/td-game.html
 
 # .env befüllen (siehe Abschnitt unten)
 nano .env
@@ -176,7 +170,7 @@ cd android && ./gradlew assembleDebug
 │  └───────────┘   │  Socket.io     │──┼──► :4000
 │                  │                │  │
 │                  │  React Build   │  │  (statisch ausgeliefert)
-│                  │  td-game.html  │  │  (dein TD-Spiel)
+│                  │  td-game.html  │  │  (im Image enthalten)
 │                  └────────────────┘  │
 └──────────────────────────────────────┘
 ```
@@ -234,7 +228,7 @@ cd android && ./gradlew assembleDebug
 ├── docker-compose.yml           Production (ghcr.io Image)
 ├── docker-compose.local.yml     Lokal/LAN (baut selbst)
 ├── .env.example
-└── td-game.html                 ← HIER dein Spiel ablegen (.gitignore)
+└── client/public/td-game.html   ← Spiel-Datei (im Repo, wird ins Image gebaut)
 ```
 
 ---
