@@ -68,7 +68,7 @@ export default function LobbyRoom() {
   if (!lobby) return <div className="loading-screen">{t('loading')}</div>;
 
   const isHost = lobby.host_id === user.id;
-  const canStart = isHost && members.length >= 2;
+  const canStart = isHost && members.length >= 1;
 
   return (
     <div className="lobby-room">
@@ -132,7 +132,7 @@ export default function LobbyRoom() {
         ))}
       </div>
 
-      {allReady && members.length >= 2 && (
+      {allReady && members.length >= 1 && (
         <div className="alert alert-success" style={{ marginBottom: 12 }}>{t('all_ready')}</div>
       )}
 

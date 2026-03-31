@@ -212,10 +212,10 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 const COLS=15, ENTRY_COL=7;
 let TILE,ROWS,CW,CH,EXIT_ROW;
 function computeLayout(){
-  const aw=window.innerWidth;
-  const topH=document.getElementById('topbar').getBoundingClientRect().height||44;
-  const botH=document.getElementById('botbar').getBoundingClientRect().height||115;
-  const ah=Math.max(60,window.innerHeight-topH-botH);
+  // Use canvaswrap's actual rendered dimensions — works in both standalone and iframe
+  var wrap=document.getElementById('canvaswrap');
+  var aw=wrap.clientWidth||window.innerWidth;
+  var ah=wrap.clientHeight||Math.max(60,window.innerHeight-159);
   TILE=Math.max(18,Math.floor(aw/COLS));
   CW=TILE*COLS; ROWS=Math.max(10,Math.floor(ah/TILE)); EXIT_ROW=ROWS-1; CH=TILE*ROWS;
 }
@@ -1429,43 +1429,44 @@ function loop(ts){
 // ═══════════════════════════════════════════════════════
 //  BOOT — wait for difficulty selection
 // ═══════════════════════════════════════════════════════
-// Auto-start support: /td-game.html?difficulty=normal
 (function(){
-  var params  = new URLSearchParams(window.location.search);
-  var urlDiff = params.get('difficulty');
+  var params=new URLSearchParams(window.location.search);
+  var urlDiff=params.get('difficulty');
+  var done=false;
 
   function doInit(){
+    if(done)return;
     computeLayout();
-    canvas.width  = CW||window.innerWidth||880;
-    canvas.height = CH||window.innerHeight||560;
+    if(!CW||!CH)return; // still zero, wait
+    done=true;
     buildTextures();
-    ctx.fillStyle='#060408';
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-    if(urlDiff) startDiff(urlDiff);
+    buildEnemySprites();
+    canvas.width=CW;canvas.height=CH;
+    ctx.fillStyle='#060408';ctx.fillRect(0,0,CW,CH);
+    if(urlDiff)startDiff(urlDiff);
   }
 
-  // Use ResizeObserver on canvaswrap — fires when element has real size in iframe
-  var wrap = document.getElementById('canvaswrap');
-  var done = false;
-  if(wrap && window.ResizeObserver){
-    var ro = new ResizeObserver(function(entries){
-      var r = entries[0].contentRect;
-      if(r.width>0 && r.height>0 && !done){
-        done=true; ro.disconnect(); doInit();
-      }
+  // ResizeObserver fires when canvaswrap gets actual size (works in iframe)
+  var wrap=document.getElementById('canvaswrap');
+  if(window.ResizeObserver){
+    var ro=new ResizeObserver(function(entries){
+      var r=entries[0].contentRect;
+      if(r.width>0&&r.height>0){ro.disconnect();doInit();}
     });
     ro.observe(wrap);
   }
 
-  // Fallback for standalone use (no iframe, ResizeObserver fires immediately or already sized)
-  window.addEventListener('load', function(){
-    setTimeout(function(){ if(!done){ done=true; doInit(); } }, 50);
+  // Fallback: try on load and again after 200ms
+  window.addEventListener('load',function(){
+    doInit();
+    setTimeout(doInit,200);
   });
 
   window.addEventListener('resize',function(){
-    computeLayout();buildTextures();
+    computeLayout();
     Object.keys(TSPRITES).forEach(function(k){delete TSPRITES[k];});
     Object.keys(ESPRITES).forEach(function(k){delete ESPRITES[k];});
+    buildTextures();buildEnemySprites();
     if(ST.wave>0){canvas.width=CW;canvas.height=CH;}
   });
 })();
