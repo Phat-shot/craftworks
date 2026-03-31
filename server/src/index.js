@@ -43,8 +43,8 @@ app.get('/api/health',  (_, res) => res.json({ ok: true, ts: Date.now() }));
 
 if (process.env.NODE_ENV === 'production') {
   const path = require('path');
-  app.use(express.static(path.join(__dirname, '../../client/build')));
-  app.get('*', (_, res) => res.sendFile(path.join(__dirname, '../../client/build/index.html')));
+  app.use(express.static(path.join(__dirname, '../client/build')));
+  app.get('*', (_, res) => res.sendFile(path.join(__dirname, '../client/build/index.html')));
 }
 
 require('./socket')(io, db);
