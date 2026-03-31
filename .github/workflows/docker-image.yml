@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}   # e.g. yourname/platform
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -21,6 +21,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Write VERSION file with commit SHA + timestamp
+        run: |
+          echo "$(date +%Y%m%d-%H%M)-${GITHUB_SHA::7}" > server/src/VERSION
+          echo "Version: $(cat server/src/VERSION)"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -52,7 +57,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
           build-args: |
             REACT_APP_GAME_URL=/td-game.html
