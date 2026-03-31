@@ -212,11 +212,14 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 const COLS=15, ENTRY_COL=7;
 let TILE,ROWS,CW,CH,EXIT_ROW;
 function computeLayout(){
-  // Use canvaswrap's actual rendered dimensions — works in both standalone and iframe
-  var wrap=document.getElementById('canvaswrap');
-  var aw=wrap.clientWidth||window.innerWidth;
-  var ah=wrap.clientHeight||Math.max(60,window.innerHeight-159);
-  TILE=Math.max(18,Math.floor(aw/COLS));
+  const wrap=document.getElementById('canvaswrap');
+  const aw=wrap.clientWidth||window.innerWidth||880;
+  const ah=wrap.clientHeight||Math.max(60,window.innerHeight-159)||560;
+  // Cap TILE by both width (15 cols) and height (min 10 rows)
+  // Prevents over-zoom on large PC screens
+  const tileByW=Math.floor(aw/COLS);
+  const tileByH=Math.floor(ah/10);
+  TILE=Math.max(18,Math.min(tileByW,tileByH));
   CW=TILE*COLS; ROWS=Math.max(10,Math.floor(ah/TILE)); EXIT_ROW=ROWS-1; CH=TILE*ROWS;
 }
 
@@ -587,7 +590,7 @@ function drawTowerSprite(oc,type,paths,sz){
 
   // Level pips — 3 rows of 5 dots (one row per path) at bottom of sprite
   {const cols3=['#60c0ff','#50e040','#ffa030'];
-  t.paths.forEach((lvl,pi)=>{
+  paths.forEach((lvl,pi)=>{
     for(let i=0;i<5;i++){
       const px=sz*.14+i*sz*.17;
       const py=sz*.88+pi*sz*.04;
@@ -738,9 +741,9 @@ function initGame(){
   buildTextures();
   canvas.width=CW;canvas.height=CH;
   updateHUD();
-  ['dart','poison','splash','lightning','frost'].forEach(t=>{
-    const el=document.getElementById('tc-'+t);
-    if(el)drawTowerSprite(el,t,[0,0,0],24);
+  ['dart','poison','splash','lightning','frost'].forEach(towerType=>{
+    const el=document.getElementById('tc-'+towerType);
+    if(el)drawTowerSprite(el,towerType,[0,0,0],24);
   });
 }
 
@@ -1355,8 +1358,9 @@ function toast(msg,err=true){
 function pickTower(type){
   const b=TDB[type];
   if(b.unlock&&ST.wave<b.unlock){toast(`🔒 Freischaltung ab Wave ${b.unlock}!`);return;}
-  if(ST.gold<b.cost){toast('Nicht genug Gold! 💰');return;}
+  // Deselect first — always allow toggle-off even with no gold
   if(ST.pickedType===type){cancelPick();return;}
+  if(ST.gold<b.cost){toast('Nicht genug Gold! 💰');return;}
   ST.pickedType=type;ST.selTower=null;closeSheet();
   document.querySelectorAll('.twrb').forEach(el=>el.classList.remove('sel'));
   document.getElementById('btn-'+type).classList.add('sel');
@@ -1430,43 +1434,32 @@ function loop(ts){
 //  BOOT — wait for difficulty selection
 // ═══════════════════════════════════════════════════════
 (function(){
-  var params=new URLSearchParams(window.location.search);
-  var urlDiff=params.get('difficulty');
-  var done=false;
-
-  function doInit(){
-    if(done)return;
+  var _booted=false;
+  function _boot(){
+    if(_booted)return;
+    var wrap=document.getElementById('canvaswrap');
+    if(!wrap||wrap.clientWidth===0)return; // not ready yet
+    _booted=true;
     computeLayout();
-    if(!CW||!CH)return; // still zero, wait
-    done=true;
-    buildTextures();
-    buildEnemySprites();
     canvas.width=CW;canvas.height=CH;
     ctx.fillStyle='#060408';ctx.fillRect(0,0,CW,CH);
-    if(urlDiff)startDiff(urlDiff);
   }
-
-  // ResizeObserver fires when canvaswrap gets actual size (works in iframe)
+  // ResizeObserver: fires when element gets real dimensions (works in iframe)
   var wrap=document.getElementById('canvaswrap');
-  if(window.ResizeObserver){
-    var ro=new ResizeObserver(function(entries){
-      var r=entries[0].contentRect;
-      if(r.width>0&&r.height>0){ro.disconnect();doInit();}
-    });
-    ro.observe(wrap);
+  if(wrap&&window.ResizeObserver){
+    var _ro=new ResizeObserver(function(){_boot();});
+    _ro.observe(wrap);
   }
-
-  // Fallback: try on load and again after 200ms
   window.addEventListener('load',function(){
-    doInit();
-    setTimeout(doInit,200);
+    _boot();
+    setTimeout(_boot,50);
+    setTimeout(_boot,200);
   });
-
   window.addEventListener('resize',function(){
     computeLayout();
     Object.keys(TSPRITES).forEach(function(k){delete TSPRITES[k];});
     Object.keys(ESPRITES).forEach(function(k){delete ESPRITES[k];});
-    buildTextures();buildEnemySprites();
+    buildTextures();
     if(ST.wave>0){canvas.width=CW;canvas.height=CH;}
   });
 })();
