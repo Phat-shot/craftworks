@@ -1430,10 +1430,20 @@ function loop(ts){
 //  BOOT — wait for difficulty selection
 // ═══════════════════════════════════════════════════════
 window.addEventListener('load',()=>{
-  computeLayout();
-  canvas.width=CW||880;canvas.height=CH||560;
-  // Draw difficulty screen background
-  ctx.fillStyle='#060408';ctx.fillRect(0,0,canvas.width,canvas.height);
+  // Support auto-start via URL: /td-game.html?difficulty=normal
+  const urlDiff = new URLSearchParams(window.location.search).get('difficulty');
+
+  // Use double rAF to ensure iframe has final dimensions before layout
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    computeLayout();
+    canvas.width=CW||880;canvas.height=CH||560;
+    ctx.fillStyle='#060408';ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    if(urlDiff){
+      // Auto-start when embedded in platform iframe
+      startDiff(urlDiff);
+    }
+  }));
 });
 
 window.addEventListener('resize',()=>{

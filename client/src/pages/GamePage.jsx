@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../App';
 import { getSocket } from '../api';
@@ -12,6 +12,8 @@ export default function GamePage() {
   const iframeRef     = useRef(null);
   const [players,  setPlayers]  = useState({});
   const [gameOver, setGameOver] = useState(null);
+  const location = useLocation();
+  const difficulty = location.state?.difficulty || 'normal';
 
   useEffect(() => {
     const socket = getSocket();
@@ -80,7 +82,7 @@ export default function GamePage() {
       {/* Game iframe — full screen */}
       <iframe
         ref={iframeRef}
-        src="/td-game.html"
+        src={`/td-game.html?difficulty=${difficulty}`}
         title="Tower Defense"
         style={{
           flex: 1, width: '100%', border: 'none',

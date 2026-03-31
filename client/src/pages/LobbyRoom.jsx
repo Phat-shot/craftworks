@@ -35,7 +35,7 @@ export default function LobbyRoom() {
     socket.on('lobby:player_ready',  ({ userId, ready: r }) => setMembers(m => m.map(x => x.id===userId ? {...x,ready:r} : x)));
     socket.on('lobby:all_ready',     () => setAllReady(true));
     socket.on('lobby:host_changed',  ({ newHostId }) => setLobby(l => ({ ...l, host_id: newHostId })));
-    socket.on('game:start',          ({ sessionId }) => navigate(`/game/${sessionId}`));
+    socket.on('game:start',          ({ sessionId, difficulty }) => navigate(`/game/${sessionId}`, { state: { difficulty: difficulty || 'normal' } }));
 
     return () => {
       socket.emit('lobby:leave', { lobbyId: id });
