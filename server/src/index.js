@@ -8,18 +8,43 @@ const compression = require('compression');
 const cookieParser= require('cookie-parser');
 const rateLimit   = require('express-rate-limit');
 const { Pool }    = require('pg');
+const fs          = require('fs');
+const path        = require('path');
 
+// ── Database ─────────────────────────────────
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
-db.connect()
-  .then(() => console.log('✅ PostgreSQL connected'))
-  .catch(e => { console.error('❌ DB error', e.message); process.exit(1); });
 module.exports.db = db;
 
+// ── Auto-migrate: run schema.sql if tables missing ──
+async function migrate() {
+  const client = await db.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema='public' AND table_name='users'`
+    );
+    if (rows.length > 0) {
+      console.log('✅ PostgreSQL connected (schema ok)');
+      return;
+    }
+    console.log('⚙️  Running database migrations...');
+    const sql = fs.readFileSync(
+      path.join(__dirname, 'db/schema.sql'), 'utf8'
+    );
+    await client.query(sql);
+    console.log('✅ PostgreSQL connected (schema applied)');
+  } catch (e) {
+    console.error('❌ Migration error:', e.message);
+    process.exit(1);
+  } finally {
+    client.release();
+  }
+}
+
+// ── Express app ──────────────────────────────
 const app    = express();
 const server = http.createServer(app);
 
-// Always allow APP_URL + localhost — no need to set ALLOWED_ORIGINS manually
-// No origin header = same-origin (React served by this same server) → always allow
 const allowedOrigins = [
   ...(process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean),
   process.env.APP_URL,
@@ -28,7 +53,7 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 function corsOrigin(origin, cb) {
-  if (!origin) return cb(null, true);                    // same-origin / curl
+  if (!origin) return cb(null, true);
   if (allowedOrigins.includes(origin)) return cb(null, true);
   if (process.env.NODE_ENV !== 'production') return cb(null, true);
   console.warn('CORS blocked:', origin);
@@ -58,7 +83,6 @@ app.use('/api/legal',   require('./routes/legal'));
 app.get('/api/health',  (_, res) => res.json({ ok: true, ts: Date.now() }));
 
 if (process.env.NODE_ENV === 'production') {
-  const path = require('path');
   app.use(express.static(path.join(__dirname, '../client/build')));
   app.get('*', (_, res) =>
     res.sendFile(path.join(__dirname, '../client/build/index.html')));
@@ -66,5 +90,8 @@ if (process.env.NODE_ENV === 'production') {
 
 require('./socket')(io, db);
 
+// ── Start (migrate first, then listen) ───────
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => console.log(`🚀 Server on :${PORT}`));
+migrate().then(() => {
+  server.listen(PORT, () => console.log(`🚀 Server on :${PORT}`));
+});
