@@ -1,23 +1,20 @@
-# ── Stage 1: Build React client ──────────────
-# react-scripts 5 needs Node 18
-FROM node:18-alpine AS client-build
+# ── Stage 1: Build React client (Vite) ───────
+FROM node:20-alpine AS client-build
 WORKDIR /client
 
 COPY client/package.json ./
-RUN npm install --legacy-peer-deps --silent
+RUN npm install --silent
 
 COPY client/ ./
 
-ARG REACT_APP_API_URL=""
-ARG REACT_APP_GAME_URL="/td-game.html"
-ENV REACT_APP_API_URL=$REACT_APP_API_URL
-ENV REACT_APP_GAME_URL=$REACT_APP_GAME_URL
-# Prevent treating warnings as errors
-ENV CI=false
+ARG VITE_API_URL=""
+ARG VITE_GAME_URL="/td-game.html"
+ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_GAME_URL=$VITE_GAME_URL
 
 RUN npm run build
 
-# ── Stage 2: Server ──────────────────────────
+# ── Stage 2: Server ───────────────────────────
 FROM node:20-alpine
 WORKDIR /app
 
@@ -25,8 +22,6 @@ COPY server/package.json ./
 RUN npm install --omit=dev --silent
 
 COPY server/ ./
-
-# Copy built client
 COPY --from=client-build /client/build ./client/build
 
 ENV NODE_ENV=production

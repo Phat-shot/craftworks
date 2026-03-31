@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../App';
 import { getSocket } from '../api';
 
-const GAME_URL = process.env.REACT_APP_GAME_URL || '/td-game.html';
+const GAME_URL = import.meta.env.VITE_GAME_URL || '/td-game.html';
 
 export default function GamePage() {
   const { sessionId } = useParams();

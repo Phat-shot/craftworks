@@ -2,7 +2,7 @@
 import axios from 'axios';
 import { io } from 'socket.io-client';
 
-const BASE = process.env.REACT_APP_API_URL || '';
+const BASE = import.meta.env.VITE_API_URL || '';
 
 // ── Axios instance ────────────────────────
 export const api = axios.create({ baseURL: `${BASE}/api`, withCredentials: true });

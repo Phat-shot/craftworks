@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import './i18n';
+
 import { api, getSocket, disconnectSocket } from './api';
 import Nav from './components/Nav';
 import Login from './pages/Login';

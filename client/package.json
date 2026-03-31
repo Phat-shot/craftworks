@@ -9,12 +9,15 @@
     "socket.io-client": "^4.7.2",
     "axios": "^1.6.2",
     "i18next": "^23.7.6",
-    "react-i18next": "^14.0.0",
-    "react-scripts": "5.0.1"
+    "react-i18next": "^14.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.10"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build"
-  },
-  "browserslist": { "production": [">0.2%"], "development": ["last 1 chrome version"] }
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
 }
