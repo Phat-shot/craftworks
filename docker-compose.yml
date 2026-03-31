@@ -21,6 +21,7 @@ services:
 
   server:
     image: ghcr.io/${GITHUB_REPO:-yourname/platform}:${IMAGE_TAG:-latest}
+    pull_policy: always
     container_name: platform_server
     restart: unless-stopped
     depends_on:
