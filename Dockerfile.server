@@ -1,0 +1,29 @@
+# ── Stage 1: Build React client ──────────────
+FROM node:20-alpine AS client-build
+WORKDIR /client
+COPY client/package*.json ./
+RUN npm ci --silent
+COPY client/ ./
+ARG REACT_APP_API_URL=""
+ARG REACT_APP_GAME_URL="/td-game.html"
+ENV REACT_APP_API_URL=$REACT_APP_API_URL
+ENV REACT_APP_GAME_URL=$REACT_APP_GAME_URL
+RUN npm run build
+
+# ── Stage 2: Server ────────────────────────
+FROM node:20-alpine
+WORKDIR /app
+
+# Install server deps
+COPY server/package*.json ./
+RUN npm ci --omit=dev --silent
+
+# Copy server source
+COPY server/ ./
+
+# Copy built client
+COPY --from=client-build /client/build ./client/build
+
+ENV NODE_ENV=production
+EXPOSE 4000
+CMD ["node", "src/index.js"]

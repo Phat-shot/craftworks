@@ -1,0 +1,47 @@
+version: '3.9'
+# Local / LAN — builds image from source, no .env needed
+# Usage: docker compose -f docker-compose.local.yml up --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     platform
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB:       platform
+    volumes:
+      - pgdata_local:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform"]
+      interval: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV:           production
+      PORT:               4000
+      DATABASE_URL:       postgres://platform:localdev@db:5432/platform
+      JWT_SECRET:         local_jwt_secret_changeme
+      JWT_REFRESH_SECRET: local_refresh_secret_changeme
+      APP_URL:            http://localhost:4000
+      ALLOWED_ORIGINS:    http://localhost:4000
+      SMTP_HOST:          ""
+      SMTP_USER:          ""
+      SMTP_PASS:          ""
+      SMTP_FROM:          noreply@localhost
+      HASH_SALT:          local_salt_changeme
+    volumes:
+      - ./td-game.html:/app/client/build/td-game.html:ro
+
+volumes:
+  pgdata_local:

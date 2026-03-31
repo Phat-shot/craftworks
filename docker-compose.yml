@@ -1,0 +1,50 @@
+version: '3.9'
+# Production deployment — pulls pre-built image from GitHub Container Registry
+# First-time setup: see README.md
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: platform_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB:-platform}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    image: ghcr.io/${GITHUB_REPO:-yourname/platform}:${IMAGE_TAG:-latest}
+    container_name: platform_server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-4000}:4000"
+    environment:
+      NODE_ENV:           production
+      PORT:               4000
+      DATABASE_URL:       postgres://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-platform}
+      JWT_SECRET:         ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      APP_URL:            ${APP_URL:-http://localhost:4000}
+      ALLOWED_ORIGINS:    ${ALLOWED_ORIGINS:-http://localhost:4000}
+      SMTP_HOST:          ${SMTP_HOST:-}
+      SMTP_PORT:          ${SMTP_PORT:-587}
+      SMTP_SECURE:        ${SMTP_SECURE:-false}
+      SMTP_USER:          ${SMTP_USER:-}
+      SMTP_PASS:          ${SMTP_PASS:-}
+      SMTP_FROM:          ${SMTP_FROM:-noreply@localhost}
+      HASH_SALT:          ${HASH_SALT}
+    volumes:
+      - ./td-game.html:/app/client/build/td-game.html:ro
+
+volumes:
+  pgdata:

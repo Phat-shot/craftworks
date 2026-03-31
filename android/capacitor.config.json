@@ -1,0 +1,22 @@
+{
+  "appId": "com.gameplatform.app",
+  "appName": "GamePlatform",
+  "webDir": "build",
+  "server": {
+    "url": "https://yourdomain.com",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#0a0810",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false
+    }
+  }
+}

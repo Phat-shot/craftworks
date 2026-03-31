@@ -1,0 +1,57 @@
+// src/pages/Home.jsx
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { useAuth } from '../App';
+import { api } from '../api';
+import Avatar from '../components/Avatar';
+
+export function Home() {
+  const { user }   = useAuth();
+  const { t }      = useTranslation();
+  const navigate   = useNavigate();
+  const [history, setHistory] = useState([]);
+
+  useEffect(() => {
+    api.get('/games/history').then(r => setHistory(r.data)).catch(()=>{});
+  }, []);
+
+  return (
+    <div style={{ padding: 24, maxWidth: 640, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
+        <Avatar user={user} size="xl" />
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{user?.username}</div>
+          <div style={{ color: 'var(--text3)', fontSize: 13 }}>● {t('online')}</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
+        <button className="btn btn-primary" onClick={() => navigate('/lobby')}>🎮 {t('games')}</button>
+        <button className="btn btn-ghost"   onClick={() => navigate('/friends')}>👥 {t('friends')}</button>
+        <button className="btn btn-ghost"   onClick={() => navigate('/leaderboard')}>🏆</button>
+      </div>
+
+      {history.length > 0 && (
+        <>
+          <div className="section-title">Letzte Spiele</div>
+          {history.slice(0,5).map(g => (
+            <div key={g.id} className="card" style={{ marginBottom: 8, padding: '12px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <span className={`lobby-badge badge-${g.game_mode}`}>{t(g.game_mode)}</span>
+                  <span className={`lobby-badge badge-${g.difficulty}`} style={{ marginLeft: 6 }}>{t(g.difficulty)}</span>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gold)' }}>Wave {g.wave} · {g.score} Pts</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>{new Date(g.started_at).toLocaleDateString()}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+export default Home;
