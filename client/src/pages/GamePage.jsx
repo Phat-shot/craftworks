@@ -1,22 +1,32 @@
 import React, { useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
 import { getSocket } from '../api';
 
 export default function GamePage() {
   const { sessionId } = useParams();
   const { user }      = useAuth();
-  const navigate      = useNavigate();
+  const location      = useLocation();
+  const difficulty    = location.state?.difficulty || 'normal';
+  const mode         = location.state?.mode || 'coop';
+  const playerCount   = location.state?.playerCount || 1;
 
   useEffect(() => {
-    // Store session info so td-game.html can pick it up
+    // Store full session info for td-game.html
     sessionStorage.setItem('mp_session', JSON.stringify({
       sessionId,
       userId: user.id,
       username: user.username,
+      difficulty,
+      mode,
+      playerCount,
+      solo: false,
     }));
 
-    // Navigate directly to the game — no iframe, full window
+    // Join game socket room before navigating
+    const socket = getSocket();
+    socket.emit('game:join', { sessionId });
+
     window.location.href = '/td-game.html';
   }, []);
 

@@ -190,7 +190,7 @@ module.exports = function setupSocket(io, db) {
       // Notify all lobby members
       io.to(`lobby:${lobbyId}`).emit('game:start', {
         sessionId, mode: lobby.game_mode, difficulty: lobby.difficulty,
-        players: members,
+        players: members, playerCount: members.length,
       });
     });
 

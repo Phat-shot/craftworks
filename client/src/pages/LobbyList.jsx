@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api';
 
-const MODES = ['classic','tournament','chaos'];
+const MODES = ['coop','classic','tournament','chaos'];
 const DIFFS = ['easy','normal','hard','expert','horror'];
 
 export function LobbyList() {
@@ -14,7 +14,7 @@ export function LobbyList() {
   const [creating, setCreating] = useState(false);
   const [joining,  setJoining]  = useState(false);
   const [joinCode, setJoinCode] = useState('');
-  const [form, setForm] = useState({ name: '', game_mode: 'classic', difficulty: 'normal', max_players: 4, is_public: true });
+  const [form, setForm] = useState({ name: '', game_mode: 'coop', difficulty: 'normal', max_players: 4, is_public: true });
   const [error, setError] = useState('');
 
   const load = () => api.get('/lobbies/public').then(r => setLobbies(r.data)).catch(()=>{});

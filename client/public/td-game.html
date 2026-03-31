@@ -808,6 +808,19 @@ function drawHover(){
 }
 
 function drawTowers(){
+  // Build owner→color map for coop
+  var _ownerColors={};
+  if(window.MP&&!window.MP.solo){
+    var _pal=['#4af','#f84','#4f8','#f4f','#ff4','#4ff'];
+    var _ci=0;
+    for(const t of ST.towers){
+      if(!_ownerColors[t.owner])_ownerColors[t.owner]=_pal[_ci++%_pal.length];
+    }
+    // My color always index 0
+    var _myId=(window.MP&&window.MP.userId)||'local';
+    _ownerColors[_myId]='#4af';
+  }
+
   for(const t of ST.towers){
     const s=calcStats(t);
     const isSel=ST.selTower===t;
@@ -818,6 +831,13 @@ function drawTowers(){
       ctx.strokeStyle='rgba(255,240,150,.32)';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.stroke();ctx.setLineDash([]);
     }
     ctx.drawImage(getTSpr(t.type,t.paths),t.col*TILE,t.row*TILE,TILE,TILE);
+    // Coop: draw colored ownership dot in top-left corner
+    if(window.MP&&!window.MP.solo&&t.owner){
+      var _oc=_ownerColors[t.owner]||'#fff';
+      ctx.fillStyle=_oc;
+      ctx.beginPath();ctx.arc(t.col*TILE+6,t.row*TILE+6,4,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='rgba(0,0,0,.6)';ctx.lineWidth=1;ctx.stroke();
+    }
     const pct=Math.min((ST.gameTime-t.lastFire)/s.cd,1);
     if(pct<1){
       const cx2=t.col*TILE+TILE/2,cy2=t.row*TILE+TILE/2;
@@ -1187,8 +1207,13 @@ function checkWaveEnd(){
   if(ST.spawnIdx<ST.spawnQ.length)return;
   if(ST.enemies.some(e=>!e.dead&&!e.escaped))return;
   ST.waveActive=false;ST.enemies=[];ST.spawnQ=[];ST.fireZones=[];
-  const bonus=25+ST.wave*5;ST.gold+=bonus;ST.score+=bonus*5;
-  updateHUD();toast(`✓ Wave ${ST.wave} — +${bonus}💰 Bonus!`,false);
+  const _rawBonus=25+ST.wave*5;
+  // Coop: wave bonus is split among all players
+  var _pCount=(window.MP&&window.MP.mode==='coop'&&window.MP.playerCount>1)?window.MP.playerCount:1;
+  const bonus=Math.max(1,Math.ceil(_rawBonus/_pCount));
+  ST.gold+=bonus;ST.score+=bonus*5;
+  var _bonusMsg=_pCount>1?`+${bonus}💰 (${_rawBonus}÷${_pCount})`:'+'+bonus+'💰';
+  updateHUD();toast(`✓ Wave ${ST.wave} — ${_bonusMsg} Bonus!`,false);
   document.getElementById('btn-wave').disabled=ST.wave>=25;
   document.getElementById('btn-wave').textContent=
     ST.wave>=25?'✅ Alle 25 Waves!':`▶ Wave ${ST.wave+1} starten`;
@@ -1246,7 +1271,8 @@ function placeTower(r,c){
   if(!canPlaceAt(r,c)){toast('Hier kann nicht gebaut werden!');return;}
   const np=findPath(r,c);if(!np){toast('⚠️ Würde Weg sperren!');return;}
   ST.gold-=base.cost;
-  ST.towers.push({type:ST.pickedType,row:r,col:c,paths:[0,0,0],lastFire:0,invested:base.cost,shotCount:0});
+  var _ownerId = (window.MP && window.MP.userId) || 'local';
+  ST.towers.push({type:ST.pickedType,row:r,col:c,paths:[0,0,0],lastFire:0,invested:base.cost,shotCount:0,owner:_ownerId});
   ST.globalPath=np;ST.pathSet=new Set(np.map(([r2,c2])=>`${r2},${c2}`));
   rerouteEnemies();updateHUD();refreshTwrBtns();
 }
@@ -1404,7 +1430,13 @@ canvas.addEventListener('click',e=>{if(ST.gameOver)return;const{r,c}=cellFromXY(
 function handleTap(r,c){
   if(ST.pickedType){placeTower(r,c);refreshTwrBtns();return;}
   const t=ST.towers.find(t=>t.row===r&&t.col===c);
-  if(t){if(ST.selTower===t)closeSheet();else showSheet(t);}else closeSheet();
+  if(t){
+    // In coop: only manage your own towers
+    var myId=(window.MP&&window.MP.userId)||'local';
+    var ownerMatch = !window.MP || t.owner===myId;
+    if(!ownerMatch){toast('Dies ist der Tower eines Mitspielers! 🤝');return;}
+    if(ST.selTower===t)closeSheet();else showSheet(t);
+  }else closeSheet();
 }
 
 document.getElementById('sh-handle').addEventListener('click',closeSheet);
@@ -1434,17 +1466,45 @@ function loop(ts){
 //  BOOT — wait for difficulty selection
 // ═══════════════════════════════════════════════════════
 (function(){
+  // ── Read platform session ──────────────────────────────────────
+  var _sess = null;
+  try { _sess = JSON.parse(sessionStorage.getItem('mp_session') || 'null'); } catch(e){}
+  var _fromPlatform = _sess && !_sess.solo;
+  var _isSolo       = _sess && _sess.solo;
+
+  // Expose session globally for coop logic
+  window.MP = _sess || null;
+
+  // ── Coop: player color map (each player gets a distinct tint) ──
+  var PLAYER_COLORS = ['#4af','#f84','#4f8','#f4f','#ff4','#4ff'];
+  if(window.MP && window.MP.userId){
+    window.MP.myColor = PLAYER_COLORS[0]; // own towers
+  }
+
+  // ── Boot canvas ───────────────────────────────────────────────
   var _booted=false;
   function _boot(){
     if(_booted)return;
     var wrap=document.getElementById('canvaswrap');
-    if(!wrap||wrap.clientWidth===0)return; // not ready yet
+    if(!wrap||wrap.clientWidth===0)return;
     _booted=true;
     computeLayout();
     canvas.width=CW;canvas.height=CH;
     ctx.fillStyle='#060408';ctx.fillRect(0,0,CW,CH);
+
+    // Auto-start when launched from platform (skip diff screen)
+    if(_fromPlatform || _isSolo){
+      var diff = (_sess && _sess.difficulty) || 'normal';
+      document.getElementById('diff-screen').style.display='none';
+      // If from platform, hide diff-screen permanently
+      if(_fromPlatform){
+        var ds=document.getElementById('diff-screen');
+        ds.style.display='none'; ds.style.pointerEvents='none';
+      }
+      initGame();requestAnimationFrame(loop);
+      ST.diffMult = diff==='easy'?1.0:diff==='normal'?1.5:diff==='hard'?2.0:diff==='expert'?2.5:3.0;
+    }
   }
-  // ResizeObserver: fires when element gets real dimensions (works in iframe)
   var wrap=document.getElementById('canvaswrap');
   if(wrap&&window.ResizeObserver){
     var _ro=new ResizeObserver(function(){_boot();});

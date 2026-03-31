@@ -35,7 +35,7 @@ export default function LobbyRoom() {
     socket.on('lobby:player_ready',  ({ userId, ready: r }) => setMembers(m => m.map(x => x.id===userId ? {...x,ready:r} : x)));
     socket.on('lobby:all_ready',     () => setAllReady(true));
     socket.on('lobby:host_changed',  ({ newHostId }) => setLobby(l => ({ ...l, host_id: newHostId })));
-    socket.on('game:start',          ({ sessionId, difficulty }) => navigate(`/game/${sessionId}`, { state: { difficulty: difficulty || 'normal' } }));
+    socket.on('game:start', ({ sessionId, difficulty, mode, playerCount }) => navigate(`/game/${sessionId}`, { state: { difficulty: difficulty || 'normal', mode: mode || 'coop', playerCount: playerCount || 2 } }));
 
     return () => {
       socket.emit('lobby:leave', { lobbyId: id });
@@ -68,7 +68,7 @@ export default function LobbyRoom() {
   if (!lobby) return <div className="loading-screen">{t('loading')}</div>;
 
   const isHost = lobby.host_id === user.id;
-  const canStart = isHost && members.length >= 1;
+  const canStart = isHost && members.length >= 2;
 
   return (
     <div className="lobby-room">
@@ -110,6 +110,7 @@ export default function LobbyRoom() {
 
       {/* Mode description */}
       <div className="card" style={{ marginBottom: 16, padding: '10px 14px', fontSize: 12, color: 'var(--text2)' }}>
+        {lobby.game_mode === 'coop'       && '🤝 Koop: Alle spielen auf einer Karte – Bounty wird geteilt!'}
         {lobby.game_mode === 'classic'    && '🏛 Klassisch: Alle Spieler starten die nächste Wave zusammen.'}
         {lobby.game_mode === 'tournament' && '🏆 Turnier: Jeder Spieler startet die nächste Wave 15s nach Abschluss seiner eigenen.'}
         {lobby.game_mode === 'chaos'      && '💀 Chaos: Waves starten automatisch – auch wenn die vorherige noch läuft!'}
