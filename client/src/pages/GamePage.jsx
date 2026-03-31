@@ -1,11 +1,8 @@
-// src/pages/GamePage.jsx
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../App';
 import { getSocket } from '../api';
-
-const GAME_URL = import.meta.env.VITE_GAME_URL || '/td-game.html';
 
 export default function GamePage() {
   const { sessionId } = useParams();
@@ -14,67 +11,46 @@ export default function GamePage() {
   const navigate      = useNavigate();
   const iframeRef     = useRef(null);
   const [players,  setPlayers]  = useState({});
-  const [gameOver, setGameOver] = useState(null); // null | { winner, rankings }
-  const [mode,     setMode]     = useState('classic');
-  const modeRef    = useRef('classic');
+  const [gameOver, setGameOver] = useState(null);
 
-  // ── Setup ───────────────────────────────
   useEffect(() => {
     const socket = getSocket();
     socket.emit('game:join', { sessionId });
 
-    // ── Socket handlers ──────────────────
     socket.on('game:player_update', ({ userId, wave, lives, score, kills, status }) => {
       setPlayers(p => ({ ...p, [userId]: { ...p[userId], userId, wave, lives, score, kills, status } }));
     });
-
-    socket.on('game:player_wave_done', ({ userId, username, wave }) => {
+    socket.on('game:player_wave_done', ({ userId, wave }) => {
       setPlayers(p => ({ ...p, [userId]: { ...p[userId], wave } }));
     });
-
-    socket.on('game:player_died', ({ userId, username, wave, score }) => {
+    socket.on('game:player_died', ({ userId, wave, score }) => {
       setPlayers(p => ({ ...p, [userId]: { ...p[userId], status: 'dead', wave, score } }));
     });
-
     socket.on('game:player_finished', ({ userId, wave, score }) => {
       setPlayers(p => ({ ...p, [userId]: { ...p[userId], status: 'finished', wave, score } }));
     });
-
-    // Classic mode: server tells all to start next wave
     socket.on('game:wave_start', ({ wave, auto }) => {
       iframeRef.current?.contentWindow?.postMessage({ type: 'WAVE_START', wave, auto }, '*');
     });
-
     socket.on('game:over', ({ winner, rankings }) => {
       setGameOver({ winner, rankings });
     });
 
-    // ── Messages from iframe ──────────────
     const onMessage = (e) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
       const { type, ...data } = e.data || {};
       switch (type) {
         case 'GAME_STATE':
-          socket.emit('game:state_update', { sessionId, ...data });
-          break;
+          socket.emit('game:state_update', { sessionId, ...data }); break;
         case 'WAVE_FINISHED':
-          socket.emit('game:wave_finished', { sessionId, wave: data.wave });
-          break;
+          socket.emit('game:wave_finished', { sessionId, wave: data.wave }); break;
         case 'GAME_OVER':
-          // local game over (lives = 0)
-          socket.emit('game:died', { sessionId, ...data });
-          break;
+          socket.emit('game:died', { sessionId, ...data }); break;
         case 'GAME_WON':
-          // completed all 25 waves
-          socket.emit('game:finished', { sessionId, ...data });
-          break;
+          socket.emit('game:finished', { sessionId, ...data }); break;
         case 'READY':
-          // Iframe loaded — send config
           iframeRef.current?.contentWindow?.postMessage({
-            type: 'MULTIPLAYER_INIT',
-            sessionId,
-            userId: user.id,
-            mode: modeRef.current,
+            type: 'MULTIPLAYER_INIT', sessionId, userId: user.id,
           }, '*');
           break;
         default: break;
@@ -83,73 +59,103 @@ export default function GamePage() {
     window.addEventListener('message', onMessage);
 
     return () => {
-      socket.off('game:player_update');
-      socket.off('game:player_wave_done');
-      socket.off('game:player_died');
-      socket.off('game:player_finished');
-      socket.off('game:wave_start');
-      socket.off('game:over');
+      ['game:player_update','game:player_wave_done','game:player_died',
+       'game:player_finished','game:wave_start','game:over']
+        .forEach(e => socket.off(e));
       window.removeEventListener('message', onMessage);
     };
   }, [sessionId, user.id]);
 
-  const sortedPlayers = Object.values(players).sort((a, b) => {
+  const sorted = Object.values(players).sort((a, b) => {
     if (a.status === 'dead' && b.status !== 'dead') return 1;
     if (b.status === 'dead' && a.status !== 'dead') return -1;
     return (b.wave || 0) - (a.wave || 0);
   });
 
   return (
-    <div className="game-page">
-      {/* TD Game iframe */}
+    <div style={{
+      position: 'fixed', inset: 0, background: '#000', zIndex: 100,
+      display: 'flex', flexDirection: 'column',
+    }}>
+      {/* Game iframe — full screen */}
       <iframe
         ref={iframeRef}
-        src={GAME_URL}
-        className="game-iframe"
+        src="/td-game.html"
         title="Tower Defense"
+        style={{
+          flex: 1, width: '100%', border: 'none',
+          display: 'block', minHeight: 0,
+        }}
         allow="accelerometer; gyroscope"
       />
 
-      {/* Multiplayer overlay (top-right) */}
-      {sortedPlayers.length > 0 && !gameOver && (
-        <div className="game-overlay">
-          <div className="game-overlay-title">Players</div>
-          {sortedPlayers.map((p, i) => (
-            <div key={p.userId} className={`player-stat-row${p.status === 'dead' ? ' ps-dead' : ''}`}>
-              <span style={{ fontSize: 10, color: 'var(--text3)', width: 14 }}>{i+1}</span>
-              <span className={`ps-name${p.userId === user.id ? '' : ''}`}>
-                {p.username || p.userId?.slice(0,8)}
-                {p.userId === user.id && ' 👤'}
+      {/* Multiplayer overlay top-right */}
+      {sorted.length > 1 && !gameOver && (
+        <div style={{
+          position: 'absolute', top: 10, right: 10,
+          background: 'rgba(10,8,20,.88)', border: '1px solid #2a2438',
+          borderRadius: 8, padding: '8px 12px', minWidth: 170,
+          backdropFilter: 'blur(8px)', zIndex: 200, fontSize: 12,
+        }}>
+          <div style={{ fontSize: 9, color: 'var(--text3)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
+            Players
+          </div>
+          {sorted.map((p, i) => (
+            <div key={p.userId} style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '3px 0', borderBottom: '1px solid #1a1828',
+              opacity: p.status === 'dead' ? 0.45 : 1,
+            }}>
+              <span style={{ fontSize: 10, color: '#504860', width: 14 }}>{i + 1}</span>
+              <span style={{
+                flex: 1, fontWeight: p.userId === user.id ? 700 : 400,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                textDecoration: p.status === 'dead' ? 'line-through' : 'none',
+                color: p.status === 'dead' ? '#504860' : '#e0d8f0',
+              }}>
+                {p.username || '?'}{p.userId === user.id ? ' 👤' : ''}
               </span>
-              <span className="ps-wave">W{p.wave || 0}</span>
+              <span style={{ color: '#f0c840', fontWeight: 700, width: 38, textAlign: 'right' }}>
+                W{p.wave || 0}
+              </span>
               {p.status === 'dead'
-                ? <span style={{ fontSize: 10, color: 'var(--red)' }}>💀</span>
-                : <span className="ps-lives">❤{p.lives ?? '?'}</span>
+                ? <span style={{ color: '#e04040', width: 28, textAlign: 'right' }}>💀</span>
+                : <span style={{ color: '#e04040', width: 28, textAlign: 'right' }}>❤{p.lives ?? '?'}</span>
               }
             </div>
           ))}
         </div>
       )}
 
-      {/* Game over overlay */}
+      {/* Game over */}
       {gameOver && (
-        <div className="game-over-overlay">
-          <div className="go-title">
+        <div style={{
+          position: 'absolute', inset: 0, background: 'rgba(0,0,0,.85)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexDirection: 'column', gap: 14, zIndex: 300,
+          backdropFilter: 'blur(6px)',
+        }}>
+          <div style={{ fontSize: 36, fontWeight: 900, color: '#f0c840' }}>
             {gameOver.winner?.userId === user.id ? t('victory') : t('game_over')}
           </div>
-          <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 8 }}>
+          <div style={{ fontSize: 13, color: '#8880a0' }}>
             {t('winner')}: {gameOver.winner?.username}
           </div>
-          <div className="rankings">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 240 }}>
             {gameOver.rankings.map((p, i) => (
-              <div key={p.userId} className="ranking-row">
-                <span className={`lb-rank${i===0?' top1':i===1?' top2':i===2?' top3':''}`}>
-                  {i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`}
+              <div key={p.userId} style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                background: '#1c1828', borderRadius: 8, padding: '10px 14px',
+              }}>
+                <span style={{ fontSize: 18, width: 28 }}>
+                  {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`}
                 </span>
-                <span style={{ flex: 1, fontWeight: p.userId===user.id?700:400 }}>
-                  {p.username}{p.userId===user.id?' (Du)':''}
+                <span style={{ flex: 1, fontWeight: p.userId === user.id ? 700 : 400 }}>
+                  {p.username}{p.userId === user.id ? ' (Du)' : ''}
                 </span>
-                <span style={{ color: 'var(--gold)', fontSize: 12 }}>W{p.wave} · {p.score}pts</span>
+                <span style={{ color: '#f0c840', fontSize: 12 }}>
+                  W{p.wave} · {p.score}pts
+                </span>
               </div>
             ))}
           </div>
