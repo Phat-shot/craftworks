@@ -45,6 +45,11 @@ export default function Login() {
     } finally { setLoading(false); }
   };
 
+  const [version, setVersion] = React.useState('');
+  React.useEffect(() => {
+    fetch('/api/health').then(r=>r.json()).then(d=>setVersion(d.version||'')).catch(()=>{});
+  }, []);
+
   return (
     <div className="auth-page">
       <div className="auth-card">
@@ -90,6 +95,11 @@ export default function Login() {
           <Link to="/legal/imprint" style={{ color: 'var(--text3)', marginRight: 12 }}>{t('imprint')}</Link>
           <Link to="/legal/privacy" style={{ color: 'var(--text3)' }}>{t('privacy')}</Link>
         </div>
+        {version && (
+          <div style={{ textAlign: 'center', marginTop: 8, fontSize: 10, color: 'var(--text3)' }}>
+            v{version}
+          </div>
+        )}
       </div>
     </div>
   );

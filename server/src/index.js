@@ -80,7 +80,10 @@ app.use('/api/groups',  require('./routes/groups'));
 app.use('/api/lobbies', require('./routes/lobbies-router'));
 app.use('/api/games',   require('./routes/games'));
 app.use('/api/legal',   require('./routes/legal'));
-app.get('/api/health',  (_, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/api/health',  (_, res) => {
+  const v = require('fs').readFileSync(require('path').join(__dirname,'VERSION'),'utf8').trim();
+  res.json({ ok: true, version: v, ts: Date.now() });
+});
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/build')));
@@ -92,6 +95,9 @@ require('./socket')(io, db);
 
 // ── Start (migrate first, then listen) ───────
 const PORT = process.env.PORT || 4000;
+const VERSION = require('fs').readFileSync(require('path').join(__dirname,'VERSION'),'utf8').trim();
 migrate().then(() => {
-  server.listen(PORT, () => console.log(`🚀 Server on :${PORT}`));
+  server.listen(PORT, () => {
+    console.log(`🚀 Server on :${PORT}  [v${VERSION}]`);
+  });
 });

@@ -1430,38 +1430,30 @@ function loop(ts){
 //  BOOT — wait for difficulty selection
 // ═══════════════════════════════════════════════════════
 window.addEventListener('load',()=>{
-  const params = new URLSearchParams(window.location.search);
+  const params  = new URLSearchParams(window.location.search);
   const urlDiff = params.get('difficulty');
-  const bcId    = params.get('bc'); // BroadcastChannel session id
 
-  // Connect to platform via BroadcastChannel (same browser, different tab)
-  if(bcId){
-    const channel = new BroadcastChannel('td_game_' + bcId);
-    // Forward game events to platform tab
-    function sendToPlatform(type, data){
-      channel.postMessage({type, ...data});
+  // Poll until the window has real dimensions (fixes iframe sizing)
+  // In iframe, window.innerWidth can be 0 at load time
+  function waitForSize(cb){
+    if(window.innerWidth > 0 && window.innerHeight > 0){
+      cb();
+    } else {
+      requestAnimationFrame(()=>waitForSize(cb));
     }
-    // Listen for server events from platform tab
-    channel.onmessage = function(e){
-      const {type, ...data} = e.data;
-      if(type==='WAVE_START') {
-        // trigger next wave in classic mode
-        if(typeof startWave === 'function') startWave();
-      }
-    };
-    // Expose for game code to call
-    window._platform = { send: sendToPlatform };
   }
 
-  computeLayout();
-  canvas.width = CW || 880;
-  canvas.height = CH || 560;
-  ctx.fillStyle = '#060408';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  if(urlDiff){
-    startDiff(urlDiff);
-  }
+  waitForSize(()=>{
+    computeLayout();
+    canvas.width  = CW;
+    canvas.height = CH;
+    buildTextures();
+    ctx.fillStyle = '#060408';
+    ctx.fillRect(0,0,CW,CH);
+    if(urlDiff){
+      startDiff(urlDiff);
+    }
+  });
 });
 
 window.addEventListener('resize',()=>{
