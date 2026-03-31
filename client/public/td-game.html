@@ -22,8 +22,8 @@ body{font-family:'Cinzel',serif;background:var(--bg);color:#e0c870;display:flex;
 .tsep{width:1px;background:#2a1806;align-self:stretch;margin:2px 0}
 .wbadge{font-size:10px;color:#c0a840;font-weight:700;margin-left:auto}
 
-#canvaswrap{flex:1;overflow:hidden;position:relative;touch-action:none;background:#000}
-canvas{display:block;touch-action:none;position:absolute;top:0;left:0;width:100%!important;height:100%!important}
+#canvaswrap{flex:1;overflow:hidden;position:relative;touch-action:none;background:#1a2a10}
+canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)}
 
 /* DIFFICULTY SCREEN */
 #diff-screen{position:absolute;inset:0;z-index:300;background:rgba(4,2,8,.97);
@@ -212,15 +212,12 @@ canvas{display:block;touch-action:none;position:absolute;top:0;left:0;width:100%
 const COLS=15, ENTRY_COL=7;
 let TILE,ROWS,CW,CH,EXIT_ROW;
 function computeLayout(){
-  const wrap=document.getElementById('canvaswrap');
-  // Use canvaswrap's actual rendered size — reliable in both standalone and iframe
-  const aw=wrap ? wrap.clientWidth  : window.innerWidth;
-  const ah=wrap ? wrap.clientHeight : Math.max(60,window.innerHeight-159);
+  const aw=window.innerWidth;
+  const topH=document.getElementById('topbar').getBoundingClientRect().height||44;
+  const botH=document.getElementById('botbar').getBoundingClientRect().height||115;
+  const ah=Math.max(60,window.innerHeight-topH-botH);
   TILE=Math.max(18,Math.floor(aw/COLS));
-  CW=TILE*COLS;
-  ROWS=Math.max(10,Math.floor(Math.max(60,ah)/TILE));
-  EXIT_ROW=ROWS-1;
-  CH=TILE*ROWS;
+  CW=TILE*COLS; ROWS=Math.max(10,Math.floor(ah/TILE)); EXIT_ROW=ROWS-1; CH=TILE*ROWS;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1432,53 +1429,46 @@ function loop(ts){
 // ═══════════════════════════════════════════════════════
 //  BOOT — wait for difficulty selection
 // ═══════════════════════════════════════════════════════
-window.addEventListener('load',()=>{
-  const params  = new URLSearchParams(window.location.search);
-  const urlDiff = params.get('difficulty');
+// Auto-start support: /td-game.html?difficulty=normal
+(function(){
+  var params  = new URLSearchParams(window.location.search);
+  var urlDiff = params.get('difficulty');
 
-  // Poll until the window has real dimensions (fixes iframe sizing)
-  // In iframe, window.innerWidth can be 0 at load time
-  function waitForSize(cb){
-    if(window.innerWidth > 0 && window.innerHeight > 0){
-      cb();
-    } else {
-      requestAnimationFrame(()=>waitForSize(cb));
-    }
+  function doInit(){
+    computeLayout();
+    canvas.width  = CW||window.innerWidth||880;
+    canvas.height = CH||window.innerHeight||560;
+    buildTextures();
+    ctx.fillStyle='#060408';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    if(urlDiff) startDiff(urlDiff);
   }
 
-  waitForSize(()=>{
-    computeLayout();
-    canvas.width  = CW;
-    canvas.height = CH;
-    buildTextures();
-    ctx.fillStyle = '#060408';
-    ctx.fillRect(0,0,CW,CH);
-    if(urlDiff){
-      startDiff(urlDiff);
-      // Fire a resize after a frame so canvas gets correct dimensions
-      // if layout settled after first paint
-      requestAnimationFrame(()=>{
-        const prevTILE=TILE;
-        computeLayout();
-        if(TILE!==prevTILE){
-          // Dimensions changed — rebuild
-          Object.keys(TSPRITES).forEach(k=>delete TSPRITES[k]);
-          Object.keys(ESPRITES).forEach(k=>delete ESPRITES[k]);
-          buildTextures();
-          canvas.width=CW;canvas.height=CH;
-        }
-      });
-    }
-  });
-});
+  // Use ResizeObserver on canvaswrap — fires when element has real size in iframe
+  var wrap = document.getElementById('canvaswrap');
+  var done = false;
+  if(wrap && window.ResizeObserver){
+    var ro = new ResizeObserver(function(entries){
+      var r = entries[0].contentRect;
+      if(r.width>0 && r.height>0 && !done){
+        done=true; ro.disconnect(); doInit();
+      }
+    });
+    ro.observe(wrap);
+  }
 
-window.addEventListener('resize',()=>{
-  computeLayout();
-  Object.keys(TSPRITES).forEach(k=>delete TSPRITES[k]);
-  Object.keys(ESPRITES).forEach(k=>delete ESPRITES[k]);
-  buildTextures();
-  canvas.width=CW;canvas.height=CH;
-});
+  // Fallback for standalone use (no iframe, ResizeObserver fires immediately or already sized)
+  window.addEventListener('load', function(){
+    setTimeout(function(){ if(!done){ done=true; doInit(); } }, 50);
+  });
+
+  window.addEventListener('resize',function(){
+    computeLayout();buildTextures();
+    Object.keys(TSPRITES).forEach(function(k){delete TSPRITES[k];});
+    Object.keys(ESPRITES).forEach(function(k){delete ESPRITES[k];});
+    if(ST.wave>0){canvas.width=CW;canvas.height=CH;}
+  });
+})();
 </script>
 </body>
 </html>
