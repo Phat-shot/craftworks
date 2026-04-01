@@ -285,6 +285,10 @@ function updateEnemies(gs, dt) {
     if (!e.isAir && e.slow) {
       e.slow.until > gs.gameTime ? spd *= (1 - e.slow.frac) : (e.slow = null);
     }
+    if (e.rooted && gs.gameTime < e.rooted.until) {
+      // Rooted: skip movement
+    } else {
+      if (e.rooted) e.rooted = null;
     if (e.isAir) {
       e.airY += spd * dt;
       e.airX = ENTRY_COL*TILE + TILE/2 + Math.sin(e.airY/(TILE*2) + e.airPhase)*TILE*.4;
