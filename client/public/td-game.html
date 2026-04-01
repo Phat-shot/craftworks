@@ -55,37 +55,46 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 @keyframes fadeout{0%,65%{opacity:1}100%{opacity:0}}
 
 #sheet{position:absolute;left:0;right:0;bottom:0;z-index:150;
-  background:linear-gradient(180deg,#1a0e04,#0e0800);
-  border-top:2px solid #6a3810;border-radius:14px 14px 0 0;
+  background:linear-gradient(180deg,#1c0f04,#0a0600);
+  border-top:2px solid #8a4810;border-radius:16px 16px 0 0;
   transform:translateY(100%);transition:transform .22s ease;
-  max-height:75vh;overflow-y:auto;padding:10px 14px 18px}
+  max-height:80vh;overflow-y:auto;padding:8px 12px 20px}
 #sheet.open{transform:translateY(0)}
-.sh-handle{width:36px;height:4px;background:#3a2808;border-radius:2px;margin:0 auto 10px;cursor:pointer;flex-shrink:0}
-.sh-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-#sh-canvas{border-radius:4px;border:1px solid #3a2808;flex-shrink:0}
-#sh-name{font-size:14px;font-weight:900;color:var(--gold);line-height:1.2}
-#sh-lvl{font-size:8px;color:#503828;margin-top:2px}
-.sh-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:8px}
-.sh-stat{background:#0a0602;border:1px solid #2a1806;border-radius:3px;padding:4px;text-align:center}
-.sh-sv{font-size:11px;font-weight:700;color:#e0c060}
-.sh-sl{font-size:7px;color:#503820;margin-top:1px}
-.path-section{background:#080602;border:1px solid #261808;border-radius:3px;margin-bottom:5px;overflow:hidden}
-.path-hdr{display:flex;align-items:center;gap:5px;padding:5px 8px}
-.path-ic{font-size:11px;flex-shrink:0}
-.path-nm{font-size:9px;font-weight:700;color:#b09050;flex:1}
-.path-dots{font-size:9px;letter-spacing:1px;color:#c09030;flex-shrink:0}
-.path-btn{width:100%;background:linear-gradient(180deg,#121a08,#090e04);
-  border:none;border-top:1px solid #201606;color:#68b028;
-  font-family:'Cinzel',serif;font-size:9px;padding:7px 8px;cursor:pointer;text-align:left;line-height:1.4}
-.path-btn:disabled{opacity:.35;cursor:not-allowed}
-.path-btn.maxed{color:#808060;background:#060604}
-.path-penalty{color:#c08030;font-size:8px}
-.sh-sell{width:100%;background:linear-gradient(180deg,#200808,#100402);
-  border:1px solid #401010;color:#b04040;cursor:pointer;
-  padding:12px 8px;font-family:'Cinzel',serif;font-size:11px;
-  border-radius:3px;margin-top:6px;display:flex;justify-content:space-between;align-items:center}
-.sh-sell span{font-size:8px;color:#803030}
-#sh-close{position:absolute;top:10px;right:14px;font-size:20px;color:#504030;cursor:pointer;padding:6px;line-height:1;z-index:5}
+.sh-handle{width:40px;height:5px;background:#3a2808;border-radius:3px;margin:0 auto 12px;cursor:pointer;flex-shrink:0}
+.sh-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+#sh-canvas{border-radius:6px;border:2px solid #4a3010;flex-shrink:0}
+#sh-name{font-size:16px;font-weight:900;color:var(--gold);line-height:1.2}
+#sh-lvl{font-size:9px;color:#604838;margin-top:3px}
+.sh-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px}
+.sh-stat{background:#0c0803;border:1px solid #2e1c08;border-radius:4px;padding:8px 4px;text-align:center}
+.sh-sv{font-size:15px;font-weight:900;color:#e0c060}
+.sh-sl{font-size:8px;color:#504020;margin-top:2px;letter-spacing:.5px}
+/* Upgrade path sections */
+.path-section{background:#0a0803;border:1px solid #2a1a06;border-radius:6px;margin-bottom:8px;overflow:hidden}
+.path-hdr{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(255,180,30,.04)}
+.path-ic{font-size:14px;flex-shrink:0}
+.path-nm{font-size:11px;font-weight:700;color:#c09850;flex:1;letter-spacing:.3px}
+/* Pip dots bigger */
+.path-dots{display:flex;gap:4px;flex-shrink:0}
+.path-dot{width:10px;height:10px;border-radius:50%;background:#1a1206}
+.path-dot.filled{background:var(--gold);box-shadow:0 0 4px rgba(240,200,60,.6)}
+.path-btn{width:100%;background:linear-gradient(180deg,#0e1a06,#080e03);
+  border:none;border-top:1px solid #1c1204;color:#70c030;
+  font-family:'Cinzel',serif;font-size:11px;font-weight:700;
+  padding:12px 14px;cursor:pointer;text-align:left;line-height:1.5;
+  display:flex;justify-content:space-between;align-items:center}
+.path-btn:active{background:linear-gradient(180deg,#162206,#0c1204)}
+.path-btn:disabled{opacity:.3;cursor:not-allowed}
+.path-btn.maxed{color:#706850;background:#060604;justify-content:center;font-size:10px}
+.path-cost{color:var(--gold);font-weight:900;font-size:13px;white-space:nowrap;margin-left:8px}
+.path-penalty{color:#c08030;font-size:9px;opacity:.8}
+.sh-sell{width:100%;background:linear-gradient(180deg,#240a0a,#120404);
+  border:1px solid #501818;color:#c04040;cursor:pointer;
+  padding:14px 14px;font-family:'Cinzel',serif;font-size:13px;font-weight:700;
+  border-radius:6px;margin-top:8px;display:flex;justify-content:space-between;align-items:center}
+.sh-sell:active{background:linear-gradient(180deg,#300c0c,#180606)}
+.sh-sell .sell-val{font-size:14px;font-weight:900;color:#e06060}
+#sh-close{position:absolute;top:12px;right:14px;font-size:22px;color:#604030;cursor:pointer;padding:8px;line-height:1;z-index:5}
 
 #botbar{flex-shrink:0;background:linear-gradient(180deg,#0c0800,#060400);border-top:2px solid var(--border);
   padding-bottom:env(safe-area-inset-bottom,0)}
@@ -96,19 +105,24 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
   position:relative;transition:background .1s;overflow:hidden;min-width:0}
 .twrb:last-child{border-right:none}
 .twrb:active{background:rgba(255,200,60,.08)}
-/* Selected: golden glow animation */
+/* Selected: golden glow */
 .twrb.sel{background:rgba(240,200,60,.12);animation:gold-shimmer 1.6s ease-in-out infinite}
+.twrb.sel .tw-icon-wrap{filter:none!important;opacity:1!important}
+.twrb.sel .tw-overlay{display:none!important}
+.twrb.sel .tw-nm{color:var(--gold)}
 @keyframes gold-shimmer{0%,100%{box-shadow:inset 0 0 8px rgba(240,180,30,.15)}50%{box-shadow:inset 0 0 18px rgba(240,200,60,.40),inset 0 -2px 0 rgba(240,200,60,.8)}}
 .twrb.sel::after{content:'';position:absolute;bottom:0;left:10%;right:10%;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent);border-radius:2px}
 /* Can-afford vs no-gold: handled via refreshTwrBtns, not :disabled */
 .twrb:disabled{pointer-events:none}
-.twrb.no-gold .tw-icon-wrap{filter:grayscale(1);opacity:.55}
+.twrb.no-gold .tw-icon-wrap{filter:grayscale(.8) brightness(.6)}
 .twrb.no-gold .tw-nm{color:#504030}
-.twrb.no-gold::before{content:'💰';position:absolute;font-size:16px;opacity:.4;pointer-events:none}
-.twrb.locked .tw-icon-wrap{filter:grayscale(1);opacity:.4}
-.twrb.locked .tw-nm{color:#383020}
-.twrb.locked::before{content:'🔒';position:absolute;font-size:16px;opacity:.35;pointer-events:none}
+.twrb.no-gold .tw-overlay{display:flex}
+.twrb.locked .tw-icon-wrap{filter:grayscale(1) brightness(.4)}
+.twrb.locked .tw-nm{color:#303020}
+.twrb.locked .tw-overlay{display:flex}
 .tw-icon-wrap{position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.tw-overlay{display:none;position:absolute;inset:0;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.45);border-radius:3px;font-size:14px;pointer-events:none;z-index:2}
 .tw-nm{font-size:7px;font-weight:700;line-height:1;width:100%;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px}
 .tw-co{font-size:6px;color:#705828;line-height:1;width:100%;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px}
 #action-row{display:flex;height:50px}
@@ -163,7 +177,7 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
     <div class="sh-handle" id="sh-handle"></div>
     <span id="sh-close" onclick="closeSheet()">✕</span>
     <div class="sh-head">
-      <canvas id="sh-canvas" width="52" height="52"></canvas>
+      <canvas id="sh-canvas" width="64" height="64" style="width:64px;height:64px"></canvas>
       <div><div id="sh-name"></div><div id="sh-lvl"></div></div>
     </div>
     <div class="sh-stats">
@@ -173,17 +187,17 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
     </div>
     <div id="sh-paths"></div>
     <button class="sh-sell" id="sh-sell-btn" onclick="doSell()">
-      <span>💰 Verkaufen</span><span id="sh-sell-val"></span>
+      <span>💰 Verkaufen</span><span class="sell-val" id="sh-sell-val"></span>
     </button>
   </div>
 </div>
 
 <div id="botbar">
   <div id="tower-row">
-    <button class="twrb" id="btn-dart"      onclick="pickTower('dart')"     ><div class="tw-icon-wrap"><canvas id="tc-dart" width="32" height="32"></canvas></div><div class="tw-nm">Dart</div><div class="tw-co">75g</div></button>
+    <button class="twrb" id="btn-dart"      onclick="pickTower('dart')"     ><div class="tw-icon-wrap"><canvas id="tc-dart" width="32" height="32"></canvas><div class="tw-overlay">💰</div></div><div class="tw-nm">Dart</div><div class="tw-co">75g</div></button>
     <button class="twrb" id="btn-poison"    onclick="pickTower('poison')"   ><canvas id="tc-poison"    width="24" height="24"></canvas><div class="tw-nm">Gift</div><div class="tw-co">100g</div></button>
     <button class="twrb" id="btn-splash"    onclick="pickTower('splash')"   ><canvas id="tc-splash"    width="24" height="24"></canvas><div class="tw-nm">Kanone</div><div class="tw-co">125g</div></button>
-    <button class="twrb" id="btn-lightning" onclick="pickTower('lightning')" disabled><div class="tw-icon-wrap"><canvas id="tc-lightning" width="32" height="32"></canvas></div><div class="tw-nm">Blitz</div><div class="tw-co" id="lk-l">🔒W20</div></button>
+    <button class="twrb" id="btn-lightning" onclick="pickTower('lightning')" disabled><div class="tw-icon-wrap"><canvas id="tc-lightning" width="32" height="32"></canvas><div class="tw-overlay">🔒</div></div><div class="tw-nm">Blitz</div><div class="tw-co" id="lk-l">🔒W20</div></button>
     <button class="twrb" id="btn-frost"     onclick="pickTower('frost')"     disabled><canvas id="tc-frost"     width="24" height="24"></canvas><div class="tw-nm">Frost</div><div class="tw-co" id="lk-f">🔒W10</div></button>
   </div>
   <div id="action-row">
@@ -859,7 +873,11 @@ function toggleSpd(){
 function showSheet(t){
   selTower=t;
   const b=TDB[t.type];
-  drawTowerSprite(document.getElementById('sh-canvas'),t.type,t.paths,52);
+  const shc=document.getElementById('sh-canvas');
+  const dpr=window.devicePixelRatio||1;
+  shc.width=64*dpr;shc.height=64*dpr;
+  shc.style.width='64px';shc.style.height='64px';
+  drawTowerSprite(shc,t.type,t.paths,64*dpr);
   document.getElementById('sh-name').textContent=b.name;
   document.getElementById('sh-lvl').textContent=`${t.paths.reduce((a,v)=>a+v,0)}/15 Upgrades`;
   document.getElementById('sh-dmg').textContent=b.baseDmg;
@@ -868,20 +886,34 @@ function showSheet(t){
   let html='';
   b.paths.forEach((path,pi)=>{
     const lvl=t.paths[pi],maxed=lvl>=5;
-    const dots='●'.repeat(lvl)+'○'.repeat(5-lvl);
+    // Render dot pips as HTML elements
+    let dots='';
+    for(let i=0;i<5;i++) dots+=`<span class="path-dot${i<lvl?' filled':''}"></span>`;
     const cost=getUpgradeCost(t,pi);
     const u=maxed?null:path.upgrades[lvl];
     const baseCost=u?u.cost:0;
     const penalty=cost&&baseCost?Math.round(cost/baseCost*100)-100:0;
     const canAfford=!maxed&&myGold>=(cost||0);
-    html+=`<div class="path-section"><div class="path-hdr"><span class="path-ic">${path.icon}</span><span class="path-nm">${path.name}</span><span class="path-dots">${dots}</span></div>
-    <button class="path-btn${maxed?' maxed':''}" onclick="doUpgradePath(${pi})" ${(!canAfford||maxed)?'disabled':''}>
-      ${maxed?'✅ MAX LEVEL':`⬆ Stufe ${lvl+1}: ${u.desc} — <b>${cost}g</b>${penalty>0?` <span class="path-penalty">(+${penalty}%)</span>`:''}`}
-    </button></div>`;
+    html+=`<div class="path-section">
+      <div class="path-hdr">
+        <span class="path-ic">${path.icon}</span>
+        <span class="path-nm">${path.name}</span>
+        <div class="path-dots">${dots}</div>
+      </div>
+      <button class="path-btn${maxed?' maxed':''}" onclick="doUpgradePath(${pi})" ${(!canAfford||maxed)?'disabled':''}>
+        ${maxed
+          ?'✅ MAX LEVEL'
+          :`<span>⬆ Stufe ${lvl+1}: ${u.desc}</span><span class="path-cost">${cost}g${penalty>0?` <span class="path-penalty">+${penalty}%</span>`:''}</span>`
+        }
+      </button>
+    </div>`;
   });
   document.getElementById('sh-paths').innerHTML=html;
-  document.getElementById('sh-sell-val').textContent=`+${Math.floor(t.invested*.6)}g`;
+  document.getElementById('sh-sell-val').textContent='';
   document.getElementById('sheet').classList.add('open');
+  // Update sell button separately
+  const sellVal=document.getElementById('sh-sell-val');
+  if(sellVal) sellVal.textContent=`+${Math.floor(t.invested*.6)}g`;
 }
 
 function closeSheet(){selTower=null;document.getElementById('sheet').classList.remove('open');}
