@@ -96,13 +96,21 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
   position:relative;transition:background .1s;overflow:hidden;min-width:0}
 .twrb:last-child{border-right:none}
 .twrb:active{background:rgba(255,200,60,.08)}
-.twrb.sel{background:rgba(240,200,60,.10);color:var(--gold)}
-.twrb.sel::after{content:'';position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--gold)}
-.twrb:disabled{opacity:.28;pointer-events:none}
+/* Selected: golden glow animation */
+.twrb.sel{background:rgba(240,200,60,.12);animation:gold-shimmer 1.6s ease-in-out infinite}
+@keyframes gold-shimmer{0%,100%{box-shadow:inset 0 0 8px rgba(240,180,30,.15)}50%{box-shadow:inset 0 0 18px rgba(240,200,60,.40),inset 0 -2px 0 rgba(240,200,60,.8)}}
+.twrb.sel::after{content:'';position:absolute;bottom:0;left:10%;right:10%;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent);border-radius:2px}
+/* Can-afford vs no-gold: handled via refreshTwrBtns, not :disabled */
+.twrb:disabled{pointer-events:none}
+.twrb.no-gold .tw-icon-wrap{filter:grayscale(1);opacity:.55}
+.twrb.no-gold .tw-nm{color:#504030}
+.twrb.no-gold::before{content:'💰';position:absolute;font-size:16px;opacity:.4;pointer-events:none}
+.twrb.locked .tw-icon-wrap{filter:grayscale(1);opacity:.4}
+.twrb.locked .tw-nm{color:#383020}
+.twrb.locked::before{content:'🔒';position:absolute;font-size:16px;opacity:.35;pointer-events:none}
+.tw-icon-wrap{position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .tw-nm{font-size:7px;font-weight:700;line-height:1;width:100%;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px}
 .tw-co{font-size:6px;color:#705828;line-height:1;width:100%;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px}
-.twrb.sel .sel-x{display:block}
-.sel-x{display:none;position:absolute;top:2px;right:2px;background:#803010;color:#ffb090;font-size:7px;font-weight:700;border-radius:2px;padding:1px 3px;line-height:1}
 #action-row{display:flex;height:50px}
 #btn-wave{flex:1;background:linear-gradient(180deg,#3a2806,#1a1002);
   border:none;border-right:1px solid #201604;color:#f0d850;
@@ -120,14 +128,16 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 <body>
 
 <div id="topbar">
-  <div class="res">❤️<span class="lbl">LEBEN</span><span class="v" id="v-lives">50</span></div>
+  <div class="res">❤️<span class="v" id="v-lives">50</span></div>
   <div class="tsep"></div>
-  <div class="res">💰<span class="lbl">GOLD</span><span class="v" id="v-gold">150</span></div>
+  <div class="res">💰<span class="v" id="v-gold">150</span></div>
   <div class="tsep"></div>
   <div class="res">🏆<span class="v" id="v-score">0</span></div>
   <div class="tsep"></div>
   <div class="res">💀<span class="v" id="v-kills">0</span></div>
-  <div class="wbadge" id="wbadge">Wave 0/25</div>
+  <div class="tsep"></div>
+  <div class="res" id="info-mode" style="font-size:8px;color:#706040;gap:3px"></div>
+  <div class="wbadge" id="wbadge">W0/25</div>
 </div>
 
 <div id="canvaswrap">
@@ -170,13 +180,14 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 
 <div id="botbar">
   <div id="tower-row">
-    <button class="twrb" id="btn-dart"      onclick="pickTower('dart')"     ><canvas id="tc-dart"      width="24" height="24"></canvas><div class="tw-nm">Dart</div><div class="tw-co">75g</div><span class="sel-x">✕</span></button>
-    <button class="twrb" id="btn-poison"    onclick="pickTower('poison')"   ><canvas id="tc-poison"    width="24" height="24"></canvas><div class="tw-nm">Gift</div><div class="tw-co">100g</div><span class="sel-x">✕</span></button>
-    <button class="twrb" id="btn-splash"    onclick="pickTower('splash')"   ><canvas id="tc-splash"    width="24" height="24"></canvas><div class="tw-nm">Kanone</div><div class="tw-co">125g</div><span class="sel-x">✕</span></button>
-    <button class="twrb" id="btn-lightning" onclick="pickTower('lightning')" disabled><canvas id="tc-lightning" width="24" height="24"></canvas><div class="tw-nm">Blitz</div><div class="tw-co" id="lk-l">🔒W20</div><span class="sel-x">✕</span></button>
-    <button class="twrb" id="btn-frost"     onclick="pickTower('frost')"     disabled><canvas id="tc-frost"     width="24" height="24"></canvas><div class="tw-nm">Frost</div><div class="tw-co" id="lk-f">🔒W10</div><span class="sel-x">✕</span></button>
+    <button class="twrb" id="btn-dart"      onclick="pickTower('dart')"     ><div class="tw-icon-wrap"><canvas id="tc-dart" width="32" height="32"></canvas></div><div class="tw-nm">Dart</div><div class="tw-co">75g</div></button>
+    <button class="twrb" id="btn-poison"    onclick="pickTower('poison')"   ><canvas id="tc-poison"    width="24" height="24"></canvas><div class="tw-nm">Gift</div><div class="tw-co">100g</div></button>
+    <button class="twrb" id="btn-splash"    onclick="pickTower('splash')"   ><canvas id="tc-splash"    width="24" height="24"></canvas><div class="tw-nm">Kanone</div><div class="tw-co">125g</div></button>
+    <button class="twrb" id="btn-lightning" onclick="pickTower('lightning')" disabled><div class="tw-icon-wrap"><canvas id="tc-lightning" width="32" height="32"></canvas></div><div class="tw-nm">Blitz</div><div class="tw-co" id="lk-l">🔒W20</div></button>
+    <button class="twrb" id="btn-frost"     onclick="pickTower('frost')"     disabled><canvas id="tc-frost"     width="24" height="24"></canvas><div class="tw-nm">Frost</div><div class="tw-co" id="lk-f">🔒W10</div></button>
   </div>
   <div id="action-row">
+    <button id="btn-back" onclick="quitGame()" title="Verlassen" style="width:44px;background:#1a0a04;border:none;color:#804030;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-right:1px solid #201604">🚪</button>
     <button id="btn-wave" onclick="startWave()">▶ Wave 1 starten</button>
     <button id="btn-spd"  onclick="toggleSpd()"><span style="font-size:18px">⏩</span><span id="spd-lbl">1×</span></button>
     <button id="btn-orient" onclick="cycleOrient()" title="Orientierung">🔄</button>
@@ -273,8 +284,15 @@ function cycleOrient(){
 function applyLayout(){
   computeLayout();
   const orient=getOrient();
-  canvas.width  = orient==='landscape'?CH:CW;
-  canvas.height = orient==='landscape'?CW:CH;
+  const dpr=window.devicePixelRatio||1;
+  const cw=orient==='landscape'?CH:CW;
+  const ch=orient==='landscape'?CW:CH;
+  // Set pixel dimensions at device resolution
+  canvas.width  = cw*dpr;
+  canvas.height = ch*dpr;
+  canvas.style.width  = cw+'px';
+  canvas.style.height = ch+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0); // scale all draws by DPR
   buildTextures();
 }
 
@@ -720,20 +738,38 @@ function drawParticles(){
 //  UI / INPUT
 // ═══════════════════════════════════════════════════════
 function updateHUD(){
-  const me=GS.players[myUserId];
   document.getElementById('v-lives').textContent=GS.sharedLives??50;
   document.getElementById('v-gold').textContent=myGold;
   document.getElementById('v-score').textContent=myScore;
   document.getElementById('v-kills').textContent=myKills;
-  document.getElementById('wbadge').textContent=`Wave ${GS.wave}/25`;
+  document.getElementById('wbadge').textContent=`W${GS.wave}/25`;
+  // Mode info
+  const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  const modeEl=document.getElementById('info-mode');
+  if(modeEl&&sess){
+    const modeNames={solo:'SP',coop:'Coop',classic:'Classic',tournament:'Turnier',chaos:'Chaos'};
+    const diff=sess.difficulty||'normal';
+    const pCount=Object.keys(GS.players||{}).length;
+    const parts=[
+      `<span style="color:#f0c840;font-weight:700">${modeNames[sess.mode||'solo']||sess.mode}</span>`,
+      `<span style="color:#604830">TD v0.1</span>`,
+      `<span style="color:#806040">${diff.charAt(0).toUpperCase()+diff.slice(1)}</span>`,
+    ];
+    if(pCount>1) parts.push(`<span style="color:#4080a0">👥${pCount}</span>`);
+    modeEl.innerHTML=parts.join('<span style="color:#302010;padding:0 2px">·</span>');
+  }
 }
 
 function refreshTwrBtns(){
   for(const[k,b]of Object.entries(TDB)){
     const el=document.getElementById('btn-'+k);if(!el)continue;
-    if(b.unlock&&GS.wave<b.unlock)continue;
-    if(pickedType===k){el.disabled=false;continue;}
-    el.disabled=myGold<b.cost;
+    const locked=b.unlock&&GS.wave<b.unlock;
+    const noGold=!locked&&myGold<b.cost;
+    const isSel=pickedType===k;
+    el.disabled=false; // never truly disabled — allow deselect
+    el.classList.toggle('sel',isSel);
+    el.classList.toggle('locked',locked&&!isSel);
+    el.classList.toggle('no-gold',noGold&&!isSel&&!locked);
   }
 }
 
@@ -804,6 +840,14 @@ function pickTower(type){
 
 function cancelPick(){
   pickedType=null;document.querySelectorAll('.twrb').forEach(el=>el.classList.remove('sel'));
+}
+
+function quitGame(){
+  if(confirm('Spiel beenden?')){
+    if(socket)socket.disconnect();
+    sessionStorage.removeItem('mp_session');
+    window.location.href='/';
+  }
 }
 
 function toggleSpd(){
@@ -915,7 +959,13 @@ function loop(){
     // Draw initial button sprites
     ['dart','poison','splash','lightning','frost'].forEach(type=>{
       const el=document.getElementById('tc-'+type);
-      if(el)drawTowerSprite(el,type,[0,0,0],24);
+      if(el){
+    const dpr=window.devicePixelRatio||1;
+    const sz=32*dpr;
+    el.width=sz;el.height=sz;
+    el.style.width='32px';el.style.height='32px';
+    drawTowerSprite(el,type,[0,0,0],sz);
+  }
     });
     connectSocket();
     requestAnimationFrame(loop);
