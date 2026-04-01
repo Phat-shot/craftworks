@@ -287,6 +287,9 @@ let GS = {
   bullets:[], particles:[], bolts:[], fireZones:[],
   pathSet:new Set(), globalPath:null,
 };
+let prevGS = null;   // previous snapshot for interpolation
+let snapTime = 0;    // when last snap arrived (performance.now())
+let snapInterval = 50; // ms between server ticks (50ms = 20/s)
 let myGold=150, myScore=0, myKills=0;
 let pickedType=null, selTower=null, hoverCell=null;
 let speedMult=1;
@@ -306,11 +309,10 @@ function connectSocket(){
   socket=io({auth:{token}});
 
   socket.on('connect',()=>{
-    if(sess.solo){
-      socket.emit('game:solo_start',{difficulty:sess.difficulty||'normal'});
-    } else {
+    if(!sess.solo){
       socket.emit('game:join',{sessionId});
     }
+    // solo: wait for user to pick difficulty in diff screen
   });
 
   socket.on('game:solo_started',({sessionId:sid})=>{
@@ -319,6 +321,10 @@ function connectSocket(){
   });
 
   socket.on('game:tick',(snap)=>{
+    prevGS=GS;
+    const now=performance.now();
+    if(snapTime>0)snapInterval=Math.max(16,Math.min(100,now-snapTime))*0.9+snapInterval*0.1;
+    snapTime=now;
     GS=snap;
     GS.pathSet=new Set(snap.pathSet||[]);
     // Update my gold/score/kills from player state
@@ -506,6 +512,44 @@ function drawTowerSprite(oc,type,paths,sz){
 }
 
 // ═══════════════════════════════════════════════════════
+//  INTERPOLATION
+// ═══════════════════════════════════════════════════════
+function lerp(a,b,t){return a+(b-a)*t;}
+
+// Get interpolated enemy/bullet positions between prev and current snapshot
+function getAlpha(){
+  if(!prevGS||snapTime===0)return 1;
+  const elapsed=performance.now()-snapTime;
+  return Math.min(1, elapsed/snapInterval);
+}
+
+function interpEnemies(){
+  if(!prevGS||!prevGS.enemies)return GS.enemies;
+  const alpha=getAlpha();
+  if(alpha>=1)return GS.enemies;
+  const prevMap={};
+  prevGS.enemies.forEach(e=>prevMap[e.id]=e);
+  return GS.enemies.map(e=>{
+    const p=prevMap[e.id];
+    if(!p)return e;
+    return{...e, px:lerp(p.px,e.px,alpha), py:lerp(p.py,e.py,alpha)};
+  });
+}
+
+function interpBullets(){
+  if(!prevGS||!prevGS.bullets)return GS.bullets;
+  const alpha=getAlpha();
+  if(alpha>=1)return GS.bullets;
+  const prevMap={};
+  prevGS.bullets.forEach(b=>prevMap[b.id]=b);
+  return GS.bullets.map(b=>{
+    const p=prevMap[b.id];
+    if(!p)return b;
+    return{...b, x:lerp(p.x,b.x,alpha), y:lerp(p.y,b.y,alpha)};
+  });
+}
+
+// ═══════════════════════════════════════════════════════
 //  COORDINATE SCALING
 //  Server engine uses TILE=32. Client TILE varies by screen size.
 //  All server pixel positions must be scaled to client pixels.
@@ -623,7 +667,7 @@ function drawTowers(){
 }
 
 function drawEnemies(){
-  for(const e of GS.enemies){
+  for(const e of interpEnemies()){
     const px=gx(sc(e.px),sc(e.py)),py=gy(sc(e.px),sc(e.py));
     const spr=getESpr(e.type,e.armorPhys,e.armorMagic,e.szF);
     const sz=spr.width;
@@ -638,7 +682,7 @@ function drawEnemies(){
 }
 
 function drawBullets(){
-  for(const b of GS.bullets){
+  for(const b of interpBullets()){
     const bx=gx(sc(b.x),sc(b.y)),by=gy(sc(b.x),sc(b.y));
     const r=b.kind==='bomb'?TILE*.16:TILE*.1;
     const col={bomb:'#ff7820',poison:'#55e040',frost:'#70e8ff',dart:'#aad8ff'}[b.kind]||'#aad8ff';
@@ -835,11 +879,12 @@ function showDiffScreen(){
 
 function startDiff(diff){
   hideDiffScreen();
-  sendAction('start_wave',{}); // server already has difficulty from session
-  // For solo started via diff screen, trigger restart
-  if(socket&&sessionId){
-    // Already connected — just start
+  const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  if(sess&&sess.solo&&socket){
+    // Solo: start the server game with selected difficulty now
+    socket.emit('game:solo_start',{difficulty:diff});
   }
+  // MP: game already running, nothing to do (diff set in lobby)
 }
 
 // ═══════════════════════════════════════════════════════
