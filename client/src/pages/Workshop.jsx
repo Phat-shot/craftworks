@@ -320,9 +320,9 @@ function MapEditor({ map, meta, onSave, onClose }) {
 
 // ── Main Workshop Page ─────────────────────────────────────────
 export default function Workshop() {
-  const { user }   = useAuth();
+  const { user }   = useAuth() || {};
   const navigate   = useNavigate();
-  const { t }      = useTranslation();
+  const { t }      = useTranslation() || { t: k => k };
   const [tab, setTab]         = useState('gallery'); // gallery | mine
   const [sort, setSort]       = useState('newest');
   const [search, setSearch]   = useState('');
@@ -353,6 +353,7 @@ export default function Workshop() {
     try {
       const { data } = await api.post(`/workshop/maps/${map.id}/play`);
       // Start solo game with this map's config
+      if (!user) { navigate('/login'); return; }
       sessionStorage.setItem('mp_session', JSON.stringify({
         solo: true,
         userId: user.id,
@@ -427,7 +428,7 @@ export default function Workshop() {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:12, marginTop:12 }}>
             {(tab === 'gallery' ? maps : mine).map(m => (
               <MapCard key={m.id} map={m}
-                isOwn={m.creator_id === user.id}
+                isOwn={user && m.creator_id === user.id}
                 onPlay={handlePlay}
                 onEdit={(map) => setEditor(map)}
                 onDelete={handleDelete}

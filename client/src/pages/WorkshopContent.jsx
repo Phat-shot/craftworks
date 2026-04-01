@@ -1,4 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../App';
 import { api } from '../api';
 
 // ── Shared helpers ─────────────────────────────────────────────
@@ -490,6 +492,8 @@ export function RaceEditor({ race, onSave, onClose }) {
 
 // ── Content Browser (tabs: Gebäude | Einheiten | Rassen) ───────
 export default function WorkshopContent() {
+  const { user } = useAuth() || {};
+  const navigate = useNavigate();
   const [tab, setTab]          = useState('buildings');
   const [buildings, setBuildings] = useState([]);
   const [units, setUnits]      = useState([]);
@@ -501,20 +505,21 @@ export default function WorkshopContent() {
     setLoading(true);
     try {
       const [br, ur, rr] = await Promise.all([
-        api.get('/workshop/buildings?mine=true'),
-        api.get('/workshop/units?mine=true'),
-        api.get('/workshop/races'),
+        api.get('/workshop/buildings?mine=true').catch(()=>({data:[]})),
+        api.get('/workshop/units?mine=true').catch(()=>({data:[]})),
+        api.get('/workshop/races').catch(()=>({data:[]})),
       ]);
-      setBuildings(br.data);
-      setUnits(ur.data);
-      setRaces(rr.data);
-    } catch {}
+      setBuildings(Array.isArray(br.data) ? br.data : []);
+      setUnits(Array.isArray(ur.data) ? ur.data : []);
+      setRaces(Array.isArray(rr.data) ? rr.data : []);
+    } catch (e) { console.error('Workshop load error:', e); }
     setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
   const del = async (type, id) => {
+    if (!user) { navigate('/login'); return; }
     if (!confirm('Löschen?')) return;
     await api.delete(`/workshop/${type}/${id}`).catch(()=>{});
     load();
@@ -569,7 +574,7 @@ export default function WorkshopContent() {
       <div className="page-header">
         <span className="page-title">🔨 Inhalte</span>
         <button className="btn btn-primary btn-sm"
-          onClick={()=>setEditor({type:tab,item:null})}>
+          onClick={()=>{ if(!user){navigate('/login');return;} setEditor({type:tab,item:null}); }}>
           + {tab==='buildings'?'Gebäude':tab==='units'?'Einheit':'Rasse'} erstellen
         </button>
       </div>
