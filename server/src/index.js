@@ -65,6 +65,7 @@ app.use(compression());
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
+app.set('trust proxy', 1); // trust first proxy (Traefik/nginx)
 app.use(rateLimit({ windowMs: 60_000, max: 300 }));
 
 const io = new Server(server, {

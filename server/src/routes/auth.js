@@ -72,18 +72,23 @@ router.post('/register', authLimiter,
       );
 
       const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER);
+      let emailSent = false;
       if (smtpConfigured) {
-        await sendVerificationEmail(email, token, language);
-      } else {
-        // No SMTP: auto-verify immediately
-        await db.query(
-          'UPDATE users SET email_verified=true WHERE id=$1', [userId]
-        );
+        try {
+          await sendVerificationEmail(email, token, language);
+          emailSent = true;
+        } catch (mailErr) {
+          console.warn('Email send failed, auto-verifying:', mailErr.message);
+        }
+      }
+      if (!emailSent) {
+        // No SMTP or send failed: auto-verify immediately
+        await db.query('UPDATE users SET email_verified=true WHERE id=$1', [userId]);
       }
 
       res.status(201).json({
         ok: true,
-        message: smtpConfigured ? 'verification_sent' : 'registered_auto_verified'
+        message: emailSent ? 'verification_sent' : 'registered_auto_verified'
       });
     } catch (e) {
       if (e.constraint === 'users_email_key')    return res.status(409).json({ error: 'email_taken' });
