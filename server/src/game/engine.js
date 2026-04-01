@@ -4,45 +4,13 @@
 //  All game logic lives here. Client is view-only.
 // ═══════════════════════════════════════════════════════
 
-const COLS = 25, ROWS = 35, ENTRY_COL = 12;
-const TILE = 32; // logical grid unit (server doesn't need pixels, but keeps math readable)
+const { TDB, RACES, getTowersForRace } = require('./towers');
 
-// ── Tower Definitions ────────────────────────────────────
-const TDB = {
-  dart:      { name:'Dart',     cost:75,  col:'#3ab8ff', baseRange:3.5, baseCd:460,  baseDmg:20, dmgType:'phys',  basePierce:0, canHitAir:true,
-    paths:[
-      { id:'range',  name:'Reichweite',  icon:'🎯', upgrades:[{desc:'+0.4T',cost:55,rangeDelta:0.4},{desc:'+0.7T',cost:88,rangeDelta:0.7},{desc:'+1.0T',cost:130,rangeDelta:1.0},{desc:'+1.4T',cost:188,rangeDelta:1.4},{desc:'+2.0T',cost:265,rangeDelta:2.0}] },
-      { id:'pierce', name:'Durchschlag', icon:'➡️', upgrades:[{desc:'Pierce×1',cost:55,pierce:1},{desc:'Pierce×2',cost:88,pierce:1},{desc:'Pierce×3',cost:130,pierce:1},{desc:'Pierce×5',cost:188,pierce:2},{desc:'Pierce×8',cost:265,pierce:3}] },
-      { id:'dmg',    name:'Schaden',     icon:'⚔️', upgrades:[{desc:'+10',cost:50,dmg:10},{desc:'+18',cost:80,dmg:18},{desc:'+28',cost:115,dmg:28},{desc:'+40',cost:165,dmg:40},{desc:'+55',cost:230,dmg:55}] }
-    ]},
-  poison:    { name:'Gift',     cost:100, col:'#44d040', baseRange:3.0, baseCd:1800, baseDmg:8,  dmgType:'magic', baseDotDmg:7, baseDotTicks:5, baseDotInt:700, baseSlowPct:0.14, canHitAir:true,
-    paths:[
-      { id:'vir',    name:'Virulenz',    icon:'☠️', upgrades:[{desc:'DoT×1.3',cost:60,dotMult:1.3},{desc:'DoT×1.7',cost:95,dotMult:1.7},{desc:'DoT×2.2',cost:140,dotMult:2.2},{desc:'DoT×3.0',cost:200,dotMult:3.0},{desc:'DoT×4.0',cost:280,dotMult:4.0}] },
-      { id:'acid',   name:'Säure',       icon:'🧪', upgrades:[{desc:'-5%',cost:70,armorShred:0.05},{desc:'-10%',cost:110,armorShred:0.10},{desc:'-18%',cost:165,armorShred:0.18},{desc:'-28%',cost:235,armorShred:0.28},{desc:'-40%',cost:325,armorShred:0.40}] },
-      { id:'spread', name:'Ausbreitung', icon:'🦠', upgrades:[{desc:'20%',cost:65,spreadChance:0.20},{desc:'35%',cost:105,spreadChance:0.35},{desc:'50%',cost:155,spreadChance:0.50},{desc:'70%',cost:220,spreadChance:0.70},{desc:'90%',cost:310,spreadChance:0.90}] }
-    ]},
-  splash:    { name:'Kanone',   cost:125, col:'#ff7820', baseRange:2.8, baseCd:1600, baseDmg:48, dmgType:'expl',  baseSplashR:0.9, canHitAir:false,
-    paths:[
-      { id:'nap',    name:'Napalm',       icon:'🔥', upgrades:[{desc:'Feuer 2s',cost:85,fireDur:2000,fireDmg:4},{desc:'Feuer 3s',cost:135,fireDur:3000,fireDmg:7},{desc:'Feuer 4s',cost:200,fireDur:4000,fireDmg:11},{desc:'Feuer 6s',cost:285,fireDur:6000,fireDmg:16},{desc:'Feuer 8s',cost:395,fireDur:8000,fireDmg:22}] },
-      { id:'clust',  name:'Clusterbombe', icon:'💥', upgrades:[{desc:'2 Mini',cost:90,clusterN:2},{desc:'3 Mini',cost:145,clusterN:3},{desc:'4 Mini',cost:215,clusterN:4},{desc:'6 Mini',cost:305,clusterN:6},{desc:'8 Mini',cost:420,clusterN:8}] },
-      { id:'pow',    name:'Sprengkraft',  icon:'💣', upgrades:[{desc:'+16',cost:70,dmg:16},{desc:'+28',cost:110,dmg:28},{desc:'+42',cost:160,dmg:42},{desc:'+58',cost:225,dmg:58},{desc:'+80',cost:315,dmg:80}] }
-    ]},
-  lightning: { name:'Blitz',    cost:200, col:'#ffe840', baseRange:4.0, baseCd:860,  baseDmg:62, dmgType:'magic', baseChains:3, baseDecay:0.62, unlock:20, canHitAir:true,
-    paths:[
-      { id:'volt',   name:'Spannung',     icon:'⚡', upgrades:[{desc:'+22',cost:90,dmg:22},{desc:'+38',cost:140,dmg:38},{desc:'+56',cost:205,dmg:56},{desc:'+78',cost:290,dmg:78},{desc:'+105',cost:400,dmg:105}] },
-      { id:'chain',  name:'Ketten',       icon:'🔗', upgrades:[{desc:'+1',cost:95,chains:1},{desc:'+2',cost:150,chains:2},{desc:'+3',cost:220,chains:3},{desc:'+4',cost:310,chains:4},{desc:'+6',cost:430,chains:6}] },
-      { id:'over',   name:'Überspannung', icon:'🌩️', upgrades:[{desc:'×3/5',cost:100,overN:5},{desc:'×3/4',cost:160,overN:4},{desc:'×3/3',cost:240,overN:3},{desc:'×3/2',cost:335,overN:2},{desc:'×3/1',cost:460,overN:1}] }
-    ]},
-  frost:     { name:'Frost',    cost:175, col:'#80eeff', baseRange:3.6, baseCd:1150, baseDmg:18, dmgType:'magic', baseSlowFrac:0.50, baseSlowDur:2600, unlock:10, canHitAir:true,
-    paths:[
-      { id:'deep',   name:'Tiefkühlung',  icon:'🧊', upgrades:[{desc:'55%',cost:80,slowFrac:0.55},{desc:'62%',cost:125,slowFrac:0.62},{desc:'68%',cost:185,slowFrac:0.68},{desc:'72%',cost:265,slowFrac:0.72},{desc:'75%',cost:360,slowFrac:0.75}] },
-      { id:'field',  name:'Eisfeld',      icon:'❄️', upgrades:[{desc:'+0.5T',cost:90,splashR:0.5},{desc:'+0.9T',cost:145,splashR:0.9},{desc:'+1.4T',cost:215,splashR:1.4},{desc:'+2.0T',cost:305,splashR:2.0},{desc:'+2.8T',cost:420,splashR:2.8}] },
-      { id:'shat',   name:'Scherbeis',    icon:'💎', upgrades:[{desc:'+5%',cost:80,shatBonus:0.05},{desc:'+10%',cost:130,shatBonus:0.10},{desc:'+18%',cost:195,shatBonus:0.18},{desc:'+28%',cost:275,shatBonus:0.28},{desc:'+40%',cost:380,shatBonus:0.40}] }
-    ]},
-};
+const COLS = 25, ROWS = 35, ENTRY_COL = 12;
+const TILE = 32;
 
 // ── Enemy Base Config ────────────────────────────────────
-const EBASE_HP = { basic:90, fast:58, armored:210, healer:115, boss:2000, air_light:60, air_heavy:160 };
+const EBASE_HP = { basic:70, fast:45, armored:150, healer:90,  boss:1800, air_light:55, air_heavy:130 };
 const EBASE = {
   basic:     { col:'#b02810', szF:.26, spdBase:1.6, rewBase:8,   name:'Läufer' },
   fast:      { col:'#b09010', szF:.20, spdBase:2.8, rewBase:10,  name:'Renner' },
@@ -71,18 +39,37 @@ function calcStats(t) {
     dotInt:b.baseDotInt||700, slowPct:b.baseSlowPct||0,
     armorShred:0, fireDur:0, fireDmg:0, overN:0, shatBonus:0,
     dotMult:1, totalCdDelta:0, spreadChance:0, clusterN:0,
+    // New mechanics
+    isSpinAoe:  b.isSpinAoe||false,
+    isRingAoe:  b.isRingAoe||false,
+    isAura:     b.isAura||false,
+    isHealAura: b.isHealAura||false,
+    isPull:     b.isPull||false,
+    auraAttackSpeed: b.auraAttackSpeed||0,
+    auraDmg:    0,
+    pullStrength: b.pullStrength||0,
+    rootDur:    b.baseRootDur||0,
+    healRate:   b.healRate||0,
+    healMult:   1,
+    dmgReduction: b.damageReduction||0,
+    slowDurDelta: 0,
   };
   t.paths.forEach((lvl, pi) => {
     const path = b.paths[pi];
     for (let i = 0; i < lvl; i++) {
       const u = path.upgrades[i];
-      if (u.dmg)        s.dmg        += u.dmg;
-      if (u.pierce)     s.pierce     += u.pierce;
-      if (u.chains)     s.chains     += u.chains;
-      if (u.splashR)    s.splashR    += u.splashR;
-      if (u.cdDelta)    s.totalCdDelta += u.cdDelta;
-      if (u.rangeDelta) s.range      += u.rangeDelta;
-      if (u.clusterN)   s.clusterN   = Math.max(s.clusterN, u.clusterN);
+      if (u.dmg)            s.dmg            += u.dmg;
+      if (u.pierce)         s.pierce         += u.pierce;
+      if (u.chains)         s.chains         += u.chains;
+      if (u.splashR)        s.splashR        += u.splashR;
+      if (u.cdDelta)        s.totalCdDelta   += u.cdDelta;
+      if (u.rangeDelta)     s.range          += u.rangeDelta;
+      if (u.clusterN)       s.clusterN       = Math.max(s.clusterN, u.clusterN);
+      if (u.auraSpeed)      s.auraAttackSpeed+= u.auraSpeed;
+      if (u.auraDmg)        s.auraDmg        += u.auraDmg;
+      if (u.pullStrength)   s.pullStrength   += u.pullStrength;
+      if (u.rootDurDelta)   s.rootDur        += u.rootDurDelta;
+      if (u.slowDurDelta)   s.slowDurDelta   += u.slowDurDelta;
     }
     if (lvl > 0) {
       const L = path.upgrades[lvl-1];
@@ -94,10 +81,14 @@ function calcStats(t) {
       if (L.overN        !== undefined) s.overN        = L.overN;
       if (L.shatBonus    !== undefined) s.shatBonus    = L.shatBonus;
       if (L.spreadChance !== undefined) s.spreadChance = L.spreadChance;
+      if (L.healMult     !== undefined) s.healMult     = L.healMult;
+      if (L.dmgRedDelta  !== undefined) s.dmgReduction += L.dmgRedDelta;
     }
   });
   s.cd     = Math.max(100, Math.round(b.baseCd * (1 - Math.min(0.9, s.totalCdDelta))));
   s.dotDmg = Math.round((b.baseDotDmg||0) * s.dotMult);
+  s.slowDur = (b.baseSlowDur||0) + s.slowDurDelta;
+  s.healRate = (b.healRate||0) * s.healMult;
   return s;
 }
 
@@ -224,17 +215,20 @@ function mkEnemy(cfg, wave) {
   };
 }
 
-function createGame(sessionId, difficulty, mode, players) {
+function createGame(sessionId, difficulty, mode, players, playerRaces = {}) {
   const diffMult = { easy:1.0, normal:1.5, hard:2.0, expert:2.5, horror:3.0 }[difficulty] || 1.5;
   const playerCount = players.length;
 
   // Per-player state
   const playerState = {};
   for (const p of players) {
+    const race = playerRaces[p.userId] || 'standard';
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
       lives: 50, gold: 150, score: 0, kills: 0,
       status: 'playing',
+      race,
+      availableTowers: getTowersForRace(race),
     };
   }
 
@@ -312,6 +306,7 @@ function updateEnemies(gs, dt) {
         if (e.pathIdx >= path.length) { e.escaped = true; loseLife(gs); }
       } else { e.px += dx/dist*step; e.py += dy/dist*step; }
     }
+    } // end root block
     // Poison tick
     if (e.poison && e.poison.ticks > 0 && gs.gameTime >= e.poison.next) {
       dealDmg(gs, e, e.poison.dmg, 'magic');
@@ -343,24 +338,100 @@ function loseLife(gs) {
 }
 
 function updateTowers(gs) {
+  // Build aura buffs map: towerId -> {cdMult, dmgMult}
+  const auraBufs = {};
+  for (const a of gs.towers) {
+    const ab = TDB[a.type];
+    if (!ab.isAura && !ab.isHealAura) continue;
+    const as_ = calcStats(a);
+    const ax = a.col*TILE+TILE, ay = a.row*TILE+TILE;
+    const ar2 = (as_.range*TILE)**2;
+    for (const t of gs.towers) {
+      if (t === a) continue;
+      const tx = t.col*TILE+TILE, ty = t.row*TILE+TILE;
+      if ((tx-ax)**2+(ty-ay)**2 > ar2) continue;
+      if (!auraBufs[t.id]) auraBufs[t.id] = {cdMult:1, dmgMult:1};
+      if (as_.auraAttackSpeed > 0) auraBufs[t.id].cdMult  *= (1 - as_.auraAttackSpeed);
+      if (as_.auraDmg         > 0) auraBufs[t.id].dmgMult *= (1 + as_.auraDmg);
+    }
+    // Heal aura: restore lives slowly
+    if (ab.isHealAura && as_.healRate > 0) {
+      const healAmt = as_.healRate * (gs.gameTime - (a._lastHealTick||gs.gameTime)) / 1000;
+      if (healAmt > 0) {
+        gs.sharedLives = Math.min(50, gs.sharedLives + healAmt);
+        a._lastHealTick = gs.gameTime;
+        for (const p of Object.values(gs.players)) p.lives = Math.round(gs.sharedLives);
+      }
+    }
+    // Store damage reduction from mondlichtaltar
+    if (as_.dmgReduction > 0) gs._dmgReduction = (gs._dmgReduction||0) + as_.dmgReduction;
+  }
+  gs._dmgReduction = Math.min(0.5, gs._dmgReduction||0);
+
   for (const t of gs.towers) {
+    const b = TDB[t.type];
+    if (b.isAura || b.isHealAura) continue; // aura towers don't fire
     const s = calcStats(t);
-    if (gs.gameTime - t.lastFire >= s.cd) {
-      const tgt = bestTarget(gs, t, s);
-      if (tgt) fireTower(gs, t, s, tgt);
+    // Apply aura buffs
+    const buf = auraBufs[t.id];
+    if (buf) { s.cd = Math.round(s.cd * buf.cdMult); s.dmg = Math.round(s.dmg * buf.dmgMult); }
+    const cooldown = b.isSpinAoe ? s.cd : s.cd;
+    if (gs.gameTime - t.lastFire >= cooldown) {
+      if (b.isSpinAoe) {
+        // Fleischwolf: damage all enemies in range simultaneously
+        fireSpinAoe(gs, t, s);
+      } else if (b.isRingAoe) {
+        // Elektrozaun: zap all in range
+        fireRingAoe(gs, t, s);
+      } else {
+        const tgt = bestTarget(gs, t, s);
+        if (tgt) fireTower(gs, t, s, tgt);
+      }
     }
   }
+  gs._dmgReduction = 0; // reset each tick, recalculated above
+}
+
+function fireSpinAoe(gs, t, s) {
+  t.lastFire = gs.gameTime;
+  const cx = t.col*TILE+TILE, cy = t.row*TILE+TILE;
+  const r2 = (s.range*TILE)**2;
+  let hit = false;
+  for (const e of gs.enemies) {
+    if (e.dead || e.escaped || e.isAir) continue;
+    if ((e.px-cx)**2+(e.py-cy)**2 > r2) continue;
+    dealDmg(gs, e, s.dmg, 'phys');
+    hit = true;
+  }
+  if (hit) gs.bolts.push({x1:cx,y1:cy,x2:cx+s.range*TILE,y2:cy,life:4,maxLife:4,kind:'spin'});
+}
+
+function fireRingAoe(gs, t, s) {
+  t.lastFire = gs.gameTime;
+  const cx = t.col*TILE+TILE, cy = t.row*TILE+TILE;
+  const r2 = (s.range*TILE)**2;
+  for (const e of gs.enemies) {
+    if (e.dead || e.escaped) continue;
+    const ex = e.isAir?e.airX:e.px, ey = e.isAir?e.airY:e.py;
+    if ((ex-cx)**2+(ey-cy)**2 > r2) continue;
+    dealDmg(gs, e, s.dmg, 'magic');
+    if (s.slowFrac > 0) applySlow(e, s.slowFrac, s.slowDur||1000, gs.gameTime);
+  }
+  gs.bolts.push({x1:cx,y1:cy,x2:cx,y2:cy-s.range*TILE,life:6,maxLife:6,kind:'ring'});
 }
 
 function bestTarget(gs, t, s) {
   const cx = t.col*TILE + TILE, cy = t.row*TILE + TILE;
   const r2 = (s.range * TILE) ** 2;
+  const blindR2 = TDB[t.type].blindSpot ? (TDB[t.type].blindSpot * TILE)**2 : 0;
   let best = null, bm = -Infinity;
   for (const e of gs.enemies) {
     if (e.dead || e.escaped) continue;
     if (e.isAir && !s.canHitAir) continue;
     const ex = e.isAir ? e.airX : e.px, ey = e.isAir ? e.airY : e.py;
-    if ((ex-cx)**2 + (ey-cy)**2 > r2) continue;
+    const d2 = (ex-cx)**2 + (ey-cy)**2;
+    if (d2 > r2) continue;
+    if (blindR2 > 0 && d2 < blindR2) continue; // blind spot (Mörser)
     const m = s.dmgType === 'expl' ? -(e.isAir ? e.airY : e.pathIdx) : e.isAir ? e.airY : e.pathIdx;
     if (m > bm) { bm = m; best = e; }
   }
@@ -389,6 +460,49 @@ function fireTower(gs, t, s, tgt) {
       const sm = s.shatBonus > 0 && tgt.slow && tgt.slow.until > gs.gameTime ? (1+s.shatBonus) : 1;
       gs.bullets.push({ id:++_bid, kind:'frost', x:sx,y:sy, spd:7*TILE, target:tgt, dmg:Math.round(s.dmg*sm), slowFrac:s.slowFrac, slowDur:s.slowDur, splashR:s.splashR*TILE, dmgType:'magic' }); break;
     }
+    // ORCS
+    case 'wurfspeer':
+      gs.bullets.push({ id:++_bid, kind:'spear', x:sx,y:sy, spd:11*TILE, target:tgt, dmg:s.dmg, pierce:s.pierce, pierced:[], armorShred:s.armorShred, dmgType:'phys' }); break;
+    // TECHIES
+    case 'moerser': {
+      // Long range bomb, blind spot check handled in bestTarget
+      gs.bullets.push({ id:++_bid, kind:'bomb', x:sx,y:sy, spd:4*TILE, tx, ty, dmg:s.dmg, splR:s.splashR*TILE, fireDur:s.fireDur, fireDmg:s.fireDmg, clusterN:0, clusterDmg:0, clusterSplR:0, dmgType:'expl' }); break;
+    }
+    case 'raketenwerfer':
+      gs.bullets.push({ id:++_bid, kind:'rocket', x:sx,y:sy, spd:12*TILE, target:tgt, dmg:s.dmg, splR:s.splashR*TILE, clusterN:s.clusterN, clusterDmg:Math.round(s.dmg*.35), clusterSplR:s.splashR*TILE*.5, dmgType:'expl' }); break;
+    // ELEMENTE
+    case 'magmaquelle': {
+      gs.bullets.push({ id:++_bid, kind:'magma', x:sx,y:sy, spd:3.5*TILE, tx, ty, dmg:s.dmg, splR:s.splashR*TILE, fireDur:s.fireDur||4000, fireDmg:s.fireDmg||8, armorShred:s.armorShred, dmgType:'expl' }); break;
+    }
+    case 'sturmstrudel': {
+      // Pull + damage all in range
+      const cx2=t.col*TILE+TILE, cy2=t.row*TILE+TILE;
+      const r2=(s.range*TILE)**2;
+      t.lastFire=gs.gameTime;
+      for (const e of gs.enemies) {
+        if (e.dead||e.escaped) continue;
+        const ex=e.isAir?e.airX:e.px, ey=e.isAir?e.airY:e.py;
+        if ((ex-cx2)**2+(ey-cy2)**2>r2) continue;
+        dealDmg(gs,e,s.dmg,'magic');
+        // Pull toward center
+        if (!e.isAir) {
+          const dx=cx2-e.px, dy=cy2-e.py, dist=Math.hypot(dx,dy)||1;
+          const pull=s.pullStrength*TILE*0.5;
+          e.px+=dx/dist*pull; e.py+=dy/dist*pull;
+        }
+      }
+      gs.bolts.push({x1:cx2,y1:cy2,x2:cx2,y2:cy2-s.range*TILE,life:8,maxLife:8,kind:'wind'});
+      return; // already set lastFire and applied effects
+    }
+    case 'eisspitze': {
+      const sm2 = s.shatBonus > 0 && tgt.slow && tgt.slow.until > gs.gameTime ? (1+s.shatBonus) : 1;
+      gs.bullets.push({ id:++_bid, kind:'ice', x:sx,y:sy, spd:8*TILE, target:tgt, dmg:Math.round(s.dmg*sm2), slowFrac:0.75, slowDur:s.slowDur||3000, splashR:s.splashR*TILE, dmgType:'magic' }); break;
+    }
+    // URWALD
+    case 'rankenfalle':
+      gs.bullets.push({ id:++_bid, kind:'vine', x:sx,y:sy, spd:6*TILE, target:tgt, dmg:s.dmg, rootDur:s.rootDur, slowFrac:0.45, slowDur:2500, splashR:s.splashR*TILE, dmgType:'phys' }); break;
+    case 'giftpilz':
+      gs.bullets.push({ id:++_bid, kind:'spore', x:sx,y:sy, spd:4*TILE, tx, ty, dmg:s.dmg, dotDmg:s.dotDmg||12, dotTicks:s.dotTicks||6, dotInt:600, splR:s.splashR*TILE, spreadChance:s.spreadChance||0.3, dmgType:'magic' }); break;
   }
 }
 
@@ -422,6 +536,20 @@ function updateBullets(gs, dt) {
           }
         }
         if (b.fireDur > 0) gs.fireZones.push({ x:b.tx, y:b.ty, r:b.splR*.8, dmg:b.fireDmg, dur:b.fireDur, until:gs.gameTime+b.fireDur, next:gs.gameTime+500 });
+        // Magma: armor shred in zone
+        if (b.armorShred > 0) {
+          for (const e of gs.enemies) { if(e.dead||e.escaped) continue;
+            const ex=e.isAir?e.airX:e.px,ey=e.isAir?e.airY:e.py;
+            if((ex-b.tx)**2+(ey-b.ty)**2<=b.splR**2) e.armorPhys=Math.max(0,e.armorPhys-b.armorShred*0.1); }
+        }
+        // Spore: AoE poison cloud
+        if (b.dotDmg > 0) {
+          for (const e of gs.enemies) { if(e.dead||e.escaped) continue;
+            const ex=e.isAir?e.airX:e.px,ey=e.isAir?e.airY:e.py;
+            if((ex-b.tx)**2+(ey-b.ty)**2<=b.splR**2) {
+              applyPoison(e,b.dotDmg,b.dotTicks,b.dotInt,0,0,gs.gameTime);
+              if(b.spreadChance>0) e.poison.spreadChance=b.spreadChance; } }
+        }
         if (b.clusterN > 0) {
           for (let ci = 0; ci < b.clusterN; ci++) {
             const ang = (ci/b.clusterN)*Math.PI*2 + Math.random()*.4;
@@ -456,7 +584,7 @@ function updateBullets(gs, dt) {
             applyPoison(b.target, b.dotDmg, b.dotTicks, b.dotInt, b.slowPct, b.armorShred, gs.gameTime);
             if (b.spreadChance > 0) b.target.poison.spreadChance = b.spreadChance;
             rem.push(b); break;
-          case 'frost':
+          case 'frost': case 'ice':
             dealDmg(gs, b.target, b.dmg, 'magic');
             if (b.splashR > 0) {
               for (const e of gs.enemies) {
@@ -467,6 +595,39 @@ function updateBullets(gs, dt) {
                   dealDmg(gs, e, Math.round(b.dmg*.45), 'magic');
                 }
               }
+            } else { applySlow(b.target, b.slowFrac, b.slowDur, gs.gameTime); }
+            rem.push(b); break;
+          case 'spear': // like dart but with armorShred
+            dealDmg(gs, b.target, b.dmg, 'phys');
+            if (b.armorShred > 0) { b.target.armorPhys = Math.max(0, b.target.armorPhys - b.armorShred); }
+            if (b.pierce > 0 && b.pierced.length < b.pierce) {
+              b.pierced.push(b.target.id);
+              let nx=null, nd=5*TILE;
+              for (const e of gs.enemies) { if (e.dead||e.escaped||b.pierced.includes(e.id)) continue;
+                const ex=e.isAir?e.airX:e.px,ey=e.isAir?e.airY:e.py; const d=Math.hypot(ex-b.x,ey-b.y); if(d<nd){nd=d;nx=e;} }
+              if (nx) { b.target=nx; continue; }
+            }
+            rem.push(b); break;
+          case 'rocket': // bomb that tracks + can hit air
+            dealDmg(gs, b.target, b.dmg, 'expl');
+            if (b.splashR > 0) {
+              for (const e of gs.enemies) { if(e.dead||e.escaped) continue;
+                const ex=e.isAir?e.airX:e.px,ey=e.isAir?e.airY:e.py;
+                if((ex-tx2)**2+(ey-ty3)**2<=b.splashR**2) dealDmg(gs,e,Math.round(b.dmg*.5),'expl'); }
+            }
+            if (b.clusterN > 0) {
+              for(let ci=0;ci<b.clusterN;ci++){const ang=(ci/b.clusterN)*Math.PI*2;const d2=TILE*(1+Math.random());
+                gs.bullets.push({id:++_bid,kind:'bomb',x:tx2,y:ty3,tx:tx2+Math.cos(ang)*d2,ty:ty3+Math.sin(ang)*d2,spd:8*TILE,dmg:b.clusterDmg,splR:b.clusterSplR,fireDur:0,fireDmg:0,clusterN:0,clusterDmg:0,clusterSplR:0,dmgType:'expl'});}
+            }
+            spawnExp(gs,tx2,ty3); rem.push(b); break;
+          case 'vine': // root then slow
+            dealDmg(gs, b.target, b.dmg, 'phys');
+            b.target.rooted = { until: gs.gameTime + (b.rootDur||1200) };
+            if (b.splashR > 0) {
+              for (const e of gs.enemies) { if(e.dead||e.escaped||e.isAir) continue;
+                const ex=e.px,ey=e.py; if((ex-tx2)**2+(ey-ty3)**2<=b.splashR**2){
+                  applySlow(e,b.slowFrac,b.slowDur,gs.gameTime);
+                  if(!e.rooted) e.rooted={until:gs.gameTime+(b.rootDur||1200)*0.5};} }
             } else { applySlow(b.target, b.slowFrac, b.slowDur, gs.gameTime); }
             rem.push(b); break;
           default: rem.push(b);
@@ -622,6 +783,9 @@ function endGame(gs, win) {
 function actionPlaceTower(gs, userId, type, row, col) {
   const b = TDB[type]; if (!b) return { ok:false, err:'unknown_type' };
   const p = gs.players[userId]; if (!p) return { ok:false, err:'not_in_game' };
+  // Check player has access to this tower type via their race
+  if (p.availableTowers && !p.availableTowers.includes(type))
+    return { ok:false, err:'wrong_race' };
   if ((p.gold||0) < b.cost) return { ok:false, err:'no_gold' };
   if (b.unlock && gs.wave < b.unlock) return { ok:false, err:'locked' };
   if (!canPlaceAt(gs.towers, row, col)) return { ok:false, err:'blocked' };
@@ -674,7 +838,10 @@ function getSnapshot(gs) {
     waveJustStarted: gs._waveJustStarted||false,
     waveEndBonus: gs._waveEndBonus||0,
     sharedLives: gs.sharedLives,
-    players: gs.players,
+    players: Object.fromEntries(Object.entries(gs.players).map(([id, p]) => [id, {
+      ...p,
+      availableTowers: p.availableTowers || getTowersForRace('standard'),
+    }])),
     towers: gs.towers.map(t => ({ id:t.id, type:t.type, row:t.row, col:t.col, paths:t.paths, lastFire:t.lastFire, cd:calcStats(t).cd, owner:t.owner, invested:t.invested })),
     enemies: gs.enemies.filter(e=>!e.dead&&!e.escaped).map(e => ({
       id:e.id, type:e.type, col:e.col, szF:e.szF,
@@ -695,6 +862,7 @@ function getSnapshot(gs) {
 
 module.exports = {
   COLS, ROWS, ENTRY_COL, TILE, TDB, EBASE, EBASE_HP,
+  RACES, getTowersForRace,
   createGame, tick, getSnapshot,
   actionPlaceTower, actionUpgradePath, actionSellTower, actionStartWave,
   calcStats, getUpgradeCost, findPath,

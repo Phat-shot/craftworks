@@ -16,7 +16,16 @@ export default function LobbyRoom() {
   const [allReady, setAllReady] = useState(false);
   const [qr,       setQr]       = useState(null);
   const [error,    setError]    = useState('');
+  const [myRace,   setMyRace]   = useState('standard');
   const socketRef  = useRef(null);
+
+  const RACES = {
+    standard: { name:'Standard',   icon:'⚔️',  color:'#c0a060', desc:'Dart · Gift · Kanone' },
+    orcs:     { name:'Orcs',       icon:'💀',  color:'#80c020', desc:'Fleischwolf · Wurfspeer · Kriegstrommel' },
+    techies:  { name:'Techies',    icon:'⚙️',  color:'#60a8d0', desc:'Mörser · Elektrozaun · Raketenwerfer' },
+    elemente: { name:'Elemente',   icon:'🌊',  color:'#40c0e0', desc:'Magmaquelle · Sturmstrudel · Eisspitze' },
+    urwald:   { name:'Urwald',     icon:'🌿',  color:'#40a840', desc:'Rankenfalle · Giftpilz · Mondlichtaltar' },
+  };
 
   useEffect(() => {
     // Load lobby
@@ -30,6 +39,10 @@ export default function LobbyRoom() {
     socket.emit('lobby:join', { lobbyId: id });
 
     socket.on('lobby:state',         ({ members: m }) => setMembers(m));
+    socket.on('lobby:race_changed',  ({ userId: uid, race }) => {
+      if (uid === user.id) setMyRace(race);
+      setMembers(m => m.map(x => x.id===uid ? {...x, race} : x));
+    });
     socket.on('lobby:player_joined', (p) => setMembers(m => [...m.filter(x=>x.id!==p.userId), { id:p.userId, username:p.username, avatar_color:p.avatar_color, ready:false }]));
     socket.on('lobby:player_left',   ({ userId }) => setMembers(m => m.filter(x=>x.id!==userId)));
     socket.on('lobby:player_ready',  ({ userId, ready: r }) => setMembers(m => m.map(x => x.id===userId ? {...x,ready:r} : x)));
@@ -43,6 +56,11 @@ export default function LobbyRoom() {
         .forEach(e => socket.off(e));
     };
   }, [id]);
+
+  const selectRace = (race) => {
+    setMyRace(race);
+    getSocket().emit('lobby:set_race', { lobbyId: id, race });
+  };
 
   const toggleReady = () => {
     const newReady = !ready;
@@ -108,6 +126,30 @@ export default function LobbyRoom() {
         </div>
       )}
 
+      {/* Race selection */}
+      <div className="section-title">⚔️ Deine Rasse</div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:16 }}>
+        {Object.entries(RACES).map(([key, r]) => (
+          <div
+            key={key}
+            onClick={() => selectRace(key)}
+            style={{
+              padding:'10px 8px', borderRadius:8, cursor:'pointer', textAlign:'center',
+              border:`2px solid ${myRace===key ? r.color : 'var(--border2)'}`,
+              background: myRace===key ? `${r.color}22` : 'var(--bg2)',
+              transition:'all .15s',
+            }}
+          >
+            <div style={{fontSize:22}}>{r.icon}</div>
+            <div style={{fontSize:11,fontWeight:700,color:myRace===key?r.color:'var(--text2)',marginTop:2}}>{r.name}</div>
+            <div style={{fontSize:9,color:'var(--text3)',marginTop:2,lineHeight:1.3}}>{r.desc}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:10,color:'var(--text3)',marginBottom:16}}>
+        + Frost (W10) · Blitz (W20) für alle Rassen
+      </div>
+
       {/* Mode description */}
       <div className="card" style={{ marginBottom: 16, padding: '10px 14px', fontSize: 12, color: 'var(--text2)' }}>
         {lobby.game_mode === 'coop'       && '🤝 Koop: Alle spielen auf einer Karte – Bounty wird geteilt!'}
@@ -126,6 +168,7 @@ export default function LobbyRoom() {
             </div>
             <span style={{ flex: 1, fontWeight: 600 }}>{m.username}</span>
             {m.id === lobby.host_id && <span style={{ fontSize: 11, color: 'var(--gold)' }}>👑 Host</span>}
+            {m.race && RACES[m.race] && <span style={{ fontSize: 11, color: RACES[m.race].color }}>{RACES[m.race].icon} {RACES[m.race].name}</span>}
             <span className={`player-ready ${m.ready ? 'yes' : 'no'}`}>
               {m.ready ? `✅ ${t('ready')}` : `⬜ ${t('not_ready')}`}
             </span>

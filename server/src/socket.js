@@ -1,6 +1,7 @@
 'use strict';
 const jwt    = require('jsonwebtoken');
 const engine = require('./game/engine');
+const { RACES, TDB, getTowersForRace } = require('./game/towers');
 
 // Active game engines: sessionId -> gameState
 const activeGames = new Map();
@@ -142,7 +143,10 @@ module.exports = function setupSocket(io, db) {
       }
 
       // Create server-side game engine
-      const gs = engine.createGame(sessionId, lobby.difficulty, lobby.game_mode, members);
+      // Build playerRaces map from lobby member data (stored when player joins)
+      const playerRaces = {};
+      for (const m of members) playerRaces[m.userId] = m.race || 'standard';
+      const gs = engine.createGame(sessionId, lobby.difficulty, lobby.game_mode, members, playerRaces);
       activeGames.set(sessionId, gs);
 
       // Start game loop
@@ -186,6 +190,7 @@ module.exports = function setupSocket(io, db) {
       io.to(`lobby:${lobbyId}`).emit('game:start', {
         sessionId, mode: lobby.game_mode, difficulty: lobby.difficulty,
         players: members, playerCount: members.length,
+        races: RACES,
       });
     });
 
@@ -214,15 +219,16 @@ module.exports = function setupSocket(io, db) {
     });
 
     // Solo game: start engine without lobby
-    socket.on('game:solo_start', async ({ difficulty }) => {
+    socket.on('game:solo_start', async ({ difficulty, race = 'standard' }) => {
       const { rows } = await db.query(
         `INSERT INTO game_sessions (lobby_id, game_mode, difficulty) VALUES (NULL,'solo',$1) RETURNING id`,
         [difficulty]
       );
       const sessionId = rows[0].id;
+      const playerRaces = { [userId]: race };
       const gs = engine.createGame(sessionId, difficulty, 'solo', [{
         userId, username, avatar_color: socket.user.avatar_color,
-      }]);
+      }], playerRaces);
       activeGames.set(sessionId, gs);
 
       const interval = setInterval(() => {
@@ -242,7 +248,21 @@ module.exports = function setupSocket(io, db) {
 
       gameLoops.set(sessionId, interval);
       socket.join(`game:${sessionId}`);
-      socket.emit('game:solo_started', { sessionId, difficulty });
+      const myPlayer = gs.players[userId];
+      socket.emit('game:solo_started', {
+        sessionId, difficulty, race,
+        availableTowers: myPlayer?.availableTowers || [],
+      });
+    });
+
+    // ── RACE SELECTION ───────────────────
+    socket.on('lobby:set_race', async ({ lobbyId, race }) => {
+      if (!RACES[race] && race !== 'standard') return;
+      await db.query(
+        'UPDATE lobby_members SET race=$1 WHERE lobby_id=$2 AND user_id=$3',
+        [race, lobbyId, userId]
+      ).catch(() => {});
+      io.to(`lobby:${lobbyId}`).emit('lobby:race_changed', { userId, race });
     });
 
     // ── DISCONNECT ────────────────────────
@@ -252,6 +272,12 @@ module.exports = function setupSocket(io, db) {
       notifyFollowers(io, db, userId, { event: 'user:offline', userId });
     });
   });
+};
+
+// ── GAME META ROUTES ─────────────────────────────────────
+// These are added to express app by the caller
+module.exports.getRacesHandler = (req, res) => {
+  res.json({ races: RACES, towers: TDB });
 };
 
 // ── HELPERS ──────────────────────────────────────────────
