@@ -34,46 +34,16 @@ export function Home() {
         </div>
       </div>
 
-      {/* Game tiles */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 28 }}>
-        {/* Singleplayer tile */}
-        <div
-          onClick={startSolo}
-          style={{
-            background: 'linear-gradient(135deg, #1a2a0a, #0e1806)',
-            border: '2px solid #3a6020',
-            borderRadius: 12, padding: 20, cursor: 'pointer',
-            transition: 'border-color .15s, transform .1s',
-            display: 'flex', flexDirection: 'column', gap: 8,
-          }}
-          onMouseEnter={e => e.currentTarget.style.borderColor='#60a030'}
-          onMouseLeave={e => e.currentTarget.style.borderColor='#3a6020'}
-        >
-          <div style={{ fontSize: 32 }}>🗡️</div>
-          <div style={{ fontWeight: 900, color: '#80e060', fontSize: 15 }}>Einzelspieler</div>
-          <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.4 }}>
-            Tower Defense solo.<br/>Schwierigkeit wählbar.
-          </div>
+        <div onClick={startSolo} style={{ background:'linear-gradient(135deg,#1a2a0a,#0e1806)', border:'2px solid #3a6020', borderRadius:12, padding:20, cursor:'pointer', display:'flex', flexDirection:'column', gap:8 }} onMouseEnter={e=>e.currentTarget.style.borderColor='#60a030'} onMouseLeave={e=>e.currentTarget.style.borderColor='#3a6020'}>
+          <div style={{fontSize:32}}>🗡️</div>
+          <div style={{fontWeight:900,color:'#80e060',fontSize:15}}>Einzelspieler</div>
+          <div style={{fontSize:11,color:'var(--text3)',lineHeight:1.4}}>Tower Defense solo.<br/>Schwierigkeit wählbar.</div>
         </div>
-
-        {/* Multiplayer tile */}
-        <div
-          onClick={() => navigate('/lobby')}
-          style={{
-            background: 'linear-gradient(135deg, #1a0e2a, #0e0816)',
-            border: '2px solid #602080',
-            borderRadius: 12, padding: 20, cursor: 'pointer',
-            transition: 'border-color .15s',
-            display: 'flex', flexDirection: 'column', gap: 8,
-          }}
-          onMouseEnter={e => e.currentTarget.style.borderColor='#a040d0'}
-          onMouseLeave={e => e.currentTarget.style.borderColor='#602080'}
-        >
-          <div style={{ fontSize: 32 }}>⚔️</div>
-          <div style={{ fontWeight: 900, color: '#c060f0', fontSize: 15 }}>Multiplayer</div>
-          <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.4 }}>
-            Koop &amp; Turnier.<br/>Lobbys erstellen &amp; beitreten.
-          </div>
+        <div onClick={() => navigate('/lobby')} style={{ background:'linear-gradient(135deg,#1a0e2a,#0e0816)', border:'2px solid #602080', borderRadius:12, padding:20, cursor:'pointer', display:'flex', flexDirection:'column', gap:8 }} onMouseEnter={e=>e.currentTarget.style.borderColor='#a040d0'} onMouseLeave={e=>e.currentTarget.style.borderColor='#602080'}>
+          <div style={{fontSize:32}}>⚔️</div>
+          <div style={{fontWeight:900,color:'#c060f0',fontSize:15}}>Multiplayer</div>
+          <div style={{fontSize:11,color:'var(--text3)',lineHeight:1.4}}>Koop &amp; Turnier.<br/>Lobbys erstellen &amp; beitreten.</div>
         </div>
       </div>
 
@@ -86,15 +56,15 @@ export function Home() {
         <>
           <div className="section-title">Letzte Spiele</div>
           {history.slice(0,5).map(g => (
-            <div key={g.id} className="card" style={{ marginBottom: 8, padding: '12px 16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div key={g.id} className="card" style={{ marginBottom:8, padding:'12px 16px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                 <div>
                   <span className={`lobby-badge badge-${g.game_mode}`}>{t(g.game_mode)}</span>
-                  <span className={`lobby-badge badge-${g.difficulty}`} style={{ marginLeft: 6 }}>{t(g.difficulty)}</span>
+                  <span className={`lobby-badge badge-${g.difficulty}`} style={{marginLeft:6}}>{t(g.difficulty)}</span>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gold)' }}>Wave {g.wave} · {g.score} Pts</div>
-                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>{new Date(g.started_at).toLocaleDateString()}</div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontSize:14,fontWeight:700,color:'var(--gold)'}}>Wave {g.wave} · {g.score} Pts</div>
+                  <div style={{fontSize:11,color:'var(--text3)'}}>{new Date(g.started_at).toLocaleDateString()}</div>
                 </div>
               </div>
             </div>

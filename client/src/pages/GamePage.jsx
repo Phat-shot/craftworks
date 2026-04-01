@@ -9,10 +9,9 @@ export default function GamePage() {
   const location      = useLocation();
   const difficulty    = location.state?.difficulty || 'normal';
   const mode         = location.state?.mode || 'coop';
-  const playerCount   = location.state?.playerCount || 1;
+  const playerCount   = location.state?.playerCount || 2;
 
   useEffect(() => {
-    // Store full session info for td-game.html
     sessionStorage.setItem('mp_session', JSON.stringify({
       sessionId,
       userId: user.id,
@@ -22,11 +21,6 @@ export default function GamePage() {
       playerCount,
       solo: false,
     }));
-
-    // Join game socket room before navigating
-    const socket = getSocket();
-    socket.emit('game:join', { sessionId });
-
     window.location.href = '/td-game.html';
   }, []);
 
