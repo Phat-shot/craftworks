@@ -30,6 +30,8 @@ export default function Nav() {
     { to: '/chat',      icon: '💬', label: t('chat'), badge: unread },
     { to: '/lobby',     icon: '🎮', label: t('lobby')       },
     { to: '/leaderboard',icon: '🏆', label: t('leaderboard')},
+    { to: '/workshop',    icon: '🔧', label: 'Workshop'         },
+    { to: '/workshop/content', icon: '🔨', label: 'Inhalte' },
   ];
 
   return (

@@ -17,11 +17,13 @@ export default function Register() {
     if (!form.privacy) { setError(t('privacy_accept') + ' ist erforderlich.'); return; }
     setError(''); setLoading(true);
     try {
-      await api.post('/auth/register', {
+      const { data } = await api.post('/auth/register', {
         email: form.email, username: form.username,
         password: form.password, language: i18n.language,
       });
-      setSuccess(t('verification_sent'));
+      setSuccess(data.message === 'registered_auto_verified'
+        ? 'Registrierung erfolgreich! Du kannst dich jetzt einloggen.'
+        : t('verification_sent'));
     } catch (err) {
       setError(t(err.response?.data?.error || 'error'));
     } finally { setLoading(false); }

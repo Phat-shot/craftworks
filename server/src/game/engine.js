@@ -865,6 +865,8 @@ function getSnapshot(gs) {
 }
 
 module.exports = {
+  EBASE, EBASE_HP,
+  getWaveConfig,
   COLS, ROWS, ENTRY_COL, TILE, TDB, EBASE, EBASE_HP,
   RACES, getTowersForRace,
   createGame, tick, getSnapshot,

@@ -219,16 +219,20 @@ module.exports = function setupSocket(io, db) {
     });
 
     // Solo game: start engine without lobby
-    socket.on('game:solo_start', async ({ difficulty, race = 'standard' }) => {
+    socket.on('game:solo_start', async ({ difficulty, race = 'standard', workshopConfig = null }) => {
+      const effectiveDifficulty = workshopConfig?.difficulty || difficulty;
       const { rows } = await db.query(
         `INSERT INTO game_sessions (lobby_id, game_mode, difficulty) VALUES (NULL,'solo',$1) RETURNING id`,
-        [difficulty]
+        [effectiveDifficulty]
       );
       const sessionId = rows[0].id;
       const playerRaces = { [userId]: race };
-      const gs = engine.createGame(sessionId, difficulty, 'solo', [{
+      const gs = engine.createGame(sessionId, effectiveDifficulty, 'solo', [{
         userId, username, avatar_color: socket.user.avatar_color,
       }], playerRaces);
+      if (workshopConfig?.wave_overrides?.length) {
+        gs.waveOverrides = workshopConfig.wave_overrides;
+      }
       activeGames.set(sessionId, gs);
 
       const interval = setInterval(() => {

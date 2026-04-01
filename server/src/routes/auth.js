@@ -26,6 +26,7 @@ function signRefresh(userId) {
 }
 
 async function sendVerificationEmail(email, token, lang = 'de') {
+  if (!process.env.SMTP_HOST) return; // no SMTP configured
   const base = process.env.APP_URL;
   const link = `${base}/verify-email?token=${token}`;
   const subject = lang === 'de' ? 'E-Mail bestätigen' : 'Verify your email';
@@ -70,9 +71,20 @@ router.post('/register', authLimiter,
         [userId, 'registered', ipHash]
       );
 
-      await sendVerificationEmail(email, token, language);
+      const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER);
+      if (smtpConfigured) {
+        await sendVerificationEmail(email, token, language);
+      } else {
+        // No SMTP: auto-verify immediately
+        await db.query(
+          'UPDATE users SET email_verified=true WHERE id=$1', [userId]
+        );
+      }
 
-      res.status(201).json({ ok: true, message: 'verification_sent' });
+      res.status(201).json({
+        ok: true,
+        message: smtpConfigured ? 'verification_sent' : 'registered_auto_verified'
+      });
     } catch (e) {
       if (e.constraint === 'users_email_key')    return res.status(409).json({ error: 'email_taken' });
       if (e.constraint === 'users_username_key') return res.status(409).json({ error: 'username_taken' });

@@ -172,3 +172,111 @@ CREATE TABLE consent_log (
   ip_hash    VARCHAR(128),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ── WORKSHOP ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workshop_maps (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  creator_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title        VARCHAR(64) NOT NULL,
+  description  VARCHAR(256),
+  game_mode    VARCHAR(32) NOT NULL DEFAULT 'td',
+  -- Config JSON: { difficulty, available_races, wave_overrides, settings }
+  config       JSONB NOT NULL DEFAULT '{}',
+  is_public    BOOLEAN DEFAULT TRUE,
+  play_count   INTEGER DEFAULT 0,
+  rating_sum   INTEGER DEFAULT 0,
+  rating_count INTEGER DEFAULT 0,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS workshop_ratings (
+  map_id     UUID NOT NULL REFERENCES workshop_maps(id) ON DELETE CASCADE,
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  rating     SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (map_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workshop_maps_creator  ON workshop_maps(creator_id);
+CREATE INDEX IF NOT EXISTS idx_workshop_maps_public   ON workshop_maps(is_public, created_at DESC);
+
+-- ── WORKSHOP: CUSTOM CONTENT ──────────────────────────────────
+-- Buildings (was: towers)
+CREATE TABLE IF NOT EXISTS workshop_buildings (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  creator_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        VARCHAR(64) NOT NULL,
+  description VARCHAR(256),
+  -- Visual
+  icon        VARCHAR(8)  NOT NULL DEFAULT '🏰',
+  color       VARCHAR(16) NOT NULL DEFAULT '#888888',
+  sprite_type VARCHAR(32) DEFAULT 'generic', -- 'generic'|'dart'|'splash'|etc for renderer hint
+  -- Base stats
+  cost        INTEGER NOT NULL DEFAULT 100,
+  base_range  NUMERIC(4,2) NOT NULL DEFAULT 3.0,
+  base_cd     INTEGER NOT NULL DEFAULT 1000,   -- ms cooldown
+  base_dmg    INTEGER NOT NULL DEFAULT 20,
+  dmg_type    VARCHAR(16) NOT NULL DEFAULT 'phys', -- phys|magic|expl
+  unlock_wave INTEGER NOT NULL DEFAULT 0,
+  can_hit_air BOOLEAN DEFAULT TRUE,
+  -- Special flags (JSON): { isSpinAoe, isRingAoe, isAura, isPull, isHealAura, splashR, ... }
+  flags       JSONB NOT NULL DEFAULT '{}',
+  -- Upgrade paths: array of 3 paths, each with 5 upgrades
+  -- [{ id, name, icon, upgrades: [{desc, cost, effects: {dmg, rangeDelta, ...}}] }]
+  upgrade_paths JSONB NOT NULL DEFAULT '[]',
+  is_public   BOOLEAN DEFAULT FALSE,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Units (enemies + future player units)
+CREATE TABLE IF NOT EXISTS workshop_units (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  creator_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        VARCHAR(64) NOT NULL,
+  description VARCHAR(256),
+  unit_class  VARCHAR(16) NOT NULL DEFAULT 'enemy', -- 'enemy'|'friendly' (future)
+  -- Visual
+  icon        VARCHAR(8)  NOT NULL DEFAULT '👾',
+  color       VARCHAR(16) NOT NULL DEFAULT '#b02810',
+  shape       VARCHAR(16) NOT NULL DEFAULT 'circle', -- circle|square|diamond
+  size_factor NUMERIC(3,2) NOT NULL DEFAULT 0.26,
+  -- Stats
+  base_hp     INTEGER NOT NULL DEFAULT 100,
+  base_speed  NUMERIC(4,2) NOT NULL DEFAULT 1.5,
+  base_reward INTEGER NOT NULL DEFAULT 10,
+  armor_phys  NUMERIC(3,2) NOT NULL DEFAULT 0.0,
+  armor_magic NUMERIC(3,2) NOT NULL DEFAULT 0.0,
+  is_air      BOOLEAN DEFAULT FALSE,
+  -- Special abilities (JSON): { healer_aura, boss_crown, regen, ... }
+  abilities   JSONB NOT NULL DEFAULT '{}',
+  is_public   BOOLEAN DEFAULT FALSE,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Custom Races
+CREATE TABLE IF NOT EXISTS workshop_races (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  creator_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        VARCHAR(64) NOT NULL,
+  icon        VARCHAR(8)  NOT NULL DEFAULT '⚔️',
+  color       VARCHAR(16) NOT NULL DEFAULT '#c0a060',
+  description VARCHAR(256),
+  -- Array of building IDs (mix of built-in keys + UUID refs)
+  -- e.g. ["dart", "poison", "uuid-of-custom-building"]
+  building_ids JSONB NOT NULL DEFAULT '[]',
+  is_public   BOOLEAN DEFAULT FALSE,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Maps can reference custom content via workshop_map_content
+ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS
+  custom_races    JSONB NOT NULL DEFAULT '[]'; -- array of race UUIDs or built-in keys
+ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS
+  custom_units    JSONB NOT NULL DEFAULT '[]'; -- array of unit UUIDs for wave editor
+
+CREATE INDEX IF NOT EXISTS idx_workshop_buildings_creator ON workshop_buildings(creator_id);
+CREATE INDEX IF NOT EXISTS idx_workshop_units_creator     ON workshop_units(creator_id);
+CREATE INDEX IF NOT EXISTS idx_workshop_races_creator     ON workshop_races(creator_id);
