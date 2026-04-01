@@ -35,7 +35,7 @@ const TDB = {
     ]},
   frost:     { name:'Frost',    cost:175, col:'#80eeff', baseRange:3.6, baseCd:1150, baseDmg:18, dmgType:'magic', baseSlowFrac:0.50, baseSlowDur:2600, unlock:10, canHitAir:true,
     paths:[
-      { id:'deep',   name:'Tiefkühlung',  icon:'🧊', upgrades:[{desc:'62%',cost:85,slowFrac:0.62},{desc:'74%',cost:135,slowFrac:0.74},{desc:'84%',cost:200,slowFrac:0.84},{desc:'92%',cost:285,slowFrac:0.92},{desc:'98%',cost:395,slowFrac:0.98}] },
+      { id:'deep',   name:'Tiefkühlung',  icon:'🧊', upgrades:[{desc:'55%',cost:80,slowFrac:0.55},{desc:'62%',cost:125,slowFrac:0.62},{desc:'68%',cost:185,slowFrac:0.68},{desc:'72%',cost:265,slowFrac:0.72},{desc:'75%',cost:360,slowFrac:0.75}] },
       { id:'field',  name:'Eisfeld',      icon:'❄️', upgrades:[{desc:'+0.5T',cost:90,splashR:0.5},{desc:'+0.9T',cost:145,splashR:0.9},{desc:'+1.4T',cost:215,splashR:1.4},{desc:'+2.0T',cost:305,splashR:2.0},{desc:'+2.8T',cost:420,splashR:2.8}] },
       { id:'shat',   name:'Scherbeis',    icon:'💎', upgrades:[{desc:'+5%',cost:80,shatBonus:0.05},{desc:'+10%',cost:130,shatBonus:0.10},{desc:'+18%',cost:195,shatBonus:0.18},{desc:'+28%',cost:275,shatBonus:0.28},{desc:'+40%',cost:380,shatBonus:0.40}] }
     ]},
@@ -249,8 +249,9 @@ function createGame(sessionId, difficulty, mode, players) {
     spawnQ: [], spawnIdx: 0, spawnTimer: 0, spawnInterval: 0,
     gameTime: 0, lastTick: Date.now(),
     globalPath: path, pathSet,
-    // Shared state for coop
     sharedLives: 50,
+    // Coop: extra starting gold debt (150g * extra players, paid off from wave bonuses)
+    startingGoldDebt: mode === 'coop' ? 150 * Math.max(0, playerCount - 1) : 0,
   };
 }
 
@@ -502,7 +503,15 @@ function checkWaveEnd(gs) {
   gs.waveActive = false;
   gs.enemies = []; gs.spawnQ = []; gs.fireZones = [];
   const rawBonus = 25 + gs.wave*5;
-  const bonus = Math.max(1, Math.ceil(rawBonus / (gs.mode==='coop' ? gs.playerCount : 1)));
+  // Coop: pay off starting gold debt from wave bonuses (up to 50% per wave)
+  let effectiveBonus = rawBonus;
+  if (gs.startingGoldDebt > 0) {
+    const pay = Math.min(gs.startingGoldDebt, Math.floor(rawBonus * 0.5));
+    gs.startingGoldDebt -= pay;
+    effectiveBonus = rawBonus - pay;
+    gs._waveDebtPaid = true;
+  }
+  const bonus = Math.max(1, Math.ceil(effectiveBonus / (gs.mode==='coop' ? gs.playerCount : 1)));
   for (const p of Object.values(gs.players)) {
     p.gold  = (p.gold||150) + bonus;
     p.score = (p.score||0) + bonus*5;
