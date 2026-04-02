@@ -59,10 +59,10 @@ router.get('/buildings/builtin', (req, res) => {
 // POST /api/workshop/buildings
 router.post('/buildings', requireAuth,
   body('name').trim().isLength({ min:2, max:64 }),
-  body('base_dmg').isInt({ min:1, max:9999 }),
-  body('base_range').isFloat({ min:0.5, max:15 }),
-  body('base_cd').isInt({ min:100, max:30000 }),
-  body('cost').isInt({ min:1, max:9999 }),
+  body('base_dmg').isNumeric().toInt(),
+  body('base_range').isNumeric().toFloat(),
+  body('base_cd').isNumeric().toInt(),
+  body('cost').isNumeric().toInt(),
   validate,
   async (req, res) => {
     const {
@@ -143,8 +143,8 @@ router.get('/units/builtin', (req, res) => {
 // POST /api/workshop/units
 router.post('/units', requireAuth,
   body('name').trim().isLength({ min:2, max:64 }),
-  body('base_hp').isInt({ min:1, max:99999 }),
-  body('base_speed').isFloat({ min:0.1, max:20 }),
+  body('base_hp').isNumeric().toInt(),
+  body('base_speed').isNumeric().toFloat(),
   validate,
   async (req, res) => {
     const {

@@ -153,15 +153,18 @@ export function BuildingEditor({ building, onSave, onClose }) {
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
   const setFlag = (k,v) => setForm(f=>({...f, flags:{...f.flags,[k]:v||undefined}}));
 
+  const [saveErr, setSaveErr] = useState('');
   const save = async () => {
     if (!form.name.trim()) return;
-    setSaving(true);
+    setSaving(true); setSaveErr('');
     try {
       const r = isNew
         ? await api.post('/workshop/buildings', form)
         : await api.put(`/workshop/buildings/${building.id}`, form);
       onSave(r.data);
-    } catch {}
+    } catch (e) {
+      setSaveErr(e.response?.data?.error || e.response?.data?.errors?.[0]?.msg || 'Fehler beim Speichern');
+    }
     setSaving(false);
   };
 
@@ -262,10 +265,11 @@ export function BuildingEditor({ building, onSave, onClose }) {
             <UpgradePathBuilder paths={form.upgrade_paths} onChange={p=>set('upgrade_paths',p)} />
           )}
         </div>
-        <div style={{ padding:'10px 16px',borderTop:'1px solid var(--border2)',display:'flex',gap:10,justifyContent:'flex-end' }}>
+        <div style={{ padding:'10px 16px',borderTop:'1px solid var(--border2)',display:'flex',gap:10,justifyContent:'flex-end',flexWrap:'wrap' }}>
+          {saveErr&&<div style={{ width:'100%',fontSize:11,color:'var(--red)',padding:'4px 0' }}>⚠️ {saveErr}</div>}
           <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
           <button className="btn btn-primary" onClick={save} disabled={!form.name.trim()||saving}>
-            {saving?'⏳':'💾'} Speichern
+            {saving?'⏳ Speichert…':'💾 Speichern'}
           </button>
         </div>
       </div>
@@ -295,15 +299,18 @@ export function UnitEditor({ unit, onSave, onClose }) {
   const [saving, setSaving] = useState(false);
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
 
+  const [saveErr, setSaveErr] = useState('');
   const save = async () => {
     if (!form.name.trim()) return;
-    setSaving(true);
+    setSaving(true); setSaveErr('');
     try {
       const r = isNew
         ? await api.post('/workshop/units', form)
         : await api.put(`/workshop/units/${unit.id}`, form);
       onSave(r.data);
-    } catch {}
+    } catch (e) {
+      setSaveErr(e.response?.data?.error || e.response?.data?.errors?.[0]?.msg || 'Fehler beim Speichern');
+    }
     setSaving(false);
   };
 
@@ -367,10 +374,11 @@ export function UnitEditor({ unit, onSave, onClose }) {
             </div>
           </div>
         </div>
-        <div style={{ padding:'10px 16px',borderTop:'1px solid var(--border2)',display:'flex',gap:10,justifyContent:'flex-end' }}>
+        <div style={{ padding:'10px 16px',borderTop:'1px solid var(--border2)',display:'flex',gap:10,justifyContent:'flex-end',flexWrap:'wrap' }}>
+          {saveErr&&<div style={{ width:'100%',fontSize:11,color:'var(--red)',padding:'4px 0' }}>⚠️ {saveErr}</div>}
           <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
           <button className="btn btn-primary" onClick={save} disabled={!form.name.trim()||saving}>
-            {saving?'⏳':'💾'} Speichern
+            {saving?'⏳ Speichert…':'💾 Speichern'}
           </button>
         </div>
       </div>
@@ -415,15 +423,18 @@ export function RaceEditor({ race, onSave, onClose }) {
     }));
   };
 
+  const [saveErr, setSaveErr] = useState('');
   const save = async () => {
-    if (!form.name.trim() || form.building_ids.length < 1) return;
-    setSaving(true);
+    if (!form.name.trim()) return;
+    setSaving(true); setSaveErr('');
     try {
       const r = isNew
         ? await api.post('/workshop/races', form)
         : await api.put(`/workshop/races/${race.id}`, form);
       onSave(r.data);
-    } catch {}
+    } catch (e) {
+      setSaveErr(e.response?.data?.error || e.response?.data?.errors?.[0]?.msg || 'Fehler beim Speichern');
+    }
     setSaving(false);
   };
 
@@ -487,10 +498,11 @@ export function RaceEditor({ race, onSave, onClose }) {
             <label htmlFor="pub_r" style={{ fontSize:12 }}>Rasse öffentlich teilen</label>
           </div>
         </div>
-        <div style={{ padding:'10px 16px',borderTop:'1px solid var(--border2)',display:'flex',gap:10,justifyContent:'flex-end' }}>
+        <div style={{ padding:'10px 16px',borderTop:'1px solid var(--border2)',display:'flex',gap:10,justifyContent:'flex-end',flexWrap:'wrap' }}>
+          {saveErr&&<div style={{ width:'100%',fontSize:11,color:'var(--red)',padding:'4px 0' }}>⚠️ {saveErr}</div>}
           <button className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-          <button className="btn btn-primary" onClick={save} disabled={!form.name.trim()||form.building_ids.length<1||saving}>
-            {saving?'⏳':'💾'} Speichern
+          <button className="btn btn-primary" onClick={save} disabled={!form.name.trim()||saving}>
+            {saving?'⏳ Speichert…':'💾 Speichern'}
           </button>
         </div>
       </div>
