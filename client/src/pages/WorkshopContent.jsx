@@ -395,8 +395,16 @@ export function RaceEditor({ race, onSave, onClose }) {
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
 
   useEffect(() => {
-    api.get('/workshop/buildings/builtin').then(r=>setBuiltinBuildings(r.data)).catch(()=>{});
-    api.get('/workshop/buildings?mine=true').then(r=>setCustomBuildings(r.data)).catch(()=>{});
+    api.get('/workshop/buildings/builtin')
+      .then(r => setBuiltinBuildings(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setBuiltinBuildings([]));
+    // Only load custom buildings if logged in (has token)
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      api.get('/workshop/buildings?mine=true')
+        .then(r => setCustomBuildings(Array.isArray(r.data) ? r.data : []))
+        .catch(() => setCustomBuildings([]));
+    }
   }, []);
 
   const toggleBuilding = (id) => {
@@ -492,7 +500,7 @@ export function RaceEditor({ race, onSave, onClose }) {
 
 // ── Content Browser (tabs: Gebäude | Einheiten | Rassen) ───────
 export default function WorkshopContent() {
-  const { user } = useAuth() || {};
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [tab, setTab]          = useState('buildings');
   const [buildings, setBuildings] = useState([]);
@@ -519,7 +527,6 @@ export default function WorkshopContent() {
   useEffect(() => { load(); }, [load]);
 
   const del = async (type, id) => {
-    if (!user) { navigate('/login'); return; }
     if (!confirm('Löschen?')) return;
     await api.delete(`/workshop/${type}/${id}`).catch(()=>{});
     load();
@@ -534,47 +541,51 @@ export default function WorkshopContent() {
     </button>
   );
 
-  const CardGrid = ({ items, type, editorComp }) => (
-    <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:10,padding:'12px 16px' }}>
-      {items.filter(x=>!x.is_builtin).map(item=>(
-        <div key={item.id} style={{ background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,padding:12 }}>
-          <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:6 }}>
-            <span style={{ fontSize:22 }}>{item.icon}</span>
-            <div style={{ flex:1 }}>
-              <div style={{ fontWeight:700,fontSize:13,color:'var(--text)' }}>{item.name}</div>
-              <div style={{ fontSize:10,color:'var(--text3)' }}>
-                {type==='buildings'&&`${item.cost}g · ${DMG_ICONS[item.dmg_type]} · R${item.base_range}`}
-                {type==='units'&&`${item.base_hp}HP · ${item.base_speed}spd · ${item.base_reward}g`}
-                {type==='races'&&`${item.building_ids?.length||0} Gebäude`}
+  // renderItems: inline render helper (NOT a component — avoids React hook rules violation)
+  const renderItems = (items, type) => {
+    const filtered = (items||[]).filter(x=>!x.is_builtin);
+    return (
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:10,padding:'12px 16px' }}>
+        {filtered.map(item=>(
+          <div key={item.id} style={{ background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,padding:12 }}>
+            <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:6 }}>
+              <span style={{ fontSize:22 }}>{item.icon||'❓'}</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontWeight:700,fontSize:13,color:'var(--text)' }}>{item.name}</div>
+                <div style={{ fontSize:10,color:'var(--text3)' }}>
+                  {type==='buildings'&&`${item.cost||0}g · ${DMG_ICONS[item.dmg_type]||''} · R${item.base_range||0}`}
+                  {type==='units'&&`${item.base_hp||0}HP · ${item.base_speed||0}spd · ${item.base_reward||0}g`}
+                  {type==='races'&&`${item.building_ids?.length||0} Gebäude`}
+                </div>
               </div>
+              <span style={{ width:10,height:10,borderRadius:'50%',background:item.color||'#888',flexShrink:0,border:'1px solid rgba(255,255,255,.2)' }} />
             </div>
-            <span style={{ width:10,height:10,borderRadius:'50%',background:item.color,flexShrink:0,border:'1px solid rgba(255,255,255,.2)' }} />
+            {item.description&&<div style={{ fontSize:10,color:'var(--text3)',marginBottom:8,lineHeight:1.3 }}>{item.description}</div>}
+            <div style={{ display:'flex',gap:6 }}>
+              <button className="btn btn-ghost btn-sm" style={{ flex:1 }} onClick={()=>setEditor({type,item})}>✏️ Bearbeiten</button>
+              <button className="btn btn-ghost btn-sm" style={{ color:'var(--red)' }} onClick={()=>del(type,item.id)}>🗑️</button>
+              {item.is_public
+                ? <span style={{ fontSize:9,color:'#40a840',alignSelf:'center' }}>🌍</span>
+                : <span style={{ fontSize:9,color:'var(--text3)',alignSelf:'center' }}>🔒</span>}
+            </div>
           </div>
-          {item.description&&<div style={{ fontSize:10,color:'var(--text3)',marginBottom:8,lineHeight:1.3 }}>{item.description}</div>}
-          <div style={{ display:'flex',gap:6 }}>
-            <button className="btn btn-ghost btn-sm" style={{ flex:1 }} onClick={()=>setEditor({type,item})}>✏️ Bearbeiten</button>
-            <button className="btn btn-ghost btn-sm" style={{ color:'var(--red)' }} onClick={()=>del(type,item.id)}>🗑️</button>
-            {item.is_public
-              ? <span style={{ fontSize:9,color:'#40a840',alignSelf:'center' }}>🌍</span>
-              : <span style={{ fontSize:9,color:'var(--text3)',alignSelf:'center' }}>🔒</span>}
+        ))}
+        {filtered.length===0&&(
+          <div className="empty-state" style={{ gridColumn:'1/-1' }}>
+            <div className="empty-icon">{type==='buildings'?'🏰':type==='units'?'👾':'⚔️'}</div>
+            Noch nichts hier. Erstelle dein erstes {type==='buildings'?'Gebäude':type==='units'?'Einheit':'Rasse'}!
           </div>
-        </div>
-      ))}
-      {items.filter(x=>!x.is_builtin).length===0&&(
-        <div className="empty-state" style={{ gridColumn:'1/-1' }}>
-          <div className="empty-icon">{tab==='buildings'?'🏰':tab==='units'?'👾':'⚔️'}</div>
-          Noch nichts hier. Erstelle dein erstes {tab==='buildings'?'Gebäude':tab==='units'?'Einheit':'Rasse'}!
-        </div>
-      )}
-    </div>
-  );
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ height:'100%',overflow:'auto' }}>
       <div className="page-header">
         <span className="page-title">🔨 Inhalte</span>
         <button className="btn btn-primary btn-sm"
-          onClick={()=>{ if(!user){navigate('/login');return;} setEditor({type:tab,item:null}); }}>
+          onClick={()=>setEditor({type:tab,item:null})}>
           + {tab==='buildings'?'Gebäude':tab==='units'?'Einheit':'Rasse'} erstellen
         </button>
       </div>
@@ -585,9 +596,9 @@ export default function WorkshopContent() {
       </div>
       {loading ? <div className="loading-screen">⏳</div> : (
         <>
-          {tab==='buildings'&&<CardGrid items={buildings} type="buildings" />}
-          {tab==='units'    &&<CardGrid items={units}     type="units" />}
-          {tab==='races'    &&<CardGrid items={races}     type="races" />}
+          {tab==='buildings'&&renderItems(buildings,'buildings')}
+          {tab==='units'    &&renderItems(units,'units')}
+          {tab==='races'    &&renderItems(races,'races')}
         </>
       )}
       {editor?.type==='buildings'&&<BuildingEditor building={editor.item} onSave={()=>{setEditor(null);load();}} onClose={()=>setEditor(null)} />}

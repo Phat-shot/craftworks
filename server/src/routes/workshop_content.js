@@ -7,6 +7,20 @@ const { RACES: BUILTIN_RACES, TDB: BUILTIN_BUILDINGS } = require('../game/towers
 const { EBASE, EBASE_HP } = require('../game/engine');
 
 const router = express.Router();
+
+// Optional auth: attach user if token present, return 200 not 401 when missing
+const optionalAuth = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (token) {
+      const jwt = require('jsonwebtoken');
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      const { rows } = await req.db.query('SELECT id FROM users WHERE id=$1', [payload.sub]);
+      if (rows[0]) req.user = rows[0];
+    }
+  } catch {}
+  next();
+};
 const validate = (req, res, next) => {
   const errs = validationResult(req);
   if (!errs.isEmpty()) return res.status(400).json({ errors: errs.array() });
@@ -18,21 +32,22 @@ const validate = (req, res, next) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/workshop/buildings — own + public
-router.get('/buildings', requireAuth, async (req, res) => {
+router.get('/buildings', optionalAuth, async (req, res) => {
   const { mine } = req.query;
   try {
+    const uid = req.user?.id || null;
     const { rows } = await req.db.query(`
       SELECT b.*, u.username AS creator_name
       FROM workshop_buildings b JOIN users u ON u.id=b.creator_id
-      WHERE b.creator_id=$1 OR ($2::boolean = false AND b.is_public=true)
+      WHERE ($1::uuid IS NOT NULL AND b.creator_id=$1) OR ($2::boolean = false AND b.is_public=true)
       ORDER BY b.updated_at DESC
-    `, [req.user.id, mine === 'true']);
+    `, [uid, mine === 'true']);
     res.json(rows);
   } catch { res.status(500).json({ error: 'db_error' }); }
 });
 
 // GET /api/workshop/buildings/builtin — built-in buildings reference
-router.get('/buildings/builtin', requireAuth, (req, res) => {
+router.get('/buildings/builtin', (req, res) => {
   res.json(Object.entries(BUILTIN_BUILDINGS).map(([id, b]) => ({
     id, name: b.name, cost: b.cost, col: b.col,
     baseRange: b.baseRange, baseCd: b.baseCd, baseDmg: b.baseDmg,
@@ -101,21 +116,22 @@ router.delete('/buildings/:id', requireAuth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/workshop/units
-router.get('/units', requireAuth, async (req, res) => {
+router.get('/units', optionalAuth, async (req, res) => {
   const { mine } = req.query;
   try {
+    const uid2 = req.user?.id || null;
     const { rows } = await req.db.query(`
       SELECT u2.*, u.username AS creator_name
       FROM workshop_units u2 JOIN users u ON u.id=u2.creator_id
-      WHERE u2.creator_id=$1 OR ($2::boolean = false AND u2.is_public=true)
+      WHERE ($1::uuid IS NOT NULL AND u2.creator_id=$1) OR ($2::boolean = false AND u2.is_public=true)
       ORDER BY u2.created_at DESC
-    `, [req.user.id, mine === 'true']);
+    `, [uid2, mine === 'true']);
     res.json(rows);
   } catch { res.status(500).json({ error: 'db_error' }); }
 });
 
 // GET builtin units reference
-router.get('/units/builtin', requireAuth, (req, res) => {
+router.get('/units/builtin', (req, res) => {
   const units = Object.entries(EBASE).map(([id, e]) => ({
     id, name: e.name, col: e.col, szF: e.szF,
     base_hp: EBASE_HP[id], base_speed: e.spdBase, base_reward: e.rewBase,
@@ -181,7 +197,7 @@ router.delete('/units/:id', requireAuth, async (req, res) => {
 //  CUSTOM RACES
 // ═══════════════════════════════════════════════════════════════
 
-router.get('/races', requireAuth, async (req, res) => {
+router.get('/races', optionalAuth, async (req, res) => {
   try {
     const { rows } = await req.db.query(`
       SELECT r.*, u.username AS creator_name

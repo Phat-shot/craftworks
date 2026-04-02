@@ -3,12 +3,26 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { requireAuth } = require('../middleware/auth');
 const { RACES, TDB, getTowersForRace } = require('../game/towers');
+
+// Middleware: attach user if token present, but don't reject if missing
+const optionalAuth = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (token) {
+      const jwt = require('jsonwebtoken');
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      const { rows } = await req.db.query('SELECT id FROM users WHERE id=$1', [payload.sub]);
+      if (rows[0]) req.user = rows[0];
+    }
+  } catch {}
+  next();
+};
 const { getWaveConfig } = require('../game/engine');
 
 const router = express.Router();
 
 // GET /api/workshop/meta — races, tower list, wave defaults
-router.get('/meta', (req, res) => {
+router.get('/meta', optionalAuth, (req, res) => {
   const wavePreviews = [];
   for (let w = 1; w <= 25; w++) {
     try {
@@ -20,8 +34,8 @@ router.get('/meta', (req, res) => {
 });
 
 // GET /api/workshop/maps — public gallery
-router.get('/maps', async (req, res) => {
-  // Public browsing — no auth required
+router.get('/maps', optionalAuth, async (req, res) => {
+  // Public browsing — no auth required, but shows my_rating if logged in
   const { sort = 'newest', search = '', page = 0 } = req.query;
   const limit = 20, offset = +page * limit;
   const orderBy = sort === 'popular' ? 'play_count DESC' :
@@ -44,7 +58,10 @@ router.get('/maps', async (req, res) => {
 });
 
 // GET /api/workshop/maps/mine — own maps
-router.get('/maps/mine', requireAuth, async (req, res) => {
+router.get('/maps/mine', async (req, res) => {
+  // Returns empty array if not authenticated — no redirect
+  const userId = req.user?.id;
+  if (!userId) return res.json([]);
   try {
     const { rows } = await req.db.query(`
       SELECT m.*,
@@ -52,7 +69,7 @@ router.get('/maps/mine', requireAuth, async (req, res) => {
       FROM workshop_maps m
       WHERE m.creator_id = $1
       ORDER BY m.updated_at DESC
-    `, [req.user.id]);
+    `, [userId]);
     res.json(rows);
   } catch (e) { res.status(500).json({ error: 'db_error' }); }
 });

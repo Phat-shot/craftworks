@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import { useAuth } from '../App';
 import { api } from '../api';
 
@@ -320,9 +319,8 @@ function MapEditor({ map, meta, onSave, onClose }) {
 
 // ── Main Workshop Page ─────────────────────────────────────────
 export default function Workshop() {
-  const { user }   = useAuth() || {};
+  const { user }   = useAuth();
   const navigate   = useNavigate();
-  const { t }      = useTranslation() || { t: k => k };
   const [tab, setTab]         = useState('gallery'); // gallery | mine
   const [sort, setSort]       = useState('newest');
   const [search, setSearch]   = useState('');
@@ -335,15 +333,13 @@ export default function Workshop() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [metaR, mapsR, mineR] = await Promise.all([
-        api.get('/workshop/meta'),
-        api.get(`/workshop/maps?sort=${sort}&search=${search}`),
-        api.get('/workshop/maps/mine'),
-      ]);
-      setMeta(metaR.data);
-      setMaps(mapsR.data);
-      setMine(mineR.data);
-    } catch {}
+      const metaR = await api.get('/workshop/meta').catch(()=>({data:{races:{},towers:{},wavePreviews:[]}}));
+      const mapsR = await api.get(`/workshop/maps?sort=${sort}&search=${search}`).catch(()=>({data:[]}));
+      const mineR = user ? await api.get('/workshop/maps/mine').catch(()=>({data:[]})) : {data:[]};
+      setMeta(metaR.data || {races:{},towers:{},wavePreviews:[]});
+      setMaps(Array.isArray(mapsR.data) ? mapsR.data : []);
+      setMine(Array.isArray(mineR.data) ? mineR.data : []);
+    } catch (e) { console.error('Workshop load:', e); }
     setLoading(false);
   }, [sort, search]);
 
@@ -353,7 +349,6 @@ export default function Workshop() {
     try {
       const { data } = await api.post(`/workshop/maps/${map.id}/play`);
       // Start solo game with this map's config
-      if (!user) { navigate('/login'); return; }
       sessionStorage.setItem('mp_session', JSON.stringify({
         solo: true,
         userId: user.id,

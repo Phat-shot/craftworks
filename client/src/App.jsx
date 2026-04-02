@@ -17,6 +17,7 @@ import JoinRedirect from './pages/JoinRedirect';
 import Legal    from './pages/Legal';
 import Workshop from './pages/Workshop';
 import WorkshopContent from './pages/WorkshopContent';
+import ErrorBoundary    from './components/ErrorBoundary';
 import './App.css';
 
 // ── Auth Context ──────────────────────────
@@ -85,8 +86,8 @@ export default function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/legal/:type" element={<Legal />} />
           <Route path="/join/:type/:code" element={<JoinRedirect />} />
-          <Route path="/workshop"         element={<Workshop />} />
-          <Route path="/workshop/content" element={<WorkshopContent />} />
+          <Route path="/workshop"         element={<ErrorBoundary><Workshop /></ErrorBoundary>} />
+          <Route path="/workshop/content" element={<ErrorBoundary><WorkshopContent /></ErrorBoundary>} />
           <Route path="/verify-email" element={<div>Verifying…</div>} />
 
           {/* Protected */}
@@ -101,6 +102,8 @@ export default function App() {
             <Route path="profile"          element={<Profile />} />
             <Route path="profile/:id"      element={<Profile />} />
             <Route path="leaderboard"      element={<Leaderboard />} />
+            <Route path="workshop"           element={<ErrorBoundary><Workshop /></ErrorBoundary>} />
+            <Route path="workshop/content"   element={<ErrorBoundary><WorkshopContent /></ErrorBoundary>} />
 
           </Route>
         </Routes>
