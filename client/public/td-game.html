@@ -441,6 +441,17 @@ function connectSocket(){
     }
     updateHUD();
     refreshTwrBtns();
+    // Auto-refresh open upgrade sheet when gold or tower state changes
+    if(selTower && document.getElementById('sheet').classList.contains('open')){
+      const latest=GS.towers.find(t=>t.id===selTower.id);
+      if(latest){
+        if(JSON.stringify(latest.paths)!==JSON.stringify(selTower.paths)||myGold!==(selTower._lastGold??myGold))
+          showSheet(latest);
+        else if(myGold!==(selTower._lastGold??myGold))
+          showSheet(latest);
+        else { selTower._lastGold=myGold; refreshSheetAffordability(); }
+      } else closeSheet();
+    }
   });
 
   socket.on('game:wave_started',({wave})=>{
@@ -1079,7 +1090,18 @@ canvas.addEventListener('touchend',e=>{
 
 function handleTap(r,c){
   if(pickedType){
+    const b=TDB[pickedType];
+    if(b&&myGold>=b.cost&&(!b.unlock||GS.wave>=b.unlock)){
+      const occupied=GS.towers.some(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
+      if(!occupied&&r>=0&&r+1<35&&c>=0&&c+1<25){
+        myGold-=b.cost;
+        GS.towers=[...GS.towers,{id:'_opt_'+Date.now(),type:pickedType,row:r,col:c,
+          paths:[0,0,0],lastFire:0,cd:b.baseCd,owner:myUserId,invested:b.cost,_optimistic:true}];
+        updateHUD();
+      }
+    }
     sendAction('place_tower',{type:pickedType,row:r,col:c});
+    cancelPick();
     return;
   }
   const t=GS.towers.find(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
@@ -1135,8 +1157,19 @@ function toggleSpd(){
   document.getElementById('btn-spd').classList.toggle('fast',speedMult===2);
 }
 
+function refreshSheetAffordability(){
+  // Fast path: just update button disabled states without full re-render
+  const sheet=document.getElementById('sh-paths');
+  if(!sheet||!selTower)return;
+  sheet.querySelectorAll('.path-card-btn:not(.maxed-btn)').forEach((btn,pi)=>{
+    const cost=getUpgradeCost(selTower,pi);
+    btn.disabled=cost===null||myGold<cost;
+  });
+}
+
 function showSheet(t){
   selTower=t;
+  selTower._lastGold=myGold;
   const b=TDB[t.type];
   const shc=document.getElementById('sh-canvas');
   const dpr=window.devicePixelRatio||1;
@@ -1190,16 +1223,24 @@ function closeSheet(){selTower=null;document.getElementById('sheet').classList.r
 
 function doUpgradePath(pi){
   if(!selTower)return;
+  const cost=getUpgradeCost(selTower,pi);
+  if(cost===null||myGold<cost)return;
+  // Optimistic: apply upgrade immediately in local state
+  const newPaths=selTower.paths.map((v,i)=>i===pi?v+1:v);
+  myGold-=cost;
+  selTower={...selTower,paths:newPaths,_lastGold:myGold};
+  GS.towers=GS.towers.map(t=>t.id===selTower.id?{...t,paths:newPaths}:t);
+  showSheet(selTower);
+  updateHUD();
   sendAction('upgrade_path',{towerId:selTower.id,pi});
-  // Update local copy for UI refresh
-  setTimeout(()=>{
-    const t=GS.towers.find(t=>t.id===selTower?.id);
-    if(t)showSheet(t);
-  },100);
 }
 
 function doSell(){
   if(!selTower)return;
+  const ref=Math.floor((selTower.invested||0)*.6);
+  myGold+=ref;
+  GS.towers=GS.towers.filter(t=>t.id!==selTower.id);
+  updateHUD();
   sendAction('sell_tower',{towerId:selTower.id});
   selTower=null;closeSheet();
 }

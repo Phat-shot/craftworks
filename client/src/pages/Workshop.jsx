@@ -1,5 +1,17 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+
+// Default wave previews (approximation — server generates exact values)
+const DEFAULT_WAVE_PREVIEWS = [{wave:1,type:'basic',count:7,isAir:false},{wave:2,type:'fast',count:9,isAir:false},{wave:3,type:'armored',count:10,isAir:false},{wave:4,type:'healer',count:12,isAir:false},{wave:5,type:'air_light',count:10,isAir:true},{wave:6,type:'basic',count:15,isAir:false},{wave:7,type:'fast',count:16,isAir:false},{wave:8,type:'armored',count:18,isAir:false},{wave:9,type:'healer',count:19,isAir:false},{wave:10,type:'boss',count:1,isAir:false},{wave:11,type:'armored',count:22,isAir:false},{wave:12,type:'healer',count:24,isAir:false},{wave:13,type:'basic',count:25,isAir:false},{wave:14,type:'fast',count:27,isAir:false},{wave:15,type:'air_heavy',count:20,isAir:true},{wave:16,type:'healer',count:30,isAir:false},{wave:17,type:'basic',count:31,isAir:false},{wave:18,type:'fast',count:33,isAir:false},{wave:19,type:'armored',count:34,isAir:false},{wave:20,type:'boss',count:1,isAir:false},{wave:21,type:'basic',count:37,isAir:false},{wave:22,type:'fast',count:39,isAir:false},{wave:23,type:'armored',count:40,isAir:false},{wave:24,type:'healer',count:42,isAir:false},{wave:25,type:'boss',count:1,isAir:false}];
+
+// Builtin races — always available, mirrored from server towers.js
+const BUILTIN_RACES = {
+  standard: { name:'Standard',   icon:'⚔️',  color:'#c0a060', desc:'Dart · Gift · Kanone' },
+  orcs:     { name:'Orcs',       icon:'💀',  color:'#80c020', desc:'Fleischwolf · Wurfspeer · Kriegstrommel' },
+  techies:  { name:'Techies',    icon:'⚙️',  color:'#60a8d0', desc:'Mörser · Elektrozaun · Raketenwerfer' },
+  elemente: { name:'Elemente',   icon:'🌊',  color:'#40c0e0', desc:'Magmaquelle · Sturmstrudel · Eisspitze' },
+  urwald:   { name:'Urwald',     icon:'🌿',  color:'#40a840', desc:'Rankenfalle · Giftpilz · Mondlichtaltar' },
+};
 import { useAuth } from '../App';
 import { api } from '../api';
 
@@ -178,7 +190,7 @@ function MapEditor({ map, meta, onSave, onClose }) {
   const [desc, setDesc]         = useState(map?.description || '');
   const [isPublic, setPublic]   = useState(map?.is_public ?? true);
   const [difficulty, setDiff]   = useState(map?.config?.difficulty || 'normal');
-  const [races, setRaces]       = useState(map?.config?.available_races || Object.keys(meta.races || {}));
+  const [races, setRaces]       = useState(map?.config?.available_races || Object.keys(BUILTIN_RACES));
   const [waveOverrides, setWaveOverrides] = useState(map?.config?.wave_overrides || []);
   const [saving, setSaving]     = useState(false);
   const [tab, setTab]           = useState('general'); // general | waves | races
@@ -269,7 +281,7 @@ function MapEditor({ map, meta, onSave, onClose }) {
                 Wähle welche Rassen in dieser Map spielbar sind.
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-                {Object.entries(meta.races || {}).map(([key, r]) => (
+                {Object.entries({ ...BUILTIN_RACES, ...(meta.races || {}) }).map(([key, r]) => (
                   <div key={key}
                     onClick={() => setRaces(prev =>
                       prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]
@@ -299,7 +311,7 @@ function MapEditor({ map, meta, onSave, onClose }) {
           {tab === 'waves' && (
             <WaveEditor
               waves={waveOverrides}
-              previews={meta.wavePreviews || []}
+              previews={meta.wavePreviews?.length ? meta.wavePreviews : DEFAULT_WAVE_PREVIEWS}
               onChange={setWaveOverrides}
             />
           )}

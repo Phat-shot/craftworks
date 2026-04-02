@@ -3,6 +3,27 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { api } from '../api';
 
+// Builtin buildings — always available for race building
+const BUILTIN_BUILDINGS_LIST = [
+  {id:'dart',      name:'Dart',       cost:75,  dmg_type:'phys',  icon:'🔧', race:'standard', color:'#3ab8ff'},
+  {id:'poison',    name:'Gift',       cost:100, dmg_type:'magic', icon:'🔧', race:'standard', color:'#44d040'},
+  {id:'splash',    name:'Kanone',     cost:125, dmg_type:'expl',  icon:'🔧', race:'standard', color:'#ff7820'},
+  {id:'frost',     name:'Frost',      cost:175, dmg_type:'magic', icon:'⭐', race:'universal',color:'#80eeff'},
+  {id:'lightning', name:'Blitz',      cost:200, dmg_type:'magic', icon:'⭐', race:'universal',color:'#ffe840'},
+  {id:'fleischwolf',   name:'Fleischwolf',   cost:110, dmg_type:'phys',  icon:'🔧', race:'orcs',    color:'#e04020'},
+  {id:'wurfspeer',     name:'Wurfspeer',     cost:90,  dmg_type:'phys',  icon:'🔧', race:'orcs',    color:'#c06020'},
+  {id:'kriegstrommel', name:'Kriegstrommel', cost:150, dmg_type:'phys',  icon:'🔧', race:'orcs',    color:'#a05010'},
+  {id:'moerser',       name:'Mörser',        cost:140, dmg_type:'expl',  icon:'🔧', race:'techies', color:'#a0a0a0'},
+  {id:'elektrozaun',   name:'Elektrozaun',   cost:160, dmg_type:'magic', icon:'🔧', race:'techies', color:'#60d8ff'},
+  {id:'raketenwerfer', name:'Raketenwerfer', cost:185, dmg_type:'expl',  icon:'🔧', race:'techies', color:'#e08040'},
+  {id:'magmaquelle',   name:'Magmaquelle',   cost:130, dmg_type:'expl',  icon:'🔧', race:'elemente',color:'#ff4010'},
+  {id:'sturmstrudel',  name:'Sturmstrudel',  cost:155, dmg_type:'magic', icon:'🔧', race:'elemente',color:'#80c0ff'},
+  {id:'eisspitze',     name:'Eisspitze',     cost:175, dmg_type:'magic', icon:'🔧', race:'elemente',color:'#c0f0ff'},
+  {id:'rankenfalle',   name:'Rankenfalle',   cost:100, dmg_type:'phys',  icon:'🔧', race:'urwald',  color:'#50d040'},
+  {id:'giftpilz',      name:'Giftpilz',      cost:115, dmg_type:'magic', icon:'🔧', race:'urwald',  color:'#90c020'},
+  {id:'mondlichtaltar',name:'Mondlichtaltar',cost:200, dmg_type:'magic', icon:'🔧', race:'urwald',  color:'#d0d0ff'},
+];
+
 // ── Shared helpers ─────────────────────────────────────────────
 const DMG_TYPES  = ['phys','magic','expl'];
 const DMG_ICONS  = { phys:'⚔️', magic:'🔮', expl:'💥' };
@@ -403,16 +424,14 @@ export function RaceEditor({ race, onSave, onClose }) {
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
 
   useEffect(() => {
+    // Use builtin list immediately, then try to enrich from API
+    setBuiltinBuildings(BUILTIN_BUILDINGS_LIST);
     api.get('/workshop/buildings/builtin')
-      .then(r => setBuiltinBuildings(Array.isArray(r.data) ? r.data : []))
-      .catch(() => setBuiltinBuildings([]));
-    // Only load custom buildings if logged in (has token)
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      api.get('/workshop/buildings?mine=true')
-        .then(r => setCustomBuildings(Array.isArray(r.data) ? r.data : []))
-        .catch(() => setCustomBuildings([]));
-    }
+      .then(r => { if (Array.isArray(r.data) && r.data.length) setBuiltinBuildings(r.data); })
+      .catch(() => {});
+    api.get('/workshop/buildings?mine=true')
+      .then(r => setCustomBuildings(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setCustomBuildings([]));
   }, []);
 
   const toggleBuilding = (id) => {
