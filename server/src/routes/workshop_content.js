@@ -8,13 +8,13 @@ const { EBASE, EBASE_HP } = require('../game/engine');
 
 const router = express.Router();
 
+const jwt2 = require('jsonwebtoken');
 // Optional auth: attach user if token present, return 200 not 401 when missing
 const optionalAuth = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
-    if (token) {
-      const jwt = require('jsonwebtoken');
-      const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (token && req.db) {
+      const payload = jwt2.verify(token, process.env.JWT_SECRET);
       const { rows } = await req.db.query('SELECT id FROM users WHERE id=$1', [payload.sub]);
       if (rows[0]) req.user = rows[0];
     }
@@ -23,7 +23,10 @@ const optionalAuth = async (req, res, next) => {
 };
 const validate = (req, res, next) => {
   const errs = validationResult(req);
-  if (!errs.isEmpty()) return res.status(400).json({ errors: errs.array() });
+  if (!errs.isEmpty()) {
+    console.error('Validation failed:', JSON.stringify(errs.array()));
+    return res.status(400).json({ errors: errs.array(), error: errs.array()[0]?.msg });
+  }
   next();
 };
 
@@ -65,9 +68,10 @@ router.post('/buildings', requireAuth,
   body('cost').optional().isNumeric(),
   validate,
   async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'not_authenticated' });
     const {
       name, description='', icon='🏰', color='#888888', sprite_type='generic',
-      cost, base_range, base_cd, base_dmg, dmg_type='phys',
+      cost=100, base_range=3.0, base_cd=1000, base_dmg=20, dmg_type='phys',
       unlock_wave=0, can_hit_air=true, flags={}, upgrade_paths=[], is_public=false
     } = req.body;
     try {
@@ -150,6 +154,7 @@ router.post('/units', requireAuth,
   body('base_speed').optional().isNumeric(),
   validate,
   async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'not_authenticated' });
     const {
       name, description='', unit_class='enemy',
       icon='👾', color='#b02810', shape='circle', size_factor=0.26,
@@ -224,6 +229,7 @@ router.post('/races', requireAuth,
   body('name').trim().isLength({ min:2, max:64 }),
   validate,
   async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'not_authenticated' });
     const { name, icon='⚔️', color='#888888', description='', building_ids=[], is_public=false } = req.body;
     try {
       const { rows } = await req.db.query(`

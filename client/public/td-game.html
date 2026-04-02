@@ -61,59 +61,54 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 
 #sheet{position:absolute;left:0;right:0;bottom:0;z-index:150;
   background:linear-gradient(180deg,#1e1004,#0a0600);
-  border-top:2px solid #8a4810;border-radius:16px 16px 0 0;
+  border-top:2px solid #8a4810;border-radius:14px 14px 0 0;
   transform:translateY(100%);transition:transform .22s ease;
-  max-height:80vh;overflow-y:auto;padding:6px 12px 18px}
+  overflow:hidden;display:flex;flex-direction:column}
 #sheet.open{transform:translateY(0)}
-.sh-handle{width:40px;height:5px;background:#3a2808;border-radius:3px;margin:0 auto 8px;cursor:pointer}
-/* Header row: icon + name + stats all inline */
-.sh-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-#sh-canvas{border-radius:6px;border:2px solid #4a3010;flex-shrink:0}
-#sh-name{font-size:16px;font-weight:900;color:var(--gold);line-height:1.1}
-#sh-lvl{font-size:9px;color:#604838;margin-top:2px}
-.sh-stats{display:flex;gap:5px;flex-wrap:wrap}
-.sh-stat{background:#0c0803;border:1px solid #2e1c08;border-radius:5px;padding:5px 10px;text-align:center;white-space:nowrap}
-.sh-sv{font-size:15px;font-weight:900;color:#e8d060}
-.sh-sl{font-size:7px;color:#504020;letter-spacing:.5px;margin-top:1px}
-/* Upgrade paths: vertical list */
-.sh-paths-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-.path-row{background:#0c0803;border:1px solid #261808;border-radius:10px;overflow:hidden}
-.path-row.maxed{opacity:.6}
-.path-row-hdr{display:flex;align-items:center;gap:8px;padding:8px 12px 5px}
-.path-row-ic{font-size:15px;flex-shrink:0}
-.path-row-nm{font-size:12px;font-weight:900;color:#c09850;flex:1;letter-spacing:.3px}
-/* Level steps row */
+.sh-handle{width:36px;height:4px;background:#3a2808;border-radius:2px;margin:6px auto 4px;cursor:pointer;flex-shrink:0}
+/* Compact header: icon | name+lvl | stats | sell — single row */
+.sh-head{display:flex;align-items:center;gap:0;flex-shrink:0;border-bottom:1px solid #2a1606;padding:4px 10px 4px 8px}
+#sh-canvas{border-radius:5px;border:1.5px solid #4a3010;flex-shrink:0;margin-right:8px}
+#sh-name{font-size:14px;font-weight:900;color:var(--gold);line-height:1;white-space:nowrap}
+#sh-lvl{font-size:8px;color:#604838;margin-top:1px;white-space:nowrap}
+.sh-stats{display:flex;gap:4px;margin-left:8px}
+.sh-stat{background:#0c0803;border:1px solid #2e1c08;border-radius:4px;padding:3px 7px;text-align:center;white-space:nowrap}
+.sh-sv{font-size:13px;font-weight:900;color:#e8d060;line-height:1}
+.sh-sl{font-size:6px;color:#504020;letter-spacing:.4px;margin-top:1px}
+.sh-sell-btn{margin-left:auto;flex-shrink:0;background:linear-gradient(180deg,#240808,#140404);
+  border:1px solid #501818;color:#d04040;cursor:pointer;
+  padding:5px 10px;border-radius:5px;font-family:'Cinzel',serif;font-size:10px;font-weight:700;
+  display:flex;flex-direction:column;align-items:center;gap:1px;line-height:1}
+.sh-sell-btn:hover{border-color:#803020;color:#ff5050}
+.sh-sell-ref{font-size:11px;font-weight:900;color:#e06060}
+/* Scrollable path list */
+#sh-paths{overflow-y:auto;padding:6px 8px 10px;flex:1}
+.sh-paths-list{display:flex;flex-direction:column;gap:5px}
+.path-row{background:#0c0803;border:1px solid #261808;border-radius:8px;overflow:hidden}
+.path-row.maxed{opacity:.55}
+.path-row-hdr{display:flex;align-items:baseline;gap:7px;padding:6px 10px 4px}
+.path-row-ic{font-size:13px;flex-shrink:0}
+.path-row-nm{font-size:11px;font-weight:900;color:#c09850;white-space:nowrap}
+.path-row-hint{font-size:9px;color:#605030;margin-left:4px;line-height:1.3}
+/* Level steps */
 .path-levels{display:flex;align-items:stretch;border-top:1px solid #1e1206}
-.path-lvl{flex:1;border-right:1px solid #1e1206;padding:6px 4px;display:flex;flex-direction:column;
-  align-items:center;gap:3px;cursor:pointer;transition:background .1s;min-width:0}
+.path-lvl{flex:1;border-right:1px solid #1e1206;padding:5px 3px;display:flex;flex-direction:column;
+  align-items:center;gap:2px;cursor:pointer;transition:background .1s;min-width:0;position:relative}
 .path-lvl:last-child{border-right:none}
-.path-lvl:hover:not(.done):not(.locked){background:rgba(110,200,40,.08)}
-.path-lvl:active:not(.done):not(.locked){background:rgba(110,200,40,.15)}
-.path-lvl.done{background:rgba(240,200,60,.06);cursor:default}
-.path-lvl.current{background:rgba(240,200,60,.13);outline:1px solid rgba(240,200,60,.4)}
-.path-lvl.locked{opacity:.3;cursor:not-allowed}
-.path-lvl.cant-afford{opacity:.5;cursor:not-allowed}
-.path-lvl-num{font-size:8px;font-weight:700;color:#604830;line-height:1}
-.path-lvl.done .path-lvl-num{color:#a08030}
-.path-lvl.current .path-lvl-num{color:var(--gold)}
-.path-lvl-desc{font-size:9px;color:#608028;line-height:1.2;text-align:center;word-break:break-word}
-.path-lvl.done .path-lvl-desc{color:#807040}
-.path-lvl.current .path-lvl-desc{color:#90d040;font-weight:700}
-.path-lvl-cost{font-size:9px;font-weight:700;color:var(--gold);margin-top:1px}
-.path-lvl.done .path-lvl-cost{color:transparent}
-.path-lvl.current .path-lvl-cost{color:#ffd040}
-.path-lvl-check{font-size:10px;color:#a08030}
-/* Sell row */
-.sell-row{display:flex;align-items:center;justify-content:space-between;
-  background:linear-gradient(180deg,#1a0606,#0e0303);
-  border:1px solid #401010;border-radius:10px;
-  padding:12px 16px;cursor:pointer;margin-top:8px;transition:border-color .15s}
-.sell-row:hover{border-color:#803020}
-.sell-row:active{background:#200808}
-.sell-row-lbl{font-size:13px;font-weight:700;color:#c04040;font-family:'Cinzel',serif}
-.sell-row-val{font-size:18px;font-weight:900;color:#e06060}
-#sh-close{position:absolute;top:10px;right:12px;font-size:20px;color:#604030;
-  cursor:pointer;padding:6px;line-height:1;z-index:5}
+.path-lvl:hover:not(.done):not(.locked):not(.cant-afford){background:rgba(110,200,40,.1)}
+.path-lvl:active.current:not(.cant-afford){background:rgba(110,200,40,.2)}
+.path-lvl.done{background:rgba(240,200,60,.05);cursor:default}
+.path-lvl.current{background:rgba(240,200,60,.12);outline:1px solid rgba(240,200,60,.35)}
+.path-lvl.locked{opacity:.25;cursor:default}
+.path-lvl.cant-afford{cursor:default;background:rgba(200,60,20,.05)}
+.path-lvl-desc{font-size:8.5px;color:#608028;line-height:1.2;text-align:center;word-break:break-word}
+.path-lvl.done .path-lvl-desc{color:#706840}
+.path-lvl.current .path-lvl-desc{color:#9adf40;font-weight:700}
+.path-lvl.cant-afford .path-lvl-desc{color:#806030}
+.path-lvl-cost{font-size:8px;font-weight:700;color:#d0a020;margin-top:1px}
+.path-lvl.done .path-lvl-cost{font-size:11px;color:#a08030;margin-top:0}
+.path-lvl.current .path-lvl-cost{color:#ffd040;font-size:9px}
+.path-lvl.cant-afford .path-lvl-cost{color:#a05020}
 
 #botbar{flex-shrink:0;background:linear-gradient(180deg,#0c0800,#060400);border-top:2px solid var(--border);
   padding-bottom:env(safe-area-inset-bottom,0)}
@@ -209,16 +204,19 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
     <div class="sh-handle" id="sh-handle"></div>
     <span id="sh-close" onclick="closeSheet()">✕</span>
     <div class="sh-head">
-      <canvas id="sh-canvas" width="64" height="64" style="width:64px;height:64px;flex-shrink:0"></canvas>
-      <div style="flex:1;min-width:0">
+      <canvas id="sh-canvas" width="44" height="44" style="width:44px;height:44px;flex-shrink:0"></canvas>
+      <div style="flex-shrink:0">
         <div id="sh-name"></div>
         <div id="sh-lvl"></div>
-        <div class="sh-stats" style="margin-top:5px">
-          <div class="sh-stat"><div class="sh-sv" id="sh-dmg"></div><div class="sh-sl">SCHADEN</div></div>
-          <div class="sh-stat"><div class="sh-sv" id="sh-rng"></div><div class="sh-sl">REICHW.</div></div>
-          <div class="sh-stat"><div class="sh-sv" id="sh-fps"></div><div class="sh-sl">FEUER/S</div></div>
-        </div>
       </div>
+      <div class="sh-stats">
+        <div class="sh-stat"><div class="sh-sv" id="sh-dmg"></div><div class="sh-sl">DMG</div></div>
+        <div class="sh-stat"><div class="sh-sv" id="sh-rng"></div><div class="sh-sl">REICHW</div></div>
+        <div class="sh-stat"><div class="sh-sv" id="sh-fps"></div><div class="sh-sl">F/S</div></div>
+      </div>
+      <button class="sh-sell-btn" id="sh-sell-btn" onclick="doSell()">
+        💰 Verk.<span class="sh-sell-ref" id="sh-sell-ref">+0g</span>
+      </button>
     </div>
     <div id="sh-paths" class="sh-paths-list"></div>
 
@@ -462,16 +460,19 @@ function connectSocket(){
     }
     updateHUD();
     refreshTwrBtns();
-    // Auto-refresh open upgrade sheet when gold or tower state changes
+    // Auto-refresh open upgrade sheet
     if(selTower && document.getElementById('sheet').classList.contains('open')){
-      const latest=GS.towers.find(t=>t.id===selTower.id);
-      if(latest){
-        if(JSON.stringify(latest.paths)!==JSON.stringify(selTower.paths)||myGold!==(selTower._lastGold??myGold))
-          showSheet(latest);
-        else if(myGold!==(selTower._lastGold??myGold))
-          showSheet(latest);
-        else { selTower._lastGold=myGold; refreshSheetAffordability(); }
-      } else closeSheet();
+      if(performance.now()<_optimisticUntil){
+        // In grace period: just update gold affordability, don't overwrite paths
+        refreshSheetAffordability();
+      } else {
+        const latest=GS.towers.find(t=>t.id===selTower.id);
+        if(latest){
+          const pathsChanged=JSON.stringify(latest.paths)!==JSON.stringify(selTower.paths);
+          const goldChanged=myGold!==(selTower._lastGold??myGold-1);
+          if(pathsChanged||goldChanged) showSheet(latest);
+        } else closeSheet();
+      }
     }
   });
 
@@ -1192,15 +1193,29 @@ function showSheet(t){
   shc.width=64*dpr;shc.height=64*dpr;
   shc.style.width='64px';shc.style.height='64px';
   drawTowerSprite(shc,t.type,t.paths,64*dpr);
-  // Compute live stats after upgrades
+  // Compute live stats
   const s=calcStatsClient(t);
+  const totalLvl=t.paths.reduce((a,v)=>a+v,0);
+  const sellRef=Math.floor((t.invested||0)*.6);
   document.getElementById('sh-name').textContent=b.name;
-  document.getElementById('sh-lvl').textContent=`${t.paths.reduce((a,v)=>a+v,0)}/15 Upgrades · ${b.race||''}`;
+  document.getElementById('sh-lvl').textContent=`${totalLvl}/15 Upg`;
   document.getElementById('sh-dmg').textContent=s.dmg;
-  document.getElementById('sh-rng').textContent=s.range.toFixed(1)+'T';
-  document.getElementById('sh-fps').textContent=(1000/s.cd).toFixed(1)+'/s';
+  document.getElementById('sh-rng').textContent=s.range.toFixed(1);
+  document.getElementById('sh-fps').textContent=(1000/s.cd).toFixed(1);
+  // Update sell button in header
+  const sellRef2=document.getElementById('sh-sell-ref');
+  if(sellRef2) sellRef2.textContent='+'+sellRef+'g';
+  // Redraw icon at new size
+  const shc=document.getElementById('sh-canvas');
+  const dpr=window.devicePixelRatio||1;
+  shc.width=44*dpr;shc.height=44*dpr;
+  shc.style.width='44px';shc.style.height='44px';
+  drawTowerSprite(shc,t.type,t.paths,44*dpr);
 
-  // Build vertical path list
+  // Path hints lookup
+  const HINTS={dart:['Schussweite','Mehrere Feinde durchbohren','Schaden steigern'],poison:['Gift-DoT','Rüstung schwächen','Auf nahe Feinde springen'],splash:['Napalm-Zone','Splitterbomben','Explosion steigern'],lightning:['Blitzschaden','Mehr Kettensprünge','Jeder N-te Schuss ×3'],frost:['Slow max 75%','Eisfeld-AoE','Splitter auf Gefrorene'],fleischwolf:['Klingenschaden','Wirbelradius','Angriffsgeschw.'],wurfspeer:['Speerschaden','Rüstung reißen','Reichweite & Durchschlag'],kriegstrommel:['Speed-Aura','Schadens-Aura','Aura-Radius'],moerser:['Explosionsschaden','Splitterwirkung','Brandsatz-Feuer'],elektrozaun:['Entladungsschaden','Wirkungsradius','Blitz verlangsamt'],raketenwerfer:['Sprengkopf','Schnelleres Laden','Clustersplitter'],magmaquelle:['Feuerzonen','Rüstung schmelzen','Lavaspritzer'],sturmstrudel:['Sog-Stärke','Windschaden','Wirbelradius'],eisspitze:['Kristallschaden','Splitter-Bonus','Eisfeld & Slow'],rankenfalle:['Wurzel-Dauer','Dornen-Schaden','Netz-AoE'],giftpilz:['Giftnebel-DoT','Sporen-Spread','Nebel-Radius'],mondlichtaltar:['Heilrate','Schadensreduktion','Heilradius']};
+  const hints=HINTS[t.type]||['','',''];
+
   let html='';
   b.paths.forEach((path,pi)=>{
     const lvl=t.paths[pi],maxed=lvl>=5;
@@ -1208,6 +1223,8 @@ function showSheet(t){
       <div class="path-row-hdr">
         <span class="path-row-ic">${path.icon}</span>
         <span class="path-row-nm">${path.name}</span>
+        <span class="path-row-hint">${hints[pi]||''}</span>
+        ${maxed?'<span style="font-size:9px;color:#a09050;margin-left:4px">✅MAX</span>':''}
       </div>
       <div class="path-levels">`;
     path.upgrades.forEach((u,ui)=>{
@@ -1221,34 +1238,29 @@ function showSheet(t){
       else cls+=' locked';
       const onclick=cur&&canAfford?`onclick="doUpgradePath(${pi})"`:' ';
       html+=`<div class="${cls}" ${onclick}>
-        <span class="path-lvl-num">${done?'':'St.'+(ui+1)}</span>
         <span class="path-lvl-desc">${u.desc}</span>
-        ${done?'<span class="path-lvl-check">✓</span>':(cur?`<span class="path-lvl-cost">${cost}g</span>`:'<span class="path-lvl-cost"> </span>')}
+        ${done?'<span class="path-lvl-cost">✓</span>':(cur?`<span class="path-lvl-cost">${cost}g${canAfford?'':' 💸'}</span>`:'<span class="path-lvl-cost"></span>')}
       </div>`;
     });
     html+='</div></div>';
   });
-  // Sell row
-  const sellRef=Math.floor((t.invested||0)*.6);
-  html+=`<div class="sell-row" onclick="doSell()">
-    <span class="sell-row-lbl">💰 Verkaufen</span>
-    <span class="sell-row-val">+${sellRef}g</span>
-  </div>`;
   document.getElementById('sh-paths').innerHTML=html;
   document.getElementById('sheet').classList.add('open');
 }
 
 function closeSheet(){selTower=null;document.getElementById('sheet').classList.remove('open');}
 
+let _optimisticUntil=0; // suppress tick-overwrite briefly after optimistic action
+
 function doUpgradePath(pi){
   if(!selTower)return;
   const cost=getUpgradeCost(selTower,pi);
   if(cost===null||myGold<cost)return;
-  // Optimistic: apply upgrade immediately in local state
   const newPaths=selTower.paths.map((v,i)=>i===pi?v+1:v);
   myGold-=cost;
   selTower={...selTower,paths:newPaths,_lastGold:myGold};
   GS.towers=GS.towers.map(t=>t.id===selTower.id?{...t,paths:newPaths}:t);
+  _optimisticUntil=performance.now()+300; // 300ms grace period
   showSheet(selTower);
   updateHUD();
   sendAction('upgrade_path',{towerId:selTower.id,pi});
