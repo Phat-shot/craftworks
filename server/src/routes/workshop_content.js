@@ -59,10 +59,10 @@ router.get('/buildings/builtin', (req, res) => {
 // POST /api/workshop/buildings
 router.post('/buildings', requireAuth,
   body('name').trim().isLength({ min:2, max:64 }),
-  body('base_dmg').isNumeric().toInt(),
-  body('base_range').isNumeric().toFloat(),
-  body('base_cd').isNumeric().toInt(),
-  body('cost').isNumeric().toInt(),
+  body('base_dmg').optional().isNumeric(),
+  body('base_range').optional().isNumeric(),
+  body('base_cd').optional().isNumeric(),
+  body('cost').optional().isNumeric(),
   validate,
   async (req, res) => {
     const {
@@ -80,7 +80,10 @@ router.post('/buildings', requireAuth,
           cost, base_range, base_cd, base_dmg, dmg_type, unlock_wave,
           can_hit_air, JSON.stringify(flags), JSON.stringify(upgrade_paths), is_public]);
       res.json(rows[0]);
-    } catch { res.status(500).json({ error: 'db_error' }); }
+    } catch (e) {
+      console.error('Building save error:', e.message);
+      res.status(500).json({ error: 'db_error', detail: e.message });
+    }
   }
 );
 
@@ -143,8 +146,8 @@ router.get('/units/builtin', (req, res) => {
 // POST /api/workshop/units
 router.post('/units', requireAuth,
   body('name').trim().isLength({ min:2, max:64 }),
-  body('base_hp').isNumeric().toInt(),
-  body('base_speed').isNumeric().toFloat(),
+  body('base_hp').optional().isNumeric(),
+  body('base_speed').optional().isNumeric(),
   validate,
   async (req, res) => {
     const {
@@ -164,7 +167,10 @@ router.post('/units', requireAuth,
           base_hp, base_speed, base_reward, armor_phys, armor_magic, is_air,
           JSON.stringify(abilities), is_public]);
       res.json(rows[0]);
-    } catch { res.status(500).json({ error: 'db_error' }); }
+    } catch (e) {
+      console.error('Unit save error:', e.message);
+      res.status(500).json({ error: 'db_error', detail: e.message });
+    }
   }
 );
 
@@ -225,7 +231,10 @@ router.post('/races', requireAuth,
         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
       `, [req.user.id, name, icon, color, description, JSON.stringify(building_ids), is_public]);
       res.json(rows[0]);
-    } catch { res.status(500).json({ error: 'db_error' }); }
+    } catch (e) {
+      console.error('Race save error:', e.message);
+      res.status(500).json({ error: 'db_error', detail: e.message });
+    }
   }
 );
 

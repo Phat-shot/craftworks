@@ -60,56 +60,58 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 @keyframes fadeout{0%,65%{opacity:1}100%{opacity:0}}
 
 #sheet{position:absolute;left:0;right:0;bottom:0;z-index:150;
-  background:linear-gradient(180deg,#1c0f04,#0a0600);
+  background:linear-gradient(180deg,#1e1004,#0a0600);
   border-top:2px solid #8a4810;border-radius:16px 16px 0 0;
   transform:translateY(100%);transition:transform .22s ease;
-  max-height:72vh;overflow-y:auto;padding:6px 10px 16px}
+  max-height:80vh;overflow-y:auto;padding:6px 12px 18px}
 #sheet.open{transform:translateY(0)}
 .sh-handle{width:40px;height:5px;background:#3a2808;border-radius:3px;margin:0 auto 8px;cursor:pointer}
-/* Header: icon + name + stats compact */
-.sh-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+/* Header row: icon + name + stats all inline */
+.sh-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 #sh-canvas{border-radius:6px;border:2px solid #4a3010;flex-shrink:0}
-#sh-name{font-size:15px;font-weight:900;color:var(--gold)}
-#sh-lvl{font-size:8px;color:#604838;margin-top:2px}
-.sh-stats{display:flex;gap:6px;margin-bottom:0}
-.sh-stat{background:#0c0803;border:1px solid #2e1c08;border-radius:4px;padding:4px 8px;text-align:center;white-space:nowrap}
-.sh-sv{font-size:13px;font-weight:900;color:#e0c060}
-.sh-sl{font-size:7px;color:#504020;letter-spacing:.3px}
-/* 2×2 GRID: 3 upgrades + sell */
-.sh-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
-.path-card{background:#0a0803;border:1px solid #2a1a06;border-radius:8px;
-  overflow:hidden;display:flex;flex-direction:column;cursor:pointer;
-  transition:border-color .15s}
-.path-card:hover{border-color:#4a3010}
-.path-card.maxed{border-color:#2a2010;opacity:.7}
-.path-card-hdr{display:flex;align-items:center;gap:6px;padding:7px 9px;
-  background:rgba(255,180,30,.05);flex-shrink:0}
-.path-card-ic{font-size:13px}
-.path-card-nm{font-size:10px;font-weight:700;color:#c09850;flex:1}
-.path-card-dots{display:flex;gap:3px}
-.path-dot{width:8px;height:8px;border-radius:50%;background:#1a1206;flex-shrink:0}
-.path-dot.filled{background:var(--gold);box-shadow:0 0 3px rgba(240,200,60,.6)}
-.path-card-body{padding:6px 9px 9px;flex:1;display:flex;flex-direction:column;gap:5px}
-.path-card-desc{font-size:10px;color:#70c030;line-height:1.3}
-.path-card-desc.maxed-txt{color:#605840;font-style:italic}
-.path-card-btn{margin-top:auto;background:linear-gradient(180deg,#0e1a06,#080e03);
-  border:1px solid #1c1204;border-radius:5px;color:#70c030;
-  font-family:'Cinzel',serif;font-size:10px;font-weight:700;
-  padding:7px 6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;
-  width:100%}
-.path-card-btn:disabled{opacity:.3;cursor:not-allowed;color:#404030}
-.path-card-btn:active{background:linear-gradient(180deg,#162206,#0c1204)}
-.path-cost{color:var(--gold);font-weight:900}
-.path-penalty{color:#c08030;font-size:9px}
-/* Sell card */
-.sell-card{background:linear-gradient(180deg,#1a0606,#0e0303);
-  border:1px solid #401010;border-radius:8px;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:4px;padding:12px 8px;cursor:pointer;transition:border-color .15s}
-.sell-card:hover{border-color:#803020}
-.sell-card:active{background:linear-gradient(180deg,#240808,#140404)}
-.sell-card-lbl{font-size:12px;font-weight:700;color:#c04040;font-family:'Cinzel',serif}
-.sell-card-val{font-size:16px;font-weight:900;color:#e06060}
+#sh-name{font-size:16px;font-weight:900;color:var(--gold);line-height:1.1}
+#sh-lvl{font-size:9px;color:#604838;margin-top:2px}
+.sh-stats{display:flex;gap:5px;flex-wrap:wrap}
+.sh-stat{background:#0c0803;border:1px solid #2e1c08;border-radius:5px;padding:5px 10px;text-align:center;white-space:nowrap}
+.sh-sv{font-size:15px;font-weight:900;color:#e8d060}
+.sh-sl{font-size:7px;color:#504020;letter-spacing:.5px;margin-top:1px}
+/* Upgrade paths: vertical list */
+.sh-paths-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.path-row{background:#0c0803;border:1px solid #261808;border-radius:10px;overflow:hidden}
+.path-row.maxed{opacity:.6}
+.path-row-hdr{display:flex;align-items:center;gap:8px;padding:8px 12px 5px}
+.path-row-ic{font-size:15px;flex-shrink:0}
+.path-row-nm{font-size:12px;font-weight:900;color:#c09850;flex:1;letter-spacing:.3px}
+/* Level steps row */
+.path-levels{display:flex;align-items:stretch;border-top:1px solid #1e1206}
+.path-lvl{flex:1;border-right:1px solid #1e1206;padding:6px 4px;display:flex;flex-direction:column;
+  align-items:center;gap:3px;cursor:pointer;transition:background .1s;min-width:0}
+.path-lvl:last-child{border-right:none}
+.path-lvl:hover:not(.done):not(.locked){background:rgba(110,200,40,.08)}
+.path-lvl:active:not(.done):not(.locked){background:rgba(110,200,40,.15)}
+.path-lvl.done{background:rgba(240,200,60,.06);cursor:default}
+.path-lvl.current{background:rgba(240,200,60,.13);outline:1px solid rgba(240,200,60,.4)}
+.path-lvl.locked{opacity:.3;cursor:not-allowed}
+.path-lvl.cant-afford{opacity:.5;cursor:not-allowed}
+.path-lvl-num{font-size:8px;font-weight:700;color:#604830;line-height:1}
+.path-lvl.done .path-lvl-num{color:#a08030}
+.path-lvl.current .path-lvl-num{color:var(--gold)}
+.path-lvl-desc{font-size:9px;color:#608028;line-height:1.2;text-align:center;word-break:break-word}
+.path-lvl.done .path-lvl-desc{color:#807040}
+.path-lvl.current .path-lvl-desc{color:#90d040;font-weight:700}
+.path-lvl-cost{font-size:9px;font-weight:700;color:var(--gold);margin-top:1px}
+.path-lvl.done .path-lvl-cost{color:transparent}
+.path-lvl.current .path-lvl-cost{color:#ffd040}
+.path-lvl-check{font-size:10px;color:#a08030}
+/* Sell row */
+.sell-row{display:flex;align-items:center;justify-content:space-between;
+  background:linear-gradient(180deg,#1a0606,#0e0303);
+  border:1px solid #401010;border-radius:10px;
+  padding:12px 16px;cursor:pointer;margin-top:8px;transition:border-color .15s}
+.sell-row:hover{border-color:#803020}
+.sell-row:active{background:#200808}
+.sell-row-lbl{font-size:13px;font-weight:700;color:#c04040;font-family:'Cinzel',serif}
+.sell-row-val{font-size:18px;font-weight:900;color:#e06060}
 #sh-close{position:absolute;top:10px;right:12px;font-size:20px;color:#604030;
   cursor:pointer;padding:6px;line-height:1;z-index:5}
 
@@ -207,15 +209,18 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
     <div class="sh-handle" id="sh-handle"></div>
     <span id="sh-close" onclick="closeSheet()">✕</span>
     <div class="sh-head">
-      <canvas id="sh-canvas" width="64" height="64" style="width:64px;height:64px"></canvas>
-      <div><div id="sh-name"></div><div id="sh-lvl"></div></div>
+      <canvas id="sh-canvas" width="64" height="64" style="width:64px;height:64px;flex-shrink:0"></canvas>
+      <div style="flex:1;min-width:0">
+        <div id="sh-name"></div>
+        <div id="sh-lvl"></div>
+        <div class="sh-stats" style="margin-top:5px">
+          <div class="sh-stat"><div class="sh-sv" id="sh-dmg"></div><div class="sh-sl">SCHADEN</div></div>
+          <div class="sh-stat"><div class="sh-sv" id="sh-rng"></div><div class="sh-sl">REICHW.</div></div>
+          <div class="sh-stat"><div class="sh-sv" id="sh-fps"></div><div class="sh-sl">FEUER/S</div></div>
+        </div>
+      </div>
     </div>
-    <div class="sh-stats">
-      <div class="sh-stat"><div class="sh-sv" id="sh-dmg"></div><div class="sh-sl">SCHADEN</div></div>
-      <div class="sh-stat"><div class="sh-sv" id="sh-rng"></div><div class="sh-sl">REICHW.</div></div>
-      <div class="sh-stat"><div class="sh-sv" id="sh-fps"></div><div class="sh-sl">FEUER/S</div></div>
-    </div>
-    <div id="sh-paths"></div>
+    <div id="sh-paths" class="sh-paths-list"></div>
 
   </div>
 </div>
@@ -299,6 +304,22 @@ const TDB={
   mondlichtaltar:{name:'Mondlichtaltar',cost:200,col:'#d0d0ff',baseRange:4.0,baseCd:99999,baseDmg:0,unlock:0,
     paths:[{id:'mond',name:'Mondlicht',icon:'🌙',upgrades:[{desc:'Heal×1.5',cost:100},{desc:'×2.2',cost:160},{desc:'×3.0',cost:235},{desc:'×4.0',cost:330},{desc:'×5.5',cost:460}]},{id:'schild',name:'Mondschild',icon:'🛡️',upgrades:[{desc:'−3%DmgHp',cost:90},{desc:'−5%',cost:145},{desc:'−8%',cost:215},{desc:'−12%',cost:305},{desc:'−18%',cost:420}]},{id:'radius2',name:'Heilradius',icon:'✨',upgrades:[{desc:'+0.8T',cost:80},{desc:'+1.3T',cost:130},{desc:'+1.9T',cost:195},{desc:'+2.7T',cost:275},{desc:'+3.7T',cost:380}]}]},
 };
+
+function calcStatsClient(t){
+  const b=TDB[t.type]; if(!b) return {dmg:0,range:0,cd:1000};
+  let dmg=b.baseDmg||0, range=b.baseRange||0, cdDelta=0, cd=b.baseCd||1000;
+  (t.paths||[]).forEach((lvl,pi)=>{
+    const path=b.paths&&b.paths[pi];if(!path)return;
+    for(let i=0;i<lvl;i++){
+      const u=path.upgrades[i];if(!u)continue;
+      if(u.dmg)       dmg  +=u.dmg;
+      if(u.rangeDelta)range+=u.rangeDelta;
+      if(u.cdDelta)   cdDelta+=u.cdDelta;
+    }
+  });
+  cd=Math.max(100,Math.round(cd*(1-Math.min(0.9,cdDelta))));
+  return {dmg,range,cd};
+}
 
 function getUpgradeCost(t,pi){
   const lvl=t.paths[pi];if(lvl>=5)return null;
@@ -1158,13 +1179,8 @@ function toggleSpd(){
 }
 
 function refreshSheetAffordability(){
-  // Fast path: just update button disabled states without full re-render
-  const sheet=document.getElementById('sh-paths');
-  if(!sheet||!selTower)return;
-  sheet.querySelectorAll('.path-card-btn:not(.maxed-btn)').forEach((btn,pi)=>{
-    const cost=getUpgradeCost(selTower,pi);
-    btn.disabled=cost===null||myGold<cost;
-  });
+  // Re-render sheet to update affordability highlighting
+  if(selTower) showSheet(selTower);
 }
 
 function showSheet(t){
@@ -1176,45 +1192,48 @@ function showSheet(t){
   shc.width=64*dpr;shc.height=64*dpr;
   shc.style.width='64px';shc.style.height='64px';
   drawTowerSprite(shc,t.type,t.paths,64*dpr);
+  // Compute live stats after upgrades
+  const s=calcStatsClient(t);
   document.getElementById('sh-name').textContent=b.name;
-  document.getElementById('sh-lvl').textContent=`${t.paths.reduce((a,v)=>a+v,0)}/15 Upgrades`;
-  document.getElementById('sh-dmg').textContent=b.baseDmg;
-  document.getElementById('sh-rng').textContent=b.baseRange.toFixed(1)+'T';
-  document.getElementById('sh-fps').textContent=(1000/b.baseCd).toFixed(1)+'/s';
-  // Build 2×2 grid: 3 upgrade cards + 1 sell card
-  let html='<div class="sh-grid">';
+  document.getElementById('sh-lvl').textContent=`${t.paths.reduce((a,v)=>a+v,0)}/15 Upgrades · ${b.race||''}`;
+  document.getElementById('sh-dmg').textContent=s.dmg;
+  document.getElementById('sh-rng').textContent=s.range.toFixed(1)+'T';
+  document.getElementById('sh-fps').textContent=(1000/s.cd).toFixed(1)+'/s';
+
+  // Build vertical path list
+  let html='';
   b.paths.forEach((path,pi)=>{
     const lvl=t.paths[pi],maxed=lvl>=5;
-    let dots='';
-    for(let i=0;i<5;i++) dots+=`<span class="path-dot${i<lvl?' filled':''}"></span>`;
-    const cost=getUpgradeCost(t,pi);
-    const u=maxed?null:path.upgrades[lvl];
-    const baseCost=u?u.cost:0;
-    const penalty=cost&&baseCost?Math.round(cost/baseCost*100)-100:0;
-    const canAfford=!maxed&&myGold>=(cost||0);
-    html+=`<div class="path-card${maxed?' maxed':''}">
-      <div class="path-card-hdr">
-        <span class="path-card-ic">${path.icon}</span>
-        <span class="path-card-nm">${path.name}</span>
-        <div class="path-card-dots">${dots}</div>
+    html+=`<div class="path-row${maxed?' maxed':''}">
+      <div class="path-row-hdr">
+        <span class="path-row-ic">${path.icon}</span>
+        <span class="path-row-nm">${path.name}</span>
       </div>
-      <div class="path-card-body">
-        <div class="path-card-desc${maxed?' maxed-txt':''}">
-          ${maxed?'Max Level erreicht':(u?u.desc:'–')}
-        </div>
-        <button class="path-card-btn" onclick="doUpgradePath(${pi})" ${(!canAfford||maxed)?'disabled':''}>
-          ${maxed?'✅ MAX':`<span>⬆ St.${lvl+1}</span><span class="path-cost">${cost}g${penalty>0?`<span class="path-penalty"> +${penalty}%</span>`:''}</span>`}
-        </button>
-      </div>
-    </div>`;
+      <div class="path-levels">`;
+    path.upgrades.forEach((u,ui)=>{
+      const done=ui<lvl, cur=ui===lvl&&!maxed;
+      const cost=cur?getUpgradeCost(t,pi):null;
+      const canAfford=cost!==null&&myGold>=cost;
+      let cls='path-lvl';
+      if(done) cls+=' done';
+      else if(cur&&canAfford) cls+=' current';
+      else if(cur&&!canAfford) cls+=' current cant-afford';
+      else cls+=' locked';
+      const onclick=cur&&canAfford?`onclick="doUpgradePath(${pi})"`:' ';
+      html+=`<div class="${cls}" ${onclick}>
+        <span class="path-lvl-num">${done?'':'St.'+(ui+1)}</span>
+        <span class="path-lvl-desc">${u.desc}</span>
+        ${done?'<span class="path-lvl-check">✓</span>':(cur?`<span class="path-lvl-cost">${cost}g</span>`:'<span class="path-lvl-cost"> </span>')}
+      </div>`;
+    });
+    html+='</div></div>';
   });
-  // Sell card (4th cell)
-  const sellRef=Math.floor(t.invested*.6);
-  html+=`<div class="sell-card" onclick="doSell()">
-    <div class="sell-card-lbl">💰 Verkaufen</div>
-    <div class="sell-card-val">+${sellRef}g</div>
+  // Sell row
+  const sellRef=Math.floor((t.invested||0)*.6);
+  html+=`<div class="sell-row" onclick="doSell()">
+    <span class="sell-row-lbl">💰 Verkaufen</span>
+    <span class="sell-row-val">+${sellRef}g</span>
   </div>`;
-  html+='</div>';
   document.getElementById('sh-paths').innerHTML=html;
   document.getElementById('sheet').classList.add('open');
 }

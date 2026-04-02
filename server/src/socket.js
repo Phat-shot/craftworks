@@ -240,8 +240,14 @@ module.exports = function setupSocket(io, db) {
         if (!gs) { clearInterval(interval); return; }
         engine.tick(gs);
         socket.emit('game:tick', engine.getSnapshot(gs));
-        if (gs._waveJustStarted) { gs._waveJustStarted = false; }
-        if (gs._waveJustEnded)   { gs._waveJustEnded   = false; }
+        if (gs._waveJustStarted) {
+          gs._waveJustStarted = false;
+          socket.emit('game:wave_started', { wave: gs.wave });
+        }
+        if (gs._waveJustEnded) {
+          gs._waveJustEnded = false;
+          socket.emit('game:wave_ended', { wave: gs.wave, bonus: gs._waveEndBonus || 0 });
+        }
         if (gs.gameOver && !gs._gameOverEmitted) {
           gs._gameOverEmitted = true;
           clearInterval(interval);

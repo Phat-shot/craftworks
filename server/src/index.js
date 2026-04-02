@@ -24,7 +24,18 @@ async function migrate() {
        WHERE table_schema='public' AND table_name='users'`
     );
     if (rows.length > 0) {
-      console.log('✅ PostgreSQL connected (schema ok)');
+      // Schema exists — run incremental migrations for new tables
+      const sql = fs.readFileSync(path.join(__dirname, 'db/schema.sql'), 'utf8');
+      // Extract only IF NOT EXISTS statements to safely add new tables
+      const incrementalStatements = sql
+        .split(';')
+        .filter(s => s.match(/CREATE TABLE IF NOT EXISTS|CREATE INDEX IF NOT EXISTS|ALTER TABLE.*ADD COLUMN IF NOT EXISTS/i))
+        .map(s => s.trim())
+        .filter(Boolean);
+      for (const stmt of incrementalStatements) {
+        try { await client.query(stmt); } catch (e) { /* ignore if already exists */ }
+      }
+      console.log('✅ PostgreSQL connected (incremental migrations applied)');
       return;
     }
     console.log('⚙️  Running database migrations...');
