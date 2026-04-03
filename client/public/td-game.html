@@ -1188,11 +1188,6 @@ function showSheet(t){
   selTower=t;
   selTower._lastGold=myGold;
   const b=TDB[t.type];
-  const shc=document.getElementById('sh-canvas');
-  const dpr=window.devicePixelRatio||1;
-  shc.width=64*dpr;shc.height=64*dpr;
-  shc.style.width='64px';shc.style.height='64px';
-  drawTowerSprite(shc,t.type,t.paths,64*dpr);
   // Compute live stats
   const s=calcStatsClient(t);
   const totalLvl=t.paths.reduce((a,v)=>a+v,0);
