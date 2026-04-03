@@ -501,6 +501,18 @@ function connectSocket(){
   });
 
   socket.on('game:over',({win,rankings})=>{
+    // Notify challenge page if playing in challenge context
+    const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+    if(sess?.workshopConfig?.challenge_token){
+      const me=rankings?.find(r=>r.userId===myUserId);
+      window.parent?.postMessage({type:'challenge_game_over',score:me?.score||0,wave:GS.wave},'*');
+      // Show challenge submit after gameover
+      setTimeout(()=>{
+        if(confirm('Score an Challenge übertragen?')){
+          window.location.href='/challenge/'+sess.workshopConfig.challenge_token+'?score='+(me?.score||0)+'&wave='+(GS.wave||0);
+        }
+      },1500);
+    }
     document.getElementById('go-title').textContent=win?'🏆 SIEG!':'💀 GAME OVER';
     const me=rankings.find(r=>r.userId===myUserId);
     document.getElementById('go-sub').innerHTML=

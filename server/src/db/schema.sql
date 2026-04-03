@@ -338,3 +338,119 @@ ALTER TABLE workshop_races ADD COLUMN IF NOT EXISTS
   altar         VARCHAR(64) DEFAULT NULL;
 ALTER TABLE workshop_races ADD COLUMN IF NOT EXISTS
   defense_building VARCHAR(64) DEFAULT NULL;
+
+-- ═══════════════════════════════════════════════════════════════
+-- BRANDS
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS brands (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name          VARCHAR(128) NOT NULL,
+  slug          VARCHAR(64)  NOT NULL UNIQUE,
+  logo_url      VARCHAR(512),
+  primary_color VARCHAR(16)  NOT NULL DEFAULT '#3060c0',
+  secondary_color VARCHAR(16) NOT NULL DEFAULT '#e0a020',
+  website_url   VARCHAR(512),
+  contact_email VARCHAR(256),
+  is_active     BOOLEAN DEFAULT TRUE,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Brand admins (which users can manage which brands)
+CREATE TABLE IF NOT EXISTS brand_members (
+  brand_id  UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
+  user_id   UUID NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+  role      VARCHAR(16) NOT NULL DEFAULT 'admin', -- 'admin'|'viewer'
+  PRIMARY KEY (brand_id, user_id)
+);
+
+-- Brand map: a skinned copy of a workshop map
+CREATE TABLE IF NOT EXISTS brand_maps (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  brand_id    UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
+  parent_map_id VARCHAR(128),  -- UUID or builtin ID
+  name        VARCHAR(128) NOT NULL,
+  -- Visual overrides (all optional — fallback to parent)
+  bg_texture_url    VARCHAR(512),
+  path_texture_url  VARCHAR(512),
+  start_icon        VARCHAR(8),
+  goal_icon         VARCHAR(8),
+  logo_overlay_url  VARCHAR(512),
+  primary_color     VARCHAR(16),
+  -- Label overrides
+  label_gold        VARCHAR(32),   -- e.g. 'Coins', 'Kronjuwelen'
+  label_score       VARCHAR(32),   -- e.g. 'Punkte', 'Sterne'
+  label_lives       VARCHAR(32),
+  icon_gold         VARCHAR(8),
+  icon_score        VARCHAR(8),
+  icon_lives        VARCHAR(8),
+  -- Building/unit skin overrides: {buildingId: {name, description, icon, color}}
+  building_skins    JSONB NOT NULL DEFAULT '{}',
+  unit_skins        JSONB NOT NULL DEFAULT '{}',
+  ability_skins     JSONB NOT NULL DEFAULT '{}',
+  is_active   BOOLEAN DEFAULT TRUE,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Uploaded assets (images for brands/maps)
+CREATE TABLE IF NOT EXISTS brand_assets (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  brand_id    UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
+  filename    VARCHAR(256) NOT NULL,
+  url         VARCHAR(512) NOT NULL,
+  asset_type  VARCHAR(32)  NOT NULL DEFAULT 'image', -- 'logo'|'texture'|'icon'
+  size_bytes  INTEGER,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Challenges
+CREATE TABLE IF NOT EXISTS challenges (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  brand_id      UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
+  brand_map_id  UUID REFERENCES brand_maps(id) ON DELETE SET NULL,
+  title         VARCHAR(128) NOT NULL,
+  description   TEXT,
+  start_at      TIMESTAMPTZ NOT NULL,
+  end_at        TIMESTAMPTZ NOT NULL,
+  -- Prizes (JSONB array: [{rank, description, count}])
+  prizes        JSONB NOT NULL DEFAULT '[]',
+  -- Lottery (top-X prizes + lottery tickets)
+  top_winners   INTEGER NOT NULL DEFAULT 3,  -- top X get direct prize
+  lottery_count INTEGER NOT NULL DEFAULT 0,  -- 0=no lottery
+  -- Scoring
+  score_metric  VARCHAR(32) NOT NULL DEFAULT 'score', -- 'score'|'wave'|'time'
+  -- Participation
+  max_entries_per_user INTEGER NOT NULL DEFAULT 3,
+  require_email  BOOLEAN DEFAULT TRUE,
+  newsletter_opt_in_text TEXT,
+  -- Access
+  share_token   VARCHAR(64) NOT NULL UNIQUE DEFAULT encode(gen_random_bytes(32),'hex'),
+  qr_code_url   VARCHAR(512),
+  is_active     BOOLEAN DEFAULT TRUE,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Challenge entries (score submissions)
+CREATE TABLE IF NOT EXISTS challenge_entries (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  challenge_id  UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
+  user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+  -- Guest entries (no account needed)
+  guest_email   VARCHAR(256),
+  guest_name    VARCHAR(128),
+  newsletter_optin BOOLEAN DEFAULT FALSE,
+  score         INTEGER NOT NULL DEFAULT 0,
+  wave          INTEGER NOT NULL DEFAULT 0,
+  time_ms       INTEGER,           -- for time attack
+  rank          INTEGER,           -- filled after challenge ends
+  notified_at   TIMESTAMPTZ,
+  session_id    UUID,
+  ip_hash       VARCHAR(64),
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_brand_maps_brand   ON brand_maps(brand_id);
+CREATE INDEX IF NOT EXISTS idx_challenges_brand   ON challenges(brand_id);
+CREATE INDEX IF NOT EXISTS idx_challenges_token   ON challenges(share_token);
+CREATE INDEX IF NOT EXISTS idx_entries_challenge  ON challenge_entries(challenge_id);
+CREATE INDEX IF NOT EXISTS idx_entries_score      ON challenge_entries(challenge_id, score DESC);

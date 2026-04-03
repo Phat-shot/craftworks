@@ -92,6 +92,9 @@ app.use('/api/groups',  require('./routes/groups'));
 app.use('/api/lobbies', require('./routes/lobbies-router'));
 app.use('/api/games',   require('./routes/games'));
 app.use('/api/legal',   require('./routes/legal'));
+app.use('/api/brands', (req,res,next)=>{req.db=db;next();}, require('./routes/brands'));
+// Serve uploaded brand assets
+app.use('/uploads/brands', require('express').static(require('path').join(__dirname,'../../uploads/brands')));
 app.use('/api/workshop', (req,res,next)=>{req.db=db;next();}, require('./routes/workshop'));
 app.use('/api/workshop', (req,res,next)=>{req.db=db;next();}, require('./routes/workshop_content'));
 app.get('/api/health',  (_, res) => {
