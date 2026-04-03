@@ -321,3 +321,20 @@ CREATE INDEX IF NOT EXISTS idx_workshop_wave_sets_creator ON workshop_wave_sets(
 ALTER TABLE workshop_wave_sets ADD COLUMN IF NOT EXISTS mode VARCHAR(16) NOT NULL DEFAULT 'standard';
 ALTER TABLE workshop_wave_sets ADD COLUMN IF NOT EXISTS default_spawn VARCHAR(16) NOT NULL DEFAULT 'snake';
 ALTER TABLE workshop_wave_sets ADD COLUMN IF NOT EXISTS standard JSONB NOT NULL DEFAULT '{}';
+
+-- ── RACE BUILDING SETS (per mode) ─────────────────────────────
+-- Each race can have different building sets for different game modes
+ALTER TABLE workshop_races ADD COLUMN IF NOT EXISTS
+  building_sets JSONB NOT NULL DEFAULT '{}';
+-- Format: { "td": ["dart","poison","splash"], "vs": ["barracks","wall","cannon"], ... }
+-- "td" set: up to 4 slots (shown in TD toolbar)
+-- "vs" set: 3 combat buildings (main_building handled separately)
+-- main_building, barracks, altar, defense_building per race
+ALTER TABLE workshop_races ADD COLUMN IF NOT EXISTS
+  main_building VARCHAR(64) DEFAULT NULL;
+ALTER TABLE workshop_races ADD COLUMN IF NOT EXISTS
+  barracks      VARCHAR(64) DEFAULT NULL;
+ALTER TABLE workshop_races ADD COLUMN IF NOT EXISTS
+  altar         VARCHAR(64) DEFAULT NULL;
+ALTER TABLE workshop_races ADD COLUMN IF NOT EXISTS
+  defense_building VARCHAR(64) DEFAULT NULL;

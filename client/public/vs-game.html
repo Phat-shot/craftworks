@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>⚔️ VS Mode</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root{--gold:#f0c840;--bg:#060408;--green:#50d040;--red:#e03020;--wood:#a06020}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;touch-action:none;user-select:none;font-family:'Cinzel',serif;background:var(--bg);color:#e0c870;display:flex;flex-direction:column}
+
+#topbar{background:linear-gradient(180deg,#140a1c,#0a0510);border-bottom:2px solid #3a1850;padding:5px 10px;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap}
+.res{display:flex;align-items:center;gap:3px;font-size:13px;font-weight:700}
+.gold-val{color:var(--gold)}.wood-val{color:var(--wood)}
+#player-list{display:flex;gap:5px;margin-left:auto;flex-wrap:wrap}
+.p-chip{font-size:9px;padding:2px 7px;border-radius:8px;border:1px solid;font-weight:700}
+.p-chip.alive{border-color:#3a6020;color:#80e060;background:rgba(50,100,20,.2)}
+.p-chip.eliminated{border-color:#4a1010;color:#604040;background:rgba(80,20,20,.15);text-decoration:line-through}
+.p-chip.me{border-color:var(--gold);color:var(--gold);background:rgba(240,200,60,.15)}
+
+#canvaswrap{flex:1;overflow:hidden;position:relative;background:#0a0812;touch-action:none}
+canvas#gc{display:block;position:absolute;top:0;left:0;cursor:crosshair}
+#minimap-wrap{position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,.7);border:1px solid #2a1840;border-radius:4px;overflow:hidden}
+canvas#mini{display:block}
+#toast{position:absolute;top:8px;left:50%;transform:translateX(-50%);font-size:11px;padding:7px 16px;border-radius:20px;pointer-events:none;display:none;z-index:300;white-space:nowrap;background:rgba(180,40,20,.92);border:1px solid #a02010;color:#ffb0a0}
+#toast.on{display:block;animation:fadeout 3s forwards}
+@keyframes fadeout{0%,65%{opacity:1}100%{opacity:0}}
+#select-box{position:absolute;border:1px solid rgba(60,200,60,.7);background:rgba(40,160,40,.08);pointer-events:none;display:none}
+
+#panel{flex-shrink:0;background:linear-gradient(180deg,#0e0818,#060410);border-top:2px solid #3a1850}
+#panel-top{display:flex;gap:0;border-bottom:1px solid #1a0a28;height:52px}
+.cmd-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;background:none;border:none;border-right:1px solid #1a0a28;cursor:pointer;font-family:'Cinzel',serif;color:#8060a0;padding:3px;transition:background .1s;position:relative;min-width:0}
+.cmd-btn:last-child{border-right:none}
+.cmd-btn.sel{background:rgba(180,120,255,.1);color:#d0a0ff}
+.cmd-btn:active{background:rgba(140,80,220,.12)}
+.cmd-btn.locked{opacity:.3;cursor:not-allowed}
+.cmd-nm{font-size:7px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.cmd-co{font-size:6px;color:#5a3870}
+.cmd-ic{font-size:16px;line-height:1}
+
+#sel-info{padding:5px 10px;min-height:36px;display:flex;align-items:center;gap:8px;font-size:10px;color:#8060a0;border-bottom:1px solid #1a0a28}
+.sel-unit-hp{display:flex;align-items:center;gap:5px}
+.hp-bar-bg{height:5px;background:#200830;border-radius:2px;overflow:hidden;flex:1}
+.hp-bar-fill{height:100%;border-radius:2px;transition:width .2s}
+
+#action-row{display:flex;height:38px}
+#btn-quit{padding:0 14px;background:rgba(100,20,20,.3);border:none;border-right:1px solid #1a0a28;color:#804040;cursor:pointer;font-family:'Cinzel',serif;font-size:12px}
+#btn-mode{flex:1;background:none;border:none;color:#6050a0;font-family:'Cinzel',serif;font-size:10px;cursor:pointer;padding:0 8px;text-align:left}
+#btn-atk{flex:1;background:rgba(180,40,20,.2);border:none;border-left:1px solid #1a0a28;color:#d06050;font-family:'Cinzel',serif;font-size:11px;font-weight:700;cursor:pointer}
+#btn-atk.on{background:rgba(220,60,30,.35);color:#ff8060;animation:pulse .7s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:inset 0 0 6px rgba(220,60,30,.3)}50%{box-shadow:inset 0 0 14px rgba(220,60,30,.6)}}
+
+#gameover{display:none;position:fixed;inset:0;background:rgba(2,1,4,.92);backdrop-filter:blur(8px);align-items:center;justify-content:center;flex-direction:column;gap:16px;z-index:500}
+#gameover.on{display:flex}
+#go-title{font-size:32px;font-weight:900}
+#go-sub{font-size:13px;color:#806080;text-align:center;line-height:1.8}
+.restart-btn{padding:10px 24px;background:rgba(60,30,90,.4);border:1px solid #5a3080;border-radius:6px;color:#c090ff;font-family:'Cinzel',serif;font-size:12px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <div class="res">💰<span class="gold-val" id="v-gold">200</span></div>
+  <div class="res">🪵<span class="wood-val" id="v-wood">100</span></div>
+  <div id="player-list"></div>
+</div>
+
+<div id="canvaswrap">
+  <canvas id="gc"></canvas>
+  <div id="select-box"></div>
+  <div id="toast"></div>
+  <div id="minimap-wrap"><canvas id="mini"></canvas></div>
+</div>
+
+<div id="panel">
+  <div id="sel-info"><span id="sel-text" style="color:#5a4070">Klicke Einheiten oder Gebäude an…</span></div>
+  <div id="panel-top">
+    <!-- Buttons built dynamically -->
+  </div>
+  <div id="action-row">
+    <button id="btn-quit" onclick="quitGame()">🚪</button>
+    <button id="btn-mode" id="btn-mode">Modus: Bewegen</button>
+    <button id="btn-atk" onclick="toggleAttackMode()">⚔️ Angriff</button>
+  </div>
+</div>
+
+<div id="gameover">
+  <div id="go-title"></div>
+  <div id="go-sub"></div>
+  <button class="restart-btn" onclick="window.location.href='/'">← Zurück</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+'use strict';
+// ── Config ──────────────────────────────────────────────────
+const VS_COLS=40, VS_ROWS=40, TILE=20, SRV=20;
+let CW=VS_COLS*TILE, CH=VS_ROWS*TILE;
+let camX=0, camY=0; // camera offset in world pixels
+let zoom=1; // 0.5–2
+
+// ── State ───────────────────────────────────────────────────
+let GS={players:{},units:[],structures:[],gameOver:false,gameTime:0};
+let myUserId=null, sessionId=null, socket=null;
+let myGold=200, myWood=100;
+let selUnitIds=new Set(); // selected unit IDs
+let selStructure=null;    // selected structure
+let attackMode=false;
+let placeMode=null;       // building type to place
+let dragStart=null;       // {x,y,wx,wy} for box select
+let lastTap=0;
+
+// Color per owner (assigned dynamically)
+const ownerColors={};
+const palette=['#e05030','#3080e0','#40c040','#e0b030','#c040e0','#30c0c0','#e07030','#8060e0'];
+let colorIdx=0;
+function ownerColor(uid){ if(!ownerColors[uid]) ownerColors[uid]=palette[colorIdx++%palette.length]; return ownerColors[uid]; }
+
+// ── Canvas setup ────────────────────────────────────────────
+const canvas=document.getElementById('gc');
+const ctx=canvas.getContext('2d');
+const mini=document.getElementById('mini');
+const mctx=mini.getContext('2d');
+const MINI_W=100, MINI_H=100;
+
+function resize(){
+  const wrap=document.getElementById('canvaswrap');
+  const dpr=window.devicePixelRatio||1;
+  const w=wrap.clientWidth, h=wrap.clientHeight;
+  canvas.style.width=w+'px'; canvas.style.height=h+'px';
+  canvas.width=w*dpr; canvas.height=h*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  mini.width=MINI_W; mini.height=MINI_H;
+  mini.style.width=MINI_W+'px'; mini.style.height=MINI_H+'px';
+  clampCam(w,h);
+}
+
+function clampCam(vw,vh){
+  const world=VS_COLS*TILE*zoom;
+  const worldH=VS_ROWS*TILE*zoom;
+  camX=Math.max(0,Math.min(camX, world-(vw||canvas.clientWidth)));
+  camY=Math.max(0,Math.min(camY, worldH-(vh||canvas.clientHeight)));
+}
+
+// ── Socket ──────────────────────────────────────────────────
+function connect(){
+  const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  if(!sess) return;
+  myUserId=sess.userId; sessionId=sess.sessionId;
+  const token=localStorage.getItem('access_token');
+  socket=io({auth:{token}});
+  socket.on('connect',()=>{ socket.join_room_if_needed?.(); socket.emit('game:join',{sessionId}); });
+  socket.on('game:vs_tick', applySnap);
+  socket.on('game:over',({win,rankings})=>showGameOver(win,rankings));
+  socket.on('game:action_result',({action,ok,err})=>{
+    if(!ok) toast({no_gold:'Kein Gold!',no_wood:'Kein Holz!',no_barracks:'Keine Kaserne!',no_session:'Keine Session'}[err]||err||'Fehler');
+  });
+}
+
+function applySnap(snap){
+  GS=snap;
+  const me=snap.players?.[myUserId];
+  if(me){ myGold=me.gold||0; myWood=me.wood||0; }
+  updateHUD();
+  rebuildPanelIfNeeded();
+}
+
+// ── HUD ─────────────────────────────────────────────────────
+let _lastAlive='';
+function updateHUD(){
+  document.getElementById('v-gold').textContent=myGold;
+  document.getElementById('v-wood').textContent=myWood;
+  const players=Object.values(GS.players||{});
+  const key=players.map(p=>p.status).join(',');
+  if(key===_lastAlive) return; _lastAlive=key;
+  const pl=document.getElementById('player-list');
+  pl.innerHTML=players.map(p=>`<span class="p-chip ${p.status!=='alive'?'eliminated':''} ${p.userId===myUserId?'me':''}">${p.username||'?'}${p.status!=='alive'?' 💀':''}</span>`).join('');
+}
+
+// ── Panel building ──────────────────────────────────────────
+let _panelMode='default';
+function rebuildPanelIfNeeded(){
+  const hasSel=selUnitIds.size>0||selStructure;
+  const want=hasSel?'selected':'default';
+  if(want===_panelMode) return;
+  _panelMode=want;
+  buildPanel();
+}
+
+const UNIT_DEFS={
+  soldier:{icon:'🗡️',name:'Soldat',  costG:50,costW:0,  desc:'Nahkampf'},
+  archer: {icon:'🏹',name:'Bogenschütze',costG:60,costW:10,desc:'Fernkampf'},
+  knight: {icon:'🛡️',name:'Ritter',  costG:120,costW:20,desc:'Tank'},
+  siege:  {icon:'💣',name:'Belagerung',costG:200,costW:50,desc:'Gebäudekiller'},
+};
+const STRUCT_DEFS={
+  barracks:{icon:'🏗️',name:'Kaserne',costG:150,costW:50,desc:'Einheiten ausbilden'},
+  wall:    {icon:'🧱',name:'Mauer',   costG:20,costW:30, desc:'Verteidigung'},
+  tower:   {icon:'🗼',name:'Turm',    costG:100,costW:0,  desc:'Fernkampf'},
+  altar:   {icon:'🌙',name:'Altar',   costG:200,costW:100,desc:'Boni'},
+};
+
+function buildPanel(){
+  const pt=document.getElementById('panel-top');
+  const si=document.getElementById('sel-info');
+
+  if(placeMode){
+    si.innerHTML=`<span style="color:#d0a0ff">📍 Klicke auf die Karte um <b>${STRUCT_DEFS[placeMode]?.name||placeMode}</b> zu platzieren — ESC abbrechen</span>`;
+    pt.innerHTML=Object.entries(STRUCT_DEFS).map(([k,d])=>`
+      <button class="cmd-btn${k===placeMode?' sel':''}" onclick="selectPlace('${k}')">
+        <span class="cmd-ic">${d.icon}</span>
+        <span class="cmd-nm">${d.name}</span>
+        <span class="cmd-co">${d.costG}g ${d.costW?d.costW+'🪵':''}</span>
+      </button>`).join('');
+    return;
+  }
+
+  if(selStructure && selStructure.owner===myUserId){
+    const s=selStructure;
+    si.innerHTML=`<span>${STRUCT_DEFS[s.type]?.icon||'🏛️'} <b>${STRUCT_DEFS[s.type]?.name||s.type}</b></span>
+      <div class="sel-unit-hp" style="flex:1">
+        <div class="hp-bar-bg" style="flex:1"><div class="hp-bar-fill" style="width:${Math.round(s.hp/s.maxHp*100)}%;background:#40c040"></div></div>
+        <span style="font-size:9px;color:#608040">${s.hp}/${s.maxHp}</span>
+      </div>`;
+    if(s.type==='barracks'||s.type==='main_building'){
+      pt.innerHTML=Object.entries(UNIT_DEFS).map(([k,d])=>`
+        <button class="cmd-btn" onclick="trainUnit('${k}')">
+          <span class="cmd-ic">${d.icon}</span>
+          <span class="cmd-nm">${d.name}</span>
+          <span class="cmd-co">${d.costG}g ${d.costW?d.costW+'🪵':''}</span>
+        </button>`).join('');
+    } else {
+      pt.innerHTML=`<div style="padding:8px;color:#6050a0;font-size:10px">Keine Aktionen für ${s.type}</div>`;
+    }
+    return;
+  }
+
+  if(selUnitIds.size>0){
+    const units=(GS.units||[]).filter(u=>selUnitIds.has(u.id)&&u.owner===myUserId);
+    si.innerHTML=units.length===0?'<span>Auswahl geleert</span>':`
+      <span>${units.length} Einheit${units.length>1?'en':''} gewählt</span>
+      ${units.length===1?`<div class="sel-unit-hp" style="flex:1">
+        <div class="hp-bar-bg" style="flex:1"><div class="hp-bar-fill" style="width:${Math.round(units[0].hp/units[0].maxHp*100)}%;background:#40c040"></div></div>
+        <span style="font-size:9px;color:#608040">${units[0].hp}/${units[0].maxHp}</span>
+      </div>`:''}`;
+    pt.innerHTML=`
+      <button class="cmd-btn" onclick="commandHold()"><span class="cmd-ic">✋</span><span class="cmd-nm">Halten</span></button>
+      <button class="cmd-btn" onclick="commandAttackAll()"><span class="cmd-ic">⚔️</span><span class="cmd-nm">Alles angreifen</span></button>
+      <button class="cmd-btn${attackMode?' sel':''}" onclick="toggleAttackMode()"><span class="cmd-ic">🎯</span><span class="cmd-nm">Angriff-Move</span></button>
+      <button class="cmd-btn" onclick="selectPlace(null)"><span class="cmd-ic">🏗️</span><span class="cmd-nm">Bauen</span><span class="cmd-co">Gebäude</span></button>`;
+    return;
+  }
+
+  // Default: build panel
+  si.innerHTML='<span style="color:#5a4070;font-size:10px">Klicke Einheiten oder Gebäude — Rechtsklick = Bewegen/Angreifen</span>';
+  pt.innerHTML=Object.entries(STRUCT_DEFS).map(([k,d])=>`
+    <button class="cmd-btn" onclick="selectPlace('${k}')">
+      <span class="cmd-ic">${d.icon}</span>
+      <span class="cmd-nm">${d.name}</span>
+      <span class="cmd-co">${d.costG}g ${d.costW?d.costW+'🪵':''}</span>
+    </button>`).join('');
+}
+
+// ── Actions ──────────────────────────────────────────────────
+function sendAction(action,data={}){
+  if(!socket||!sessionId) return;
+  socket.emit('game:action',{sessionId,action,data});
+}
+
+function trainUnit(type){
+  const structId=selStructure?.id;
+  sendAction('build_unit',{unitType:type,fromStructureId:structId});
+}
+
+function selectPlace(type){
+  placeMode=type;
+  _panelMode=''; buildPanel();
+}
+
+function commandHold(){
+  if(!selUnitIds.size) return;
+  // Send stop command (server will clear targetPos)
+  sendAction('move_unit',{unitIds:[...selUnitIds],tx:null,ty:null,stop:true});
+}
+
+function commandAttackAll(){
+  // Move toward nearest enemy structure
+  const enemy=Object.values(GS.players||{}).find(p=>p.userId!==myUserId&&p.status==='alive');
+  if(!enemy) return;
+  const s=(GS.structures||[]).find(s2=>s2.owner===enemy.userId);
+  if(s) sendAction('attack_move',{unitIds:[...selUnitIds],tx:s.col+1,ty:s.row+1});
+}
+
+function toggleAttackMode(){
+  attackMode=!attackMode;
+  document.getElementById('btn-atk').classList.toggle('on',attackMode);
+  document.getElementById('btn-mode').textContent='Modus: '+(attackMode?'Angriff':'Bewegen');
+}
+
+// ── Rendering ────────────────────────────────────────────────
+function worldToScreen(wx,wy){
+  return{sx:(wx*zoom)-camX, sy:(wy*zoom)-camY};
+}
+function screenToWorld(sx,sy){
+  return{wx:(sx+camX)/zoom, wy:(sy+camY)/zoom};
+}
+
+const TERRAIN_COLORS=['#1a1228','#1e1430','#16102a','#221838'];
+const GRID_LINE='rgba(255,255,255,.025)';
+
+function render(){
+  const W=canvas.clientWidth, H=canvas.clientHeight;
+  ctx.clearRect(0,0,W,H);
+  ctx.save();
+
+  // Background terrain
+  const t=TILE*zoom;
+  const startC=Math.max(0,Math.floor(camX/t));
+  const endC  =Math.min(VS_COLS, Math.ceil((camX+W)/t)+1);
+  const startR=Math.max(0,Math.floor(camY/t));
+  const endR  =Math.min(VS_ROWS, Math.ceil((camY+H)/t)+1);
+
+  for(let r=startR;r<endR;r++) for(let c=startC;c<endC;c++){
+    ctx.fillStyle=TERRAIN_COLORS[(r+c)%4];
+    ctx.fillRect(c*t-camX, r*t-camY, t+.5, t+.5);
+  }
+  // Grid
+  ctx.strokeStyle=GRID_LINE; ctx.lineWidth=.5;
+  for(let c=startC;c<=endC;c++){ctx.beginPath();ctx.moveTo(c*t-camX,0);ctx.lineTo(c*t-camX,H);ctx.stroke();}
+  for(let r=startR;r<=endR;r++){ctx.beginPath();ctx.moveTo(0,r*t-camY);ctx.lineTo(W,r*t-camY);ctx.stroke();}
+
+  // Fog of war overlay (if revealed array present)
+  drawFog(startR,endR,startC,endC,t);
+
+  // Structures
+  for(const s of GS.structures||[]) drawStructure(s,t);
+  // Units
+  for(const u of GS.units||[]) drawUnit(u,t);
+  // Selection boxes on selected units
+  for(const u of GS.units||[]){
+    if(selUnitIds.has(u.id)){
+      const {sx,sy}=worldToScreen(u.x,u.y);
+      const r2=TILE*.35*zoom;
+      ctx.strokeStyle='#80ff80'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(sx,sy,r2+3,0,Math.PI*2); ctx.stroke();
+    }
+  }
+  // Drag selection box
+  if(dragStart&&isDragging){
+    const sb=document.getElementById('select-box');
+    sb.style.display='block';
+    const mx=Math.min(dragStart.sx,dragCur.sx), my=Math.min(dragStart.sy,dragCur.sy);
+    const mw=Math.abs(dragCur.sx-dragStart.sx), mh=Math.abs(dragCur.sy-dragStart.sy);
+    sb.style.left=mx+'px'; sb.style.top=my+'px';
+    sb.style.width=mw+'px'; sb.style.height=mh+'px';
+  } else {
+    document.getElementById('select-box').style.display='none';
+  }
+
+  ctx.restore();
+  drawMinimap();
+}
+
+function drawFog(sr,er,sc2,ec,t){
+  if(!GS.revealed) return;
+  const revealed=new Set(GS.revealed);
+  for(let r=sr;r<er;r++) for(let c=sc2;c<ec;c++){
+    if(!revealed.has(`${r},${c}`)){
+      ctx.fillStyle='rgba(0,0,0,.65)';
+      ctx.fillRect(c*t-camX,r*t-camY,t+.5,t+.5);
+    }
+  }
+}
+
+const STRUCT_ICONS={'main_building':'🏰','barracks':'🏗️','wall':'🧱','tower':'🗼','altar':'🌙'};
+function drawStructure(s,t){
+  const ox=s.col*t-camX, oy=s.row*t-camY;
+  const w=s.type==='main_building'?3*t:2*t, h=s.type==='main_building'?3*t:2*t;
+  const col=ownerColor(s.owner);
+  const isMine=s.owner===myUserId;
+  const isSel=selStructure?.id===s.id;
+
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,.35)';
+  ctx.fillRect(ox+3,oy+4,w,h);
+
+  // Body
+  ctx.fillStyle=isMine?col+'33':'rgba(180,40,20,.25)';
+  ctx.strokeStyle=isSel?'#fff8c0':col;
+  ctx.lineWidth=isSel?2.5:1.5;
+  ctx.beginPath();
+  ctx.roundRect?ctx.roundRect(ox,oy,w,h,4):ctx.rect(ox,oy,w,h);
+  ctx.fill(); ctx.stroke();
+
+  // Icon
+  const sz=Math.min(t*1.2,22);
+  ctx.font=`${sz}px serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(STRUCT_ICONS[s.type]||'🏛️', ox+w/2, oy+h/2);
+
+  // HP bar
+  const hpFrac=Math.max(0,(s.hp||0)/(s.maxHp||1));
+  const bw=w, bh=3;
+  ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(ox,oy-5,bw,bh);
+  ctx.fillStyle=hpFrac>.5?'#40d040':hpFrac>.25?'#e0c020':'#d03020';
+  ctx.fillRect(ox,oy-5,bw*hpFrac,bh);
+
+  // Owner initial
+  const p=GS.players?.[s.owner];
+  if(p){
+    ctx.font=`bold ${t*.2}px Cinzel,serif`;
+    ctx.fillStyle=col+'cc'; ctx.textAlign='right'; ctx.textBaseline='top';
+    ctx.fillText(p.username?.[0]?.toUpperCase()||'?', ox+w-2, oy+2);
+  }
+}
+
+const UNIT_SHAPES={soldier:'circle',archer:'diamond',knight:'square',siege:'square'};
+function drawUnit(u,t){
+  const{sx,sy}=worldToScreen(u.x,u.y);
+  const r=TILE*.28*zoom;
+  const col=ownerColor(u.owner);
+  const isMine=u.owner===myUserId;
+
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,.25)';
+  ctx.beginPath(); ctx.ellipse(sx,sy+r*.8,r*.6,r*.18,0,0,Math.PI*2); ctx.fill();
+
+  // Body
+  const shape=UNIT_SHAPES[u.type]||'circle';
+  ctx.fillStyle=col+(isMine?'ee':'aa');
+  ctx.strokeStyle=isMine?'rgba(255,255,200,.5)':'rgba(200,100,80,.4)';
+  ctx.lineWidth=1;
+  ctx.beginPath();
+  if(shape==='diamond'){
+    ctx.moveTo(sx,sy-r); ctx.lineTo(sx+r,sy); ctx.lineTo(sx,sy+r); ctx.lineTo(sx-r,sy); ctx.closePath();
+  } else if(shape==='square'){
+    ctx.rect(sx-r,sy-r,r*2,r*2);
+  } else {
+    ctx.arc(sx,sy,r,0,Math.PI*2);
+  }
+  ctx.fill(); ctx.stroke();
+
+  // Unit icon (tiny)
+  const icons={soldier:'⚔',archer:'🏹',knight:'🛡',siege:'💣'};
+  ctx.font=`${r*1.3}px serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(255,255,255,.9)';
+  ctx.fillText(icons[u.type]||'●',sx,sy);
+
+  // HP bar above unit
+  const hpFrac=Math.max(0,(u.hp||0)/(u.maxHp||1));
+  const bw=r*2.4, bh=2;
+  ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(sx-r*1.2,sy-r-5,bw,bh);
+  ctx.fillStyle=hpFrac>.5?'#40d040':hpFrac>.25?'#e0c020':'#d03020';
+  ctx.fillRect(sx-r*1.2,sy-r-5,bw*hpFrac,bh);
+}
+
+function drawMinimap(){
+  const scX=MINI_W/(VS_COLS*TILE), scY=MINI_H/(VS_ROWS*TILE);
+  mctx.fillStyle='#0a0814'; mctx.fillRect(0,0,MINI_W,MINI_H);
+  // Structures
+  for(const s of GS.structures||[]){
+    mctx.fillStyle=ownerColor(s.owner)+'bb';
+    mctx.fillRect(s.col*TILE*scX,s.row*TILE*scY,6,6);
+  }
+  // Units
+  for(const u of GS.units||[]){
+    mctx.fillStyle=ownerColor(u.owner);
+    mctx.fillRect(u.x*scX-1,u.y*scY-1,2,2);
+  }
+  // Viewport rect
+  const vW=canvas.clientWidth, vH=canvas.clientHeight;
+  mctx.strokeStyle='rgba(255,255,200,.6)'; mctx.lineWidth=1;
+  mctx.strokeRect(camX*scX/zoom,camY*scY/zoom,vW*scX/zoom,vH*scY/zoom);
+}
+
+// ── Input ────────────────────────────────────────────────────
+let isDragging=false, dragCur={sx:0,sy:0};
+
+canvas.addEventListener('mousedown',e=>{
+  if(e.button===2){ handleRightClick(e.clientX,e.clientY); return; }
+  const rect=canvas.getBoundingClientRect();
+  dragStart={sx:e.clientX-rect.left, sy:e.clientY-rect.top, ...screenToWorld(e.clientX-rect.left,e.clientY-rect.top)};
+  dragCur={sx:dragStart.sx,sy:dragStart.sy};
+  isDragging=false;
+});
+
+canvas.addEventListener('mousemove',e=>{
+  if(!dragStart) return;
+  const rect=canvas.getBoundingClientRect();
+  dragCur={sx:e.clientX-rect.left,sy:e.clientY-rect.top};
+  isDragging=Math.hypot(dragCur.sx-dragStart.sx,dragCur.sy-dragStart.sy)>6;
+});
+
+canvas.addEventListener('mouseup',e=>{
+  if(!dragStart) return;
+  const rect=canvas.getBoundingClientRect();
+  const{wx,wy}=screenToWorld(e.clientX-rect.left,e.clientY-rect.top);
+  if(isDragging){
+    boxSelect(dragStart.wx,dragStart.wy,wx,wy);
+  } else {
+    handleLeftClick(e.clientX-rect.left,e.clientY-rect.top,wx,wy);
+  }
+  dragStart=null; isDragging=false;
+});
+
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+
+// Touch
+let touchStart=null;
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const t2=e.touches[0];
+  const rect=canvas.getBoundingClientRect();
+  const sx=t2.clientX-rect.left, sy=t2.clientY-rect.top;
+  touchStart={sx,sy,...screenToWorld(sx,sy),time:Date.now()};
+  dragStart={...touchStart}; isDragging=false;
+},{passive:false});
+
+canvas.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  const t2=e.touches[0];
+  const rect=canvas.getBoundingClientRect();
+  dragCur={sx:t2.clientX-rect.left,sy:t2.clientY-rect.top};
+  isDragging=isDragging||Math.hypot(dragCur.sx-dragStart.sx,dragCur.sy-dragStart.sy)>8;
+  if(!isDragging&&e.touches.length===1){
+    // pan
+    if(touchStart){
+      const dx=(dragCur.sx-touchStart.sx), dy=(dragCur.sy-touchStart.sy);
+      if(Math.hypot(dx,dy)>8){
+        camX=Math.max(0,camX-dx*zoom); camY=Math.max(0,camY-dy*zoom);
+        touchStart={...touchStart,sx:dragCur.sx,sy:dragCur.sy};
+      }
+    }
+  }
+},{passive:false});
+
+canvas.addEventListener('touchend',e=>{
+  e.preventDefault();
+  if(!touchStart) return;
+  const now=Date.now(), dt=now-touchStart.time;
+  if(!isDragging&&dt<400){
+    const doubleTap=now-lastTap<350;
+    lastTap=now;
+    if(doubleTap) handleRightClick(e.changedTouches[0].clientX,e.changedTouches[0].clientY);
+    else handleLeftClick(touchStart.sx,touchStart.sy,touchStart.wx,touchStart.wy);
+  } else if(isDragging){
+    boxSelect(dragStart.wx,dragStart.wy,touchStart.wx,touchStart.wy);
+  }
+  dragStart=null; isDragging=false; touchStart=null;
+},{passive:false});
+
+// Zoom wheel
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const rect=canvas.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const{wx,wy}=screenToWorld(mx,my);
+  zoom=Math.max(.4,Math.min(2,zoom*(e.deltaY<0?1.1:.9)));
+  // Keep cursor world pos under mouse
+  camX=wx*zoom-mx; camY=wy*zoom-my;
+  clampCam(canvas.clientWidth,canvas.clientHeight);
+},{passive:false});
+
+function handleLeftClick(sx,sy,wx,wy){
+  if(placeMode){ placeBuild(wx,wy); return; }
+  const t=TILE*zoom;
+
+  // Check structure hit
+  const s=(GS.structures||[]).find(st=>{
+    const osw=st.type==='main_building'?3*t:2*t, ssh=st.type==='main_building'?3*t:2*t;
+    const stx=st.col*t-camX, sty=st.row*t-camY;
+    return sx>=stx&&sx<=stx+osw&&sy>=sty&&sy<=sty+ssh;
+  });
+  if(s){ selStructure=s; selUnitIds.clear(); _panelMode=''; buildPanel(); return; }
+
+  // Check unit hit
+  const u=(GS.units||[]).find(u=>{
+    const{sx:ux,sy:uy}=worldToScreen(u.x,u.y);
+    return Math.hypot(sx-ux,sy-uy)<TILE*.35*zoom+5;
+  });
+  if(u && u.owner===myUserId){
+    selUnitIds.clear(); selUnitIds.add(u.id);
+    selStructure=null; _panelMode=''; buildPanel(); return;
+  }
+
+  // Click on empty: deselect, or move selected units
+  if(selUnitIds.size>0){
+    const cmd=attackMode?'attack_move':'move_unit';
+    sendAction(cmd,{unitIds:[...selUnitIds],tx:Math.round(wx/TILE),ty:Math.round(wy/TILE)});
+  } else {
+    selUnitIds.clear(); selStructure=null; _panelMode=''; buildPanel();
+  }
+}
+
+function handleRightClick(cx,cy){
+  const rect=canvas.getBoundingClientRect();
+  const sx=cx-rect.left, sy=cy-rect.top;
+  const{wx,wy}=screenToWorld(sx,sy);
+  if(selUnitIds.size>0){
+    const tx=Math.round(wx/TILE), ty=Math.round(wy/TILE);
+    const cmd=attackMode?'attack_move':'move_unit';
+    sendAction(cmd,{unitIds:[...selUnitIds],tx,ty});
+  }
+}
+
+function boxSelect(wx1,wy1,wx2,wy2){
+  const minX=Math.min(wx1,wx2), maxX=Math.max(wx1,wx2);
+  const minY=Math.min(wy1,wy2), maxY=Math.max(wy1,wy2);
+  selUnitIds.clear(); selStructure=null;
+  for(const u of GS.units||[]){
+    if(u.owner===myUserId && u.x>=minX&&u.x<=maxX&&u.y>=minY&&u.y<=maxY)
+      selUnitIds.add(u.id);
+  }
+  _panelMode=''; buildPanel();
+}
+
+function placeBuild(wx,wy){
+  const c=Math.floor(wx/TILE), r=Math.floor(wy/TILE);
+  sendAction('build_structure',{structureType:placeMode,row:r,col:c});
+  placeMode=null; _panelMode=''; buildPanel();
+}
+
+// Keyboard
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ placeMode=null; selUnitIds.clear(); selStructure=null; attackMode=false; _panelMode=''; buildPanel(); }
+  if(e.key==='a'||e.key==='A') toggleAttackMode();
+  if(e.key==='s'||e.key==='S') commandHold();
+});
+
+// ── Game over ────────────────────────────────────────────────
+function showGameOver(win,rankings){
+  const el=document.getElementById('gameover');
+  const me=rankings?.find(r=>r.userId===myUserId);
+  const isWinner=me?.rank===1;
+  document.getElementById('go-title').textContent=isWinner?'🏆 SIEG!':'💀 NIEDERLAGE';
+  document.getElementById('go-title').style.color=isWinner?'var(--gold)':'#d04040';
+  document.getElementById('go-sub').innerHTML=rankings?.map((r,i)=>
+    `${i===0?'🥇':i===1?'🥈':i===2?'🥉':'  '} ${r.username||'?'} ${r.status!=='alive'?'💀':'👑'} ${r.score||0}pt`
+  ).join('<br>')||'';
+  el.classList.add('on');
+}
+
+function quitGame(){
+  if(confirm('Spiel beenden?')){ if(socket)socket.disconnect(); sessionStorage.removeItem('mp_session'); window.location.href='/'; }
+}
+
+let _toastT=null;
+function toast(msg){
+  const el=document.getElementById('toast'); el.textContent=msg;
+  el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
+  clearTimeout(_toastT); _toastT=setTimeout(()=>el.classList.remove('on'),3000);
+}
+
+// ── Boot ─────────────────────────────────────────────────────
+function loop(){ requestAnimationFrame(loop); render(); }
+
+window.addEventListener('load',()=>{
+  resize();
+  window.addEventListener('resize',resize);
+  // Center camera on middle of map
+  camX=VS_COLS*TILE/2-window.innerWidth/2;
+  camY=VS_ROWS*TILE/2-window.innerHeight/2;
+  clampCam(window.innerWidth,window.innerHeight);
+  connect();
+  buildPanel();
+  requestAnimationFrame(loop);
+});
+</script>
+</body>
+</html>

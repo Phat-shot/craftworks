@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>⏱ Time Attack</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root{--gold:#f0c840;--bg:#06040c;--wood:#a06020;--red:#e03020}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;touch-action:none;user-select:none;font-family:'Cinzel',serif;background:var(--bg);color:#e0c870;display:flex;flex-direction:column}
+#topbar{background:linear-gradient(180deg,#1c1004,#0c0800);border-bottom:2px solid #4a3008;padding:6px 10px;display:flex;align-items:center;gap:8px;flex-shrink:0}
+.res{display:flex;align-items:center;gap:3px;font-size:13px;font-weight:700}
+.res .lbl{font-size:7px;color:#503820}
+.v-gold{color:var(--gold)}.v-wood{color:var(--wood)}
+.phase-badge{margin-left:auto;font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700}
+.phase-placing{background:rgba(60,140,60,.3);color:#80e060;border:1px solid #3a8020}
+.phase-racing{background:rgba(200,80,20,.3);color:#ff8040;border:1px solid #a03010;animation:pulse .8s ease-in-out infinite}
+.phase-results{background:rgba(60,60,200,.3);color:#8080ff;border:1px solid #3030a0}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+#round-info{font-size:10px;color:#806040;white-space:nowrap}
+#canvaswrap{flex:1;overflow:hidden;position:relative;background:#1a2a10;touch-action:none}
+canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)}
+#botbar{flex-shrink:0;background:linear-gradient(180deg,#0c0800,#060400);border-top:2px solid #4a3008;padding-bottom:env(safe-area-inset-bottom,0)}
+#resource-row{display:flex;gap:0;height:44px;border-bottom:1px solid #1a1004}
+.res-cell{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;border-right:1px solid #1a1004;font-size:9px;gap:1px}
+.res-cell:last-child{border-right:none}
+.res-val{font-size:15px;font-weight:900}
+.res-val.gold{color:var(--gold)}.res-val.wood{color:var(--wood)}.res-val.time{color:#80c0ff}
+#build-row{display:flex;height:58px}
+.bld-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;background:none;border:none;border-right:1px solid #1a1004;cursor:pointer;font-family:'Cinzel',serif;color:#806830;padding:4px;position:relative;transition:background .1s}
+.bld-btn:last-child{border-right:none}
+.bld-btn.sel{background:rgba(240,200,60,.12);color:var(--gold)}
+.bld-btn:active{background:rgba(255,200,60,.08)}
+.bld-btn .bld-nm{font-size:8px;font-weight:700}
+.bld-btn .bld-co{font-size:7px;color:#705828}
+#action-row{display:flex;height:44px}
+#btn-ready{flex:1;background:linear-gradient(180deg,#0e2e0e,#061806);border:none;border-right:1px solid #1a1004;color:#60d040;font-family:'Cinzel',serif;font-size:13px;font-weight:700;cursor:pointer}
+#btn-ready:disabled{opacity:.4;cursor:not-allowed}
+#btn-ready.racing{background:linear-gradient(180deg,#2e1a06,#180e02);color:#ff8040}
+#btn-clear{width:70px;background:#100e04;border:none;color:#806030;font-family:'Cinzel',serif;font-size:10px;cursor:pointer}
+#btn-quit{width:44px;background:#1a0a04;border:none;color:#804030;font-size:18px;cursor:pointer}
+/* Overlays */
+#results-overlay{display:none;position:absolute;inset:0;background:rgba(2,1,0,.9);backdrop-filter:blur(6px);align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:200;text-align:center}
+#results-overlay.on{display:flex}
+#res-title{font-size:24px;font-weight:900;color:var(--gold)}
+#res-table{font-size:13px;line-height:2}
+.toast{position:absolute;top:8px;left:50%;transform:translateX(-50%);font-size:11px;padding:7px 16px;border-radius:20px;pointer-events:none;display:none;z-index:300;white-space:nowrap;text-align:center}
+.toast.on{display:block;animation:fadeout 2.5s forwards}
+@keyframes fadeout{0%,60%{opacity:1}100%{opacity:0}}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <div class="res">💰<span class="v-gold" id="v-gold">100</span></div>
+  <div class="res" style="margin-left:6px">🪵<span class="v-wood" id="v-wood">50</span></div>
+  <div id="round-info">Runde <span id="v-round">1</span>/<span id="v-total">5</span></div>
+  <span class="phase-badge phase-placing" id="phase-badge">PLATZIEREN</span>
+</div>
+
+<div id="canvaswrap">
+  <canvas id="gc"></canvas>
+  <div class="toast" id="toast"></div>
+  <div id="results-overlay">
+    <div id="res-title">Runde beendet!</div>
+    <div id="res-table"></div>
+    <div id="res-next" style="font-size:11px;color:#604828"></div>
+  </div>
+</div>
+
+<div id="botbar">
+  <div id="resource-row">
+    <div class="res-cell">
+      <div class="res-val gold" id="r-gold">100</div>
+      <div style="color:#504020;font-size:7px">GOLD</div>
+    </div>
+    <div class="res-cell">
+      <div class="res-val wood" id="r-wood">50</div>
+      <div style="color:#504020;font-size:7px">HOLZ</div>
+    </div>
+    <div class="res-cell">
+      <div class="res-val time" id="r-time">–</div>
+      <div style="color:#504020;font-size:7px">LETZTE ZEIT</div>
+    </div>
+    <div class="res-cell">
+      <div class="res-val" style="color:#c0a040" id="r-score">0</div>
+      <div style="color:#504020;font-size:7px">PUNKTE</div>
+    </div>
+  </div>
+  <div id="build-row">
+    <button class="bld-btn sel" id="btn-wall" onclick="selectTool('wall')">
+      🧱<div class="bld-nm">Mauer</div><div class="bld-co">1🪵</div>
+    </button>
+    <button class="bld-btn" id="btn-passive" onclick="selectTool('passive')">
+      🪨<div class="bld-nm">Passiv</div><div class="bld-co">1💰</div>
+    </button>
+    <button class="bld-btn" id="btn-remove" onclick="selectTool('remove')">
+      🗑️<div class="bld-nm">Entfernen</div><div class="bld-co">Refund</div>
+    </button>
+  </div>
+  <div id="action-row">
+    <button id="btn-ready" onclick="sendReady()">✓ Fertig — Rennen starten</button>
+    <button id="btn-clear" onclick="clearAll()">🗑 Alle</button>
+    <button id="btn-quit"  onclick="quitGame()">🚪</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+'use strict';
+// ── State ──────────────────────────────────────────────
+let COLS=15, ROWS=20, TILE=32, CW, CH;
+let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null };
+let myUserId=null, sessionId=null, socket=null;
+let selectedTool='wall';
+let hoverCell=null;
+let myGold=100, myWood=50, myScore=0, myLastTime=null;
+let raceStartTime=null;
+let timerInterval=null;
+
+const canvas=document.getElementById('gc');
+const ctx=canvas.getContext('2d');
+const SRV=32; // server tile size
+
+// ── Layout ─────────────────────────────────────────────
+function applyLayout(){
+  const wrap=document.getElementById('canvaswrap');
+  const dpr=window.devicePixelRatio||1;
+  const aw=wrap.clientWidth||320, ah=wrap.clientHeight||480;
+  const byW=Math.floor(aw/COLS), byH=Math.floor(ah/ROWS);
+  TILE=Math.max(14,Math.min(byW,byH));
+  CW=TILE*COLS; CH=TILE*ROWS;
+  canvas.width=CW*dpr; canvas.height=CH*dpr;
+  canvas.style.width=CW+'px'; canvas.style.height=CH+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+
+function sc(v){return v*(TILE/SRV);}
+
+// ── Socket ──────────────────────────────────────────────
+function connect(){
+  const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  if(!sess)return;
+  myUserId=sess.userId; sessionId=sess.sessionId;
+  const token=localStorage.getItem('access_token');
+  socket=io({auth:{token}});
+
+  socket.on('connect',()=>{ socket.emit('game:join',{sessionId}); });
+
+  socket.on('game:ta_tick',(snap)=>{
+    GS=snap;
+    myGold=snap.players[myUserId]?.gold??myGold;
+    myWood=snap.players[myUserId]?.wood??myWood;
+    myScore=snap.players[myUserId]?.score??0;
+    myLastTime=snap.players[myUserId]?.lastTime??null;
+    updateHUD();
+  });
+
+  socket.on('game:ta_round_end',({round,players})=>{
+    showResults(round,players);
+  });
+
+  socket.on('game:over',({win,rankings})=>{
+    showFinalResults(rankings);
+  });
+
+  socket.on('game:action_result',({action,ok,err})=>{
+    if(!ok) toast(err==='no_resources'?'Nicht genug Ressourcen!':err==='blocks_path'?'⚠️ Würde Weg blockieren!':err||'Fehler');
+  });
+}
+
+// ── HUD ──────────────────────────────────────────────────
+function updateHUD(){
+  document.getElementById('v-gold').textContent=myGold;
+  document.getElementById('v-wood').textContent=myWood;
+  document.getElementById('v-round').textContent=GS.round||1;
+  document.getElementById('v-total').textContent=GS.totalRounds||5;
+  document.getElementById('r-gold').textContent=myGold;
+  document.getElementById('r-wood').textContent=myWood;
+  document.getElementById('r-score').textContent=myScore;
+  document.getElementById('r-time').textContent=myLastTime?formatTime(myLastTime):'–';
+  const badge=document.getElementById('phase-badge');
+  badge.className='phase-badge phase-'+GS.phase;
+  badge.textContent=GS.phase==='placing'?'PLATZIEREN':GS.phase==='racing'?'⚡ RENNEN':'ERGEBNIS';
+  document.getElementById('btn-ready').disabled=GS.phase!=='placing';
+  document.getElementById('btn-ready').className=GS.phase==='racing'?'racing':'';
+}
+
+function formatTime(ms){ return (ms/1000).toFixed(2)+'s'; }
+
+// ── Rendering ─────────────────────────────────────────────
+function render(){
+  ctx.clearRect(0,0,CW,CH);
+  drawGrid();
+  drawTowers();
+  drawPath();
+  drawHover();
+  drawMinion();
+}
+
+// Tile color palettes
+const GRASS_COLORS=['#2d5018','#355e1c','#264814','#3a6820'];
+const PATH_COLORS =['#1e3a0e','#233e10','#1a3008'];
+
+function drawGrid(){
+  const pathSet=new Set((GS.myPath||[]).map(([r,c])=>`${r},${c}`));
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const isPath=pathSet.has(`${r},${c}`);
+    ctx.fillStyle=isPath?PATH_COLORS[(r+c)%3]:GRASS_COLORS[(r*3+c)%4];
+    ctx.fillRect(c*TILE,r*TILE,TILE,TILE);
+  }
+  // Grid lines
+  ctx.strokeStyle='rgba(0,0,0,.07)'; ctx.lineWidth=.5;
+  for(let r=0;r<=ROWS;r++){ctx.beginPath();ctx.moveTo(0,r*TILE);ctx.lineTo(CW,r*TILE);ctx.stroke();}
+  for(let c=0;c<=COLS;c++){ctx.beginPath();ctx.moveTo(c*TILE,0);ctx.lineTo(c*TILE,CH);ctx.stroke();}
+  // Entry/Exit
+  const entry=Math.floor(COLS/2);
+  drawPortal(entry*TILE+TILE/2, TILE/2, '#50ff70', '▼', 'START');
+  drawPortal(entry*TILE+TILE/2, (ROWS-1)*TILE+TILE/2, '#ff6050', '▲', 'ZIEL');
+}
+
+function drawPortal(x,y,col,arrow,label){
+  const g=ctx.createRadialGradient(x,y,1,x,y,TILE*.75);
+  g.addColorStop(0,col+'aa'); g.addColorStop(1,'transparent');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,TILE*.75,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=col; ctx.font=`bold ${TILE*.4}px serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.shadowColor=col; ctx.shadowBlur=10; ctx.fillText(arrow,x,y); ctx.shadowBlur=0;
+  ctx.font=`bold ${TILE*.22}px Cinzel,serif`; ctx.fillStyle=col+'cc';
+  ctx.fillText(label,x,y+TILE*.5);
+}
+
+function drawTowers(){
+  for(const t of GS.myTowers||[]){
+    const x=t.col*TILE, y=t.row*TILE;
+    if(t.type==='wall'||t.type==='wall_tower'){
+      ctx.fillStyle='#5a4830';
+      ctx.fillRect(x+2,y+2,TILE*2-4,TILE*2-4);
+      ctx.strokeStyle='#8a6840'; ctx.lineWidth=1.5;
+      ctx.strokeRect(x+2,y+2,TILE*2-4,TILE*2-4);
+      ctx.fillStyle='#4a3820';
+      for(let i=0;i<4;i++){const mx=x+(i%2)*(TILE-3)+1,my=y+Math.floor(i/2)*(TILE-3)+1;ctx.fillRect(mx,my,3,3);}
+    } else {
+      // passive tower
+      ctx.fillStyle='#303820'; ctx.fillRect(x+3,y+3,TILE*2-6,TILE*2-6);
+      ctx.strokeStyle='#506030'; ctx.lineWidth=1; ctx.strokeRect(x+3,y+3,TILE*2-6,TILE*2-6);
+      ctx.fillStyle='#608040'; ctx.font=`${TILE*.7}px serif`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('🪨',x+TILE,y+TILE);
+    }
+  }
+}
+
+function drawPath(){
+  const path=GS.myPath||[];
+  if(path.length<2) return;
+  ctx.strokeStyle='rgba(80,200,60,.35)'; ctx.lineWidth=TILE*.25;
+  ctx.setLineDash([TILE*.3,TILE*.2]);
+  ctx.beginPath();
+  path.forEach(([r,c],i)=>{
+    const px=c*TILE+TILE/2, py=r*TILE+TILE/2;
+    i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+  });
+  ctx.stroke(); ctx.setLineDash([]);
+}
+
+function drawHover(){
+  if(!hoverCell||GS.phase!=='placing') return;
+  const{r,c}=hoverCell;
+  const occ=(GS.myTowers||[]).some(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
+  if(selectedTool==='remove'){
+    if(occ){ ctx.fillStyle='rgba(200,60,60,.25)'; ctx.fillRect(c*TILE,r*TILE,TILE*2,TILE*2); }
+    return;
+  }
+  ctx.fillStyle=occ?'rgba(200,60,60,.2)':'rgba(60,200,60,.18)';
+  ctx.fillRect(c*TILE,r*TILE,TILE*2,TILE*2);
+  ctx.strokeStyle=occ?'rgba(200,60,60,.5)':'rgba(60,200,60,.5)';
+  ctx.lineWidth=1.5; ctx.strokeRect(c*TILE,r*TILE,TILE*2,TILE*2);
+}
+
+function drawMinion(){
+  const m=GS.myMinion;
+  if(!m||GS.phase!=='racing') return;
+  const px=sc(m.px), py=sc(m.py);
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,.25)';
+  ctx.beginPath(); ctx.ellipse(px,py+TILE*.35,TILE*.28,TILE*.1,0,0,Math.PI*2); ctx.fill();
+  // Body
+  const g=ctx.createRadialGradient(px-TILE*.08,py-TILE*.08,TILE*.03,px,py,TILE*.3);
+  g.addColorStop(0,'#e0c080'); g.addColorStop(1,'#906030');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(px,py,TILE*.3,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,.4)'; ctx.lineWidth=1.5; ctx.stroke();
+  // Eyes
+  [[-TILE*.1,TILE*.05],[TILE*.1,TILE*.05]].forEach(([ex,ey])=>{
+    ctx.fillStyle='#1a1008'; ctx.beginPath(); ctx.arc(px+ex,py+ey,TILE*.07,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff8e0'; ctx.beginPath(); ctx.arc(px+ex-TILE*.03,py+ey-TILE*.03,TILE*.04,0,Math.PI*2); ctx.fill();
+  });
+  // Timer above minion
+  if(raceStartTime!=null){
+    const elapsed=((Date.now()-raceStartTime)/1000).toFixed(1);
+    ctx.fillStyle='rgba(0,0,0,.7)'; ctx.beginPath();
+    ctx.roundRect?ctx.roundRect(px-22,py-TILE*.55,44,16,4):ctx.rect(px-22,py-TILE*.55,44,16);
+    ctx.fill();
+    ctx.fillStyle='#80d0ff'; ctx.font=`bold ${TILE*.28}px Cinzel,serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(elapsed+'s',px,py-TILE*.46);
+  }
+}
+
+// ── Input ──────────────────────────────────────────────
+function cellFromXY(cx2,cy2){
+  const rect=canvas.getBoundingClientRect();
+  const dpr=window.devicePixelRatio||1;
+  const scx=CW/rect.width, scy=CH/rect.height;
+  return{r:Math.floor((cy2-rect.top)*scy/TILE),c:Math.floor((cx2-rect.left)*scx/TILE)};
+}
+
+canvas.addEventListener('click',e=>{
+  if(GS.phase!=='placing') return;
+  const{r,c}=cellFromXY(e.clientX,e.clientY);
+  if(r<0||r+1>=ROWS||c<0||c+1>=COLS) return;
+  if(selectedTool==='remove'){
+    const t=(GS.myTowers||[]).find(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
+    if(t) sendAction('remove_tower',{towerId:t.id});
+  } else {
+    sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall_tower':'passive_tower',row:r,col:c});
+  }
+});
+canvas.addEventListener('mousemove',e=>{hoverCell=cellFromXY(e.clientX,e.clientY);});
+canvas.addEventListener('touchmove',e=>{e.preventDefault();hoverCell=cellFromXY(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+canvas.addEventListener('touchend',e=>{
+  e.preventDefault();
+  if(GS.phase!=='placing') return;
+  const t=e.changedTouches[0];
+  const{r,c}=cellFromXY(t.clientX,t.clientY);
+  if(r<0||r+1>=ROWS||c<0||c+1>=COLS) return;
+  sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall_tower':'passive_tower',row:r,col:c});
+});
+
+function selectTool(t){
+  selectedTool=t;
+  document.querySelectorAll('.bld-btn').forEach(b=>b.classList.remove('sel'));
+  document.getElementById('btn-'+t).classList.add('sel');
+}
+
+function sendAction(action,data={}){
+  if(!socket||!sessionId) return;
+  socket.emit('game:action',{sessionId,action,data});
+}
+
+function sendReady(){
+  if(GS.phase!=='placing') return;
+  document.getElementById('btn-ready').disabled=true;
+  document.getElementById('btn-ready').textContent='⏳ Warte auf andere…';
+  sendAction('ta_ready',{});
+  raceStartTime=Date.now();
+}
+
+function clearAll(){
+  if(GS.phase!=='placing') return;
+  (GS.myTowers||[]).filter(t=>!t._prebuilt).forEach(t=>sendAction('remove_tower',{towerId:t.id}));
+}
+
+function quitGame(){
+  if(confirm('Spiel beenden?')){ if(socket)socket.disconnect(); sessionStorage.removeItem('mp_session'); window.location.href='/'; }
+}
+
+// ── Results ────────────────────────────────────────────
+function showResults(round,players){
+  const ov=document.getElementById('results-overlay');
+  const sorted=Object.values(players).sort((a,b)=>(a.lastTime??Infinity)-(b.lastTime??Infinity));
+  document.getElementById('res-title').textContent=`Runde ${round} — Ergebnis`;
+  const pts=[10,3,1,0]; const medals=['🥇','🥈','🥉',''];
+  document.getElementById('res-table').innerHTML=sorted.map((p,i)=>`
+    <div style="display:flex;gap:16px;align-items:center;padding:4px 12px">
+      <span style="font-size:18px">${medals[i]||''}</span>
+      <span style="flex:1;color:${p.userId===myUserId?'var(--gold)':'#c0a060'}">${p.username}</span>
+      <span style="color:#80d0ff;min-width:60px">${p.lastTime?formatTime(p.lastTime):'–'}</span>
+      <span style="color:var(--gold);min-width:32px">+${pts[i]||0}pt</span>
+      <span style="color:#a09040">${p.score||0}pt</span>
+    </div>`).join('');
+  const isLast=round>=(GS.totalRounds||5);
+  document.getElementById('res-next').textContent=isLast?'':
+    `Nächste Runde in 5s…`;
+  ov.classList.add('on');
+  if(!isLast) setTimeout(()=>ov.classList.remove('on'),5000);
+}
+
+function showFinalResults(rankings){
+  const ov=document.getElementById('results-overlay');
+  document.getElementById('res-title').textContent='🏆 Endergebnis';
+  const medals=['🥇','🥈','🥉','','','','',''];
+  document.getElementById('res-table').innerHTML=rankings.map((p,i)=>`
+    <div style="display:flex;gap:16px;align-items:center;padding:4px 12px">
+      <span style="font-size:18px">${medals[i]||''}</span>
+      <span style="flex:1;color:${p.userId===myUserId?'var(--gold)':'#c0a060'};font-size:${i===0?14:12}px">${p.username}</span>
+      <span style="color:var(--gold);font-weight:900">${p.score||0} Punkte</span>
+    </div>`).join('');
+  document.getElementById('res-next').innerHTML='<button onclick="window.location.href=\'/\'" style="margin-top:12px;padding:10px 24px;background:rgba(60,120,60,.3);border:1px solid #3a7020;color:#80e060;font-family:Cinzel,serif;font-size:12px;border-radius:6px;cursor:pointer">← Zurück zum Menü</button>';
+  ov.classList.add('on');
+}
+
+let _toastT=null;
+function toast(msg){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.style.background='rgba(180,40,20,.92)';
+  el.style.border='1px solid #a02010'; el.style.color='#ffb0a0';
+  el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
+  clearTimeout(_toastT); _toastT=setTimeout(()=>el.classList.remove('on'),2500);
+}
+
+// ── Boot ───────────────────────────────────────────────
+function loop(){ requestAnimationFrame(loop); render(); }
+
+(function boot(){
+  const wrap=document.getElementById('canvaswrap');
+  const ro=new ResizeObserver(()=>{applyLayout();ro.disconnect();});
+  ro.observe(wrap);
+  window.addEventListener('resize',applyLayout);
+  window.addEventListener('load',()=>{applyLayout();connect();requestAnimationFrame(loop);});
+})();
+</script>
+</body>
+</html>

@@ -75,6 +75,10 @@ router.get('/maps/mine', async (req, res) => {
 });
 
 // GET /api/workshop/maps/:id
+router.get('/maps/builtin', (req, res) => {
+  res.json(BUILTIN_MAPS);
+});
+
 router.get('/maps/:id', requireAuth, async (req, res) => {
   try {
     const { rows } = await req.db.query(`
@@ -127,6 +131,11 @@ router.delete('/maps/:id', requireAuth, async (req, res) => {
 
 // POST /api/workshop/maps/:id/play — increment play count + start solo game
 router.post('/maps/:id/play', requireAuth, async (req, res) => {
+  // Builtin map shortcut
+  const builtin = BUILTIN_MAPS.find(m => m.id === req.params.id);
+  if (builtin) {
+    return res.json({ ok:true, workshopConfig: builtin.config, mapId: builtin.id, title: builtin.title, game_mode: builtin.game_mode });
+  }
   try {
     const { rows } = await req.db.query(
       'UPDATE workshop_maps SET play_count=play_count+1 WHERE id=$1 AND (is_public=true OR creator_id=$2) RETURNING config',

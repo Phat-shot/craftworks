@@ -3,12 +3,7 @@ const jwt    = require('jsonwebtoken');
 const engine = require('./game/engine');
 const { RACES, TDB, getTowersForRace } = require('./game/towers');
 
-// Active game engines: sessionId -> gameState
-const activeGames = new Map();
-// Game loop intervals: sessionId -> intervalId
-const gameLoops   = new Map();
 
-const TICK_RATE = 20; // ticks per second
 
 module.exports = function setupSocket(io, db) {
 
@@ -142,49 +137,25 @@ module.exports = function setupSocket(io, db) {
           [sessionId, m.userId, m.username]);
       }
 
-      // Create server-side game engine
-      // Build playerRaces map from lobby member data (stored when player joins)
+      // Create game in worker thread
       const playerRaces = {};
       for (const m of members) playerRaces[m.userId] = m.race || 'standard';
       const workshopMapConfig = lobby.workshop_map_config || null;
-      const gs = engine.createGame(sessionId, lobby.difficulty, lobby.game_mode, members, playerRaces, workshopMapConfig);
-      activeGames.set(sessionId, gs);
 
-      // Start game loop
-      const interval = setInterval(() => {
-        const gs = activeGames.get(sessionId);
-        if (!gs) { clearInterval(interval); return; }
-
-        engine.tick(gs);
-
-        const snap = engine.getSnapshot(gs);
-
-        // Emit full state to all players in this game
-        io.to(`game:${sessionId}`).emit('game:tick', snap);
-
-        // Handle events that need one-time notifications
-        if (gs._waveJustStarted) {
-          gs._waveJustStarted = false;
-          const cfg = { wave: gs.wave };
-          io.to(`game:${sessionId}`).emit('game:wave_started', cfg);
-        }
-        if (gs._waveJustEnded) {
-          gs._waveJustEnded = false;
-          io.to(`game:${sessionId}`).emit('game:wave_ended', {
-            wave: gs.wave, bonus: gs._waveEndBonus,
-          });
-        }
-        if (gs.gameOver && !gs._gameOverEmitted) {
-          gs._gameOverEmitted = true;
-          clearInterval(interval);
-          gameLoops.delete(sessionId);
-
-          // Save to DB and emit game over
-          finalizeGame(io, db, sessionId, gs);
-        }
-      }, 1000 / TICK_RATE);
-
-      gameLoops.set(sessionId, interval);
+      gameManager.create(sessionId, {
+        difficulty: lobby.difficulty, mode: lobby.game_mode,
+        players: members, playerRaces, workshopConfig: workshopMapConfig,
+      });
+      // Route messages per mode
+      gameManager.on(sessionId, 'tick',          ({ snap })            => io.to(`game:${sessionId}`).emit('game:tick', snap));
+      gameManager.on(sessionId, 'wave_started',  ({ wave })            => io.to(`game:${sessionId}`).emit('game:wave_started', { wave }));
+      gameManager.on(sessionId, 'wave_ended',    ({ wave, bonus })     => io.to(`game:${sessionId}`).emit('game:wave_ended', { wave, bonus }));
+      // VS: per-player fog-of-war ticks
+      gameManager.on(sessionId, 'vs_tick',       ({ userId, snap })    => io.to(`user:${userId}`).emit('game:vs_tick', snap));
+      // Time Attack: per-player ticks
+      gameManager.on(sessionId, 'ta_tick',       ({ userId, snap })    => io.to(`user:${userId}`).emit('game:ta_tick', snap));
+      gameManager.on(sessionId, 'ta_round_end',  (msg)                 => io.to(`game:${sessionId}`).emit('game:ta_round_end', msg));
+      gameManager.on(sessionId, 'game_over',     ({ win, players })    => finalizeGameFromWorker(io, db, sessionId, players, win));
 
       await db.query("UPDATE lobbies SET status='in_progress' WHERE id=$1", [lobbyId]);
 
@@ -198,71 +169,38 @@ module.exports = function setupSocket(io, db) {
     // ── GAME ACTIONS (server-authoritative) ──
     socket.on('game:join', ({ sessionId }) => {
       socket.join(`game:${sessionId}`);
-      // Send full state immediately on join
-      const gs = activeGames.get(sessionId);
-      if (gs) socket.emit('game:tick', engine.getSnapshot(gs));
     });
 
-    socket.on('game:action', ({ sessionId, action, data }) => {
-      const gs = activeGames.get(sessionId);
-      if (!gs) return socket.emit('game:action_result', { ok:false, err:'no_session' });
-
-      let result;
-      switch (action) {
-        case 'place_tower':   result = engine.actionPlaceTower(gs, userId, data.type, data.row, data.col); break;
-        case 'upgrade_path':  result = engine.actionUpgradePath(gs, userId, data.towerId, data.pi); break;
-        case 'sell_tower':    result = engine.actionSellTower(gs, userId, data.towerId); break;
-        case 'start_wave':    result = engine.actionStartWave(gs, userId); break;
-        default: result = { ok:false, err:'unknown_action' };
-      }
-
+    socket.on('game:action', async ({ sessionId, action, data }) => {
+      if (!gameManager.has(sessionId))
+        return socket.emit('game:action_result', { ok:false, err:'no_session' });
+      const result = await gameManager.action(sessionId, userId, action, data || {});
       socket.emit('game:action_result', { action, ...result });
     });
 
     // Solo game: start engine without lobby
-    socket.on('game:solo_start', async ({ difficulty, race = 'standard', workshopConfig = null }) => {
+    socket.on('game:solo_start', async ({ difficulty, race = 'standard', workshopConfig = null, mode = 'solo' }) => {
       const effectiveDifficulty = workshopConfig?.difficulty || difficulty;
+      const gameMode = workshopConfig?.game_mode || mode; // td/solo/vs/time_attack
       const { rows } = await db.query(
-        `INSERT INTO game_sessions (lobby_id, game_mode, difficulty) VALUES (NULL,'solo',$1) RETURNING id`,
-        [effectiveDifficulty]
+        `INSERT INTO game_sessions (lobby_id, game_mode, difficulty) VALUES (NULL,$1,$2) RETURNING id`,
+        [gameMode, effectiveDifficulty]
       );
       const sessionId = rows[0].id;
-      const playerRaces = { [userId]: race };
-      const gs = engine.createGame(sessionId, effectiveDifficulty, 'solo', [{
-        userId, username, avatar_color: socket.user.avatar_color,
-      }], playerRaces, workshopConfig);
-      // workshopConfig already stored in gs via createGame
 
-      activeGames.set(sessionId, gs);
-
-      const interval = setInterval(() => {
-        const gs = activeGames.get(sessionId);
-        if (!gs) { clearInterval(interval); return; }
-        engine.tick(gs);
-        socket.emit('game:tick', engine.getSnapshot(gs));
-        if (gs._waveJustStarted) {
-          gs._waveJustStarted = false;
-          socket.emit('game:wave_started', { wave: gs.wave });
-        }
-        if (gs._waveJustEnded) {
-          gs._waveJustEnded = false;
-          socket.emit('game:wave_ended', { wave: gs.wave, bonus: gs._waveEndBonus || 0 });
-        }
-        if (gs.gameOver && !gs._gameOverEmitted) {
-          gs._gameOverEmitted = true;
-          clearInterval(interval);
-          gameLoops.delete(sessionId);
-          finalizeGame(io, db, sessionId, gs);
-        }
-      }, 1000 / TICK_RATE);
-
-      gameLoops.set(sessionId, interval);
-      socket.join(`game:${sessionId}`);
-      const myPlayer = gs.players[userId];
-      socket.emit('game:solo_started', {
-        sessionId, difficulty, race,
-        availableTowers: myPlayer?.availableTowers || [],
+      gameManager.create(sessionId, {
+        difficulty: effectiveDifficulty, mode: gameMode,
+        players: [{ userId, username, avatar_color: socket.user.avatar_color }],
+        playerRaces: { [userId]: race },
+        workshopConfig,
       });
+      gameManager.on(sessionId, 'tick',         ({ snap })        => socket.emit('game:tick', snap));
+      gameManager.on(sessionId, 'wave_started',  ({ wave })        => socket.emit('game:wave_started', { wave }));
+      gameManager.on(sessionId, 'wave_ended',    ({ wave, bonus }) => socket.emit('game:wave_ended', { wave, bonus }));
+      gameManager.on(sessionId, 'game_over',     ({ win, players })=> finalizeGameFromWorker(io, db, sessionId, players, win));
+
+      socket.join(`game:${sessionId}`);
+      socket.emit('game:solo_started', { sessionId, difficulty: effectiveDifficulty, race, mode: gameMode });
     });
 
     // ── RACE SELECTION ───────────────────
@@ -291,8 +229,8 @@ module.exports.getRacesHandler = (req, res) => {
 };
 
 // ── HELPERS ──────────────────────────────────────────────
-async function finalizeGame(io, db, sessionId, gs) {
-  const all = Object.values(gs.players);
+async function finalizeGameFromWorker(io, db, sessionId, players, win) {
+  const all = Object.values(players || {});
   all.sort((a, b) => (b.score||0) - (a.score||0));
 
   for (let i = 0; i < all.length; i++) {
@@ -300,22 +238,21 @@ async function finalizeGame(io, db, sessionId, gs) {
     await db.query(
       `UPDATE game_players SET status='finished', wave=$1, score=$2, kills=$3, rank=$4, finished_at=NOW()
        WHERE session_id=$5 AND user_id=$6`,
-      [gs.wave, p.score||0, p.kills||0, i+1, sessionId, p.userId]
-    );
-    if (gs.wave > 0) {
+      [p.wave||0, p.score||0, p.kills||0, i+1, sessionId, p.userId]
+    ).catch(()=>{});
+    if ((p.wave||0) > 0) {
       await db.query(
         'INSERT INTO leaderboard (user_id, game_type, score, wave, difficulty, mode) VALUES ($1,$2,$3,$4,$5,$6)',
-        [p.userId, 'tower_defense', p.score||0, gs.wave, gs.difficulty, gs.mode]
+        [p.userId, 'tower_defense', p.score||0, p.wave||0, p.difficulty||'normal', p.mode||'solo']
       ).catch(() => {});
     }
   }
   await db.query("UPDATE game_sessions SET status='finished', ended_at=NOW() WHERE id=$1", [sessionId]);
 
   io.to(`game:${sessionId}`).emit('game:over', {
-    win: gs._gameOverWin,
-    rankings: all.map((p, i) => ({ ...p, rank: i+1, wave: gs.wave })),
+    win, rankings: all.map((p, i) => ({ ...p, rank: i+1 })),
   });
-  activeGames.delete(sessionId);
+  gameManager.destroy(sessionId);
 }
 
 async function checkLobbyAllReady(io, db, lobbyId) {

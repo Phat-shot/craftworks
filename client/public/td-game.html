@@ -433,7 +433,9 @@ function connectSocket(){
     // solo: wait for user to pick difficulty in diff screen
   });
 
-  socket.on('game:solo_started',({sessionId:sid})=>{
+  socket.on('game:solo_started',({sessionId:sid,mode:m})=>{
+    if(m==='vs'){window.location.href='/vs-game.html';return;}
+    if(m==='time_attack'){window.location.href='/ta-game.html';return;}
     sessionId=sid;
     // Update session with race
     const sess=JSON.parse(sessionStorage.getItem('mp_session')||'{}');

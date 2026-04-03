@@ -21,7 +21,10 @@ export default function GamePage() {
       playerCount,
       solo: false,
     }));
-    window.location.href = '/td-game.html';
+    const gameUrl = mode === 'vs' ? '/vs-game.html'
+      : mode === 'time_attack' ? '/ta-game.html'
+      : '/td-game.html';
+    window.location.href = gameUrl;
   }, []);
 
   return (

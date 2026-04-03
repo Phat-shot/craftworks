@@ -369,6 +369,7 @@ export default function Workshop() {
   const [meta, setMeta]       = useState({ races:{}, towers:{}, wavePreviews:[] });
   const [loading, setLoading] = useState(true);
   const [editor, setEditor]   = useState(null); // null | 'new' | map object
+  const [expBuiltin, setExpBuiltin] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -454,6 +455,42 @@ export default function Workshop() {
           </select>
         </div>
       )}
+
+      {/* Builtin gallery */}
+      <div style={{ padding:'10px 14px 0', borderBottom:'1px solid var(--border2)', marginBottom:4 }}>
+        <div style={{ fontSize:10,color:'var(--text3)',fontWeight:700,marginBottom:6 }}>📚 EINGEBAUTE MAPS</div>
+        <div style={{ display:'flex',gap:7,overflowX:'auto',paddingBottom:8 }}>
+          {builtinMaps.map(m=>(
+            <div key={m.id} style={{ flexShrink:0,width:130,background:'var(--bg2)',
+              border:`1px solid ${expBuiltin===m.id?'var(--gold)':'var(--border2)'}`,borderRadius:8,padding:'8px 9px',cursor:'pointer' }}
+              onClick={()=>setExpBuiltin(expBuiltin===m.id?null:m.id)}>
+              <div style={{ fontSize:20,marginBottom:3 }}>{m.icon||'🗺️'}</div>
+              <div style={{ fontSize:10,fontWeight:700,color:'var(--text)',lineHeight:1.2 }}>{m.title}</div>
+              <div style={{ fontSize:8,color:'var(--text3)',marginTop:2 }}>{MODE_LABELS[m.game_mode]||m.game_mode} · {m.difficulty}</div>
+            </div>
+          ))}
+        </div>
+        {expBuiltin && (() => {
+          const m=builtinMaps.find(x=>x.id===expBuiltin);
+          if(!m) return null;
+          return (
+            <div style={{ background:'rgba(240,200,60,.06)',border:'1px solid rgba(240,200,60,.2)',borderRadius:8,padding:'10px 12px',marginBottom:8,display:'flex',gap:12,alignItems:'flex-start' }}>
+              <div style={{ flex:1 }}>
+                <div style={{ fontWeight:900,color:'var(--gold)',fontSize:13 }}>{m.icon} {m.title}</div>
+                <div style={{ fontSize:10,color:'var(--text3)',margin:'3px 0 6px',lineHeight:1.4 }}>{m.description}</div>
+                <div style={{ display:'flex',gap:5,flexWrap:'wrap' }}>
+                  <span style={{ fontSize:9,padding:'2px 7px',background:'rgba(60,120,60,.3)',borderRadius:8,color:'#80e060' }}>{MODE_LABELS[m.game_mode]||m.game_mode}</span>
+                  <span style={{ fontSize:9,padding:'2px 7px',background:'rgba(60,60,120,.3)',borderRadius:8,color:'#8080ff' }}>{m.difficulty}</span>
+                </div>
+              </div>
+              <div style={{ display:'flex',flexDirection:'column',gap:5,flexShrink:0 }}>
+                <button className="btn btn-primary btn-sm" onClick={()=>{handlePlay(m);setExpBuiltin(null);}}>▶ Spielen</button>
+                <button className="btn btn-ghost btn-sm" onClick={()=>{setEditor({...m,id:null,title:m.title+' (Kopie)',is_builtin:false});setExpBuiltin(null);}}>📋 Kopieren</button>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
 
       {/* Map grid */}
       <div style={{ padding:'0 16px 24px' }}>

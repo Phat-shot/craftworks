@@ -578,10 +578,22 @@ export function RaceEditor({ race, onSave, onClose }) {
     {id:'giftpilz',name:'Giftpilz',cost:115,dmg_type:'magic',icon:'🔧',race:'urwald',color:'#90c020',base_range:3.0,base_dmg:10,base_cd:2000},
     {id:'mondlichtaltar',name:'Mondlichtaltar',cost:200,dmg_type:'magic',icon:'🔧',race:'urwald',color:'#d0d0ff',base_range:4.0,base_dmg:0,base_cd:99999},
   ];
+  const MODES = [
+    {key:'td',   label:'🏰 TD',     slots:4, hint:'Tower-Defense — bis zu 4 Gebäude + Frost/Blitz automatisch'},
+    {key:'vs',   label:'⚔️ VS',     slots:3, hint:'Versus — 3 Kampfgebäude (+ Hauptgebäude, Kaserne, Altar, Verteidigung)'},
+    {key:'time', label:'⏱️ Time',   slots:2, hint:'Time Attack — 2 passive Gebäude'},
+  ];
+  const [activeMode, setActiveMode] = useState('td');
   const [form,setForm]=useState({
     name:race&&!race.is_builtin?race.name:'',icon:race?.icon||'⚔️',
     color:race?.color||'#c0a060',description:race?.description||'',
-    building_ids:race&&!race.is_builtin?(race.building_ids||[]):[],is_public:race?.is_public||false,
+    building_ids:race&&!race.is_builtin?(race.building_ids||[]):[],
+    building_sets:race?.building_sets||{td:[],vs:[],time:[]},
+    main_building:race?.main_building||'',
+    barracks:race?.barracks||'',
+    altar:race?.altar||'',
+    defense_building:race?.defense_building||'',
+    is_public:race?.is_public||false,
   });
   const [customBuildings,setCustomBuildings]=useState([]);
   const [saving,setSaving]=useState(false);
@@ -598,6 +610,11 @@ export function RaceEditor({ race, onSave, onClose }) {
     ...customBuildings.filter(b=>!BUILTIN_BUILDINGS_LIST.find(x=>x.id===b.id)),
   ];
   const toggle=(id)=>setForm(f=>({...f,building_ids:f.building_ids.includes(id)?f.building_ids.filter(x=>x!==id):[...f.building_ids,id]}));
+  const toggleForMode=(id,mode,maxSlots)=>setForm(f=>{
+    const cur=f.building_sets[mode]||[];
+    const updated=cur.includes(id)?cur.filter(x=>x!==id):(cur.length<maxSlots?[...cur,id]:cur);
+    return {...f,building_sets:{...f.building_sets,[mode]:updated}};
+  });
 
   const save=async()=>{
     if(!form.name.trim())return;
@@ -626,14 +643,48 @@ export function RaceEditor({ race, onSave, onClose }) {
             <input type="color" value={form.color} onChange={e=>set('color',e.target.value)} style={{ width:40,height:36,border:'none',background:'none',cursor:'pointer' }} />
           </div>
           <input className="input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschreibung" style={{ marginBottom:14 }} />
-          <div style={{ fontSize:10,color:'var(--text3)',marginBottom:6 }}>
-            Gewählt: {form.building_ids.length} Gebäude
+          {/* Mode tabs */}
+          <div style={{ display:'flex',gap:0,marginBottom:6,borderBottom:'1px solid var(--border2)' }}>
+            {MODES.map(m=>(
+              <button key={m.key} onClick={()=>setActiveMode(m.key)} style={{
+                padding:'5px 10px',border:'none',background:'none',cursor:'pointer',fontSize:10,fontWeight:700,
+                color:activeMode===m.key?'var(--gold)':'var(--text3)',
+                borderBottom:activeMode===m.key?'2px solid var(--gold)':'2px solid transparent',
+              }}>{m.label}</button>
+            ))}
           </div>
-          <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,maxHeight:200,overflowY:'auto' }}>
+          {/* Mode hint */}
+          {MODES.map(m=>activeMode===m.key&&(
+            <div key={m.key} style={{ fontSize:9,color:'var(--text3)',marginBottom:6 }}>{m.hint}</div>
+          ))}
+
+          {/* VS: special slots */}
+          {activeMode==='vs'&&(
+            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,marginBottom:8 }}>
+              {[['main_building','🏰 Hauptgebäude'],['barracks','⚔️ Kaserne'],['altar','🌙 Altar'],['defense_building','🛡️ Verteidigung']].map(([k,l])=>(
+                <div key={k}>
+                  <label style={{ fontSize:9,color:'var(--text3)' }}>{l}</label>
+                  <select className="input" value={form[k]||''} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{ fontSize:10 }}>
+                    <option value="">— Nicht gesetzt —</option>
+                    {allBuildings.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Building grid for current mode */}
+          <div style={{ fontSize:10,color:'var(--text3)',marginBottom:4 }}>
+            {activeMode==='td'?`${form.building_sets?.td?.length||0}/4 gewählt`:
+             activeMode==='vs'?`${form.building_sets?.vs?.length||0}/3 Kampfgebäude`:
+             `${form.building_sets?.time?.length||0}/2 gewählt`}
+          </div>
+          <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,maxHeight:180,overflowY:'auto' }}>
             {allBuildings.map(b=>{
-              const sel=form.building_ids.includes(b.id);
+              const modeSlots = MODES.find(m=>m.key===activeMode)?.slots||4;
+              const sel=(form.building_sets?.[activeMode]||[]).includes(b.id);
               return (
-                <div key={b.id} onClick={()=>toggle(b.id)} style={{
+                <div key={b.id} onClick={()=>toggleForMode(b.id,activeMode,modeSlots)} style={{
                   padding:'7px 9px',borderRadius:7,cursor:'pointer',
                   border:`1.5px solid ${sel?form.color:'var(--border2)'}`,
                   background:sel?`${form.color}18`:'var(--bg2)',

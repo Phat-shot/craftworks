@@ -230,12 +230,16 @@ router.post('/races', requireAuth,
   validate,
   async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'not_authenticated' });
-    const { name, icon='⚔️', color='#888888', description='', building_ids=[], is_public=false } = req.body;
+    const { name, icon='⚔️', color='#888888', description='', building_ids=[],
+      building_sets={}, main_building=null, barracks=null, altar=null,
+      defense_building=null, is_public=false } = req.body;
     try {
       const { rows } = await req.db.query(`
-        INSERT INTO workshop_races (creator_id,name,icon,color,description,building_ids,is_public)
-        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
-      `, [req.user.id, name, icon, color, description, JSON.stringify(building_ids), is_public]);
+        INSERT INTO workshop_races (creator_id,name,icon,color,description,building_ids,
+          building_sets,main_building,barracks,altar,defense_building,is_public)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *
+      `, [req.user.id, name, icon, color, description, JSON.stringify(building_ids),
+          JSON.stringify(building_sets), main_building, barracks, altar, defense_building, is_public]);
       res.json(rows[0]);
     } catch (e) {
       console.error('Race save error:', e.message);
@@ -245,13 +249,17 @@ router.post('/races', requireAuth,
 );
 
 router.put('/races/:id', requireAuth, async (req, res) => {
-  const { name, icon, color, description, building_ids, is_public } = req.body;
+  const { name, icon, color, description, building_ids, building_sets,
+    main_building, barracks, altar, defense_building, is_public } = req.body;
   try {
     const { rows } = await req.db.query(`
       UPDATE workshop_races SET name=$1,icon=$2,color=$3,description=$4,
-        building_ids=$5,is_public=$6,updated_at=NOW()
-      WHERE id=$7 AND creator_id=$8 RETURNING *
-    `, [name, icon, color, description, JSON.stringify(building_ids), is_public, req.params.id, req.user.id]);
+        building_ids=$5,building_sets=$6,main_building=$7,barracks=$8,
+        altar=$9,defense_building=$10,is_public=$11,updated_at=NOW()
+      WHERE id=$12 AND creator_id=$13 RETURNING *
+    `, [name, icon, color, description, JSON.stringify(building_ids||[]),
+        JSON.stringify(building_sets||{}), main_building||null, barracks||null,
+        altar||null, defense_building||null, is_public, req.params.id, req.user.id]);
     if (!rows[0]) return res.status(404).json({ error: 'not_found' });
     res.json(rows[0]);
   } catch { res.status(500).json({ error: 'db_error' }); }
