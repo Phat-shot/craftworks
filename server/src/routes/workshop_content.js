@@ -336,4 +336,55 @@ router.delete('/abilities/:id', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ═══════════════════════════════════════════════════════════════
+//  WAVE SETS
+// ═══════════════════════════════════════════════════════════════
+
+router.get('/wave-sets', optionalAuth, async (req, res) => {
+  try {
+    const uid = req.user?.id || null;
+    const { rows } = await req.db.query(`
+      SELECT w.*, u.username AS creator_name
+      FROM workshop_wave_sets w JOIN users u ON u.id=w.creator_id
+      WHERE ($1::uuid IS NOT NULL AND w.creator_id=$1) OR w.is_public=true
+      ORDER BY w.updated_at DESC
+    `, [uid]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: 'db_error' }); }
+});
+
+router.post('/wave-sets', requireAuth, async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'not_authenticated' });
+  const { name, description='', wave_count=25, mode='standard', default_spawn='snake',
+    standard={}, waves=[], is_public=false } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: 'name_required' });
+  try {
+    const { rows } = await req.db.query(`
+      INSERT INTO workshop_wave_sets (creator_id,name,description,wave_count,mode,default_spawn,standard,waves,is_public)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *
+    `, [req.user.id, name.trim(), description, wave_count, mode, default_spawn,
+        JSON.stringify(standard), JSON.stringify(waves), is_public]);
+    res.json(rows[0]);
+  } catch (e) { console.error('Wave-set save:', e.message); res.status(500).json({ error: 'db_error', detail: e.message }); }
+});
+
+router.put('/wave-sets/:id', requireAuth, async (req, res) => {
+  const { name, description, wave_count, mode, default_spawn, standard, waves, is_public } = req.body;
+  try {
+    const { rows } = await req.db.query(`
+      UPDATE workshop_wave_sets SET name=$1,description=$2,wave_count=$3,mode=$4,
+        default_spawn=$5,standard=$6,waves=$7,is_public=$8,updated_at=NOW()
+      WHERE id=$9 AND creator_id=$10 RETURNING *
+    `, [name, description, wave_count||25, mode||'standard', default_spawn||'snake',
+        JSON.stringify(standard||{}), JSON.stringify(waves||[]), is_public, req.params.id, req.user.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: 'db_error' }); }
+});
+
+router.delete('/wave-sets/:id', requireAuth, async (req, res) => {
+  await req.db.query('DELETE FROM workshop_wave_sets WHERE id=$1 AND creator_id=$2', [req.params.id, req.user.id]);
+  res.json({ ok: true });
+});
+
 module.exports = router;

@@ -146,7 +146,8 @@ module.exports = function setupSocket(io, db) {
       // Build playerRaces map from lobby member data (stored when player joins)
       const playerRaces = {};
       for (const m of members) playerRaces[m.userId] = m.race || 'standard';
-      const gs = engine.createGame(sessionId, lobby.difficulty, lobby.game_mode, members, playerRaces);
+      const workshopMapConfig = lobby.workshop_map_config || null;
+      const gs = engine.createGame(sessionId, lobby.difficulty, lobby.game_mode, members, playerRaces, workshopMapConfig);
       activeGames.set(sessionId, gs);
 
       // Start game loop
@@ -229,10 +230,9 @@ module.exports = function setupSocket(io, db) {
       const playerRaces = { [userId]: race };
       const gs = engine.createGame(sessionId, effectiveDifficulty, 'solo', [{
         userId, username, avatar_color: socket.user.avatar_color,
-      }], playerRaces);
-      if (workshopConfig?.wave_overrides?.length) {
-        gs.waveOverrides = workshopConfig.wave_overrides;
-      }
+      }], playerRaces, workshopConfig);
+      // workshopConfig already stored in gs via createGame
+
       activeGames.set(sessionId, gs);
 
       const interval = setInterval(() => {

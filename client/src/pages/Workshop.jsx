@@ -192,6 +192,10 @@ function MapEditor({ map, meta, onSave, onClose }) {
   const [difficulty, setDiff]   = useState(map?.config?.difficulty || 'normal');
   const [races, setRaces]       = useState(map?.config?.available_races || Object.keys(BUILTIN_RACES));
   const [waveOverrides, setWaveOverrides] = useState(map?.config?.wave_overrides || []);
+  const [bgStyle,   setBgStyle]   = useState(map?.config?.bg_style   || 'grass');
+  const [pathStyle, setPathStyle] = useState(map?.config?.path_style || 'dirt');
+  const [startIcon, setStartIcon] = useState(map?.config?.start_icon || '▼');
+  const [goalIcon,  setGoalIcon]  = useState(map?.config?.goal_icon  || '🏰');
   const [saving, setSaving]     = useState(false);
   const [tab, setTab]           = useState('general'); // general | waves | races
 
@@ -203,7 +207,7 @@ function MapEditor({ map, meta, onSave, onClose }) {
       description: desc.trim(),
       game_mode: 'td',
       is_public: isPublic,
-      config: { difficulty, available_races: races, wave_overrides: waveOverrides },
+      config: { difficulty, available_races: races, wave_overrides: waveOverrides, bg_style: bgStyle, path_style: pathStyle, start_icon: startIcon, goal_icon: goalIcon },
     };
     try {
       const r = isNew
@@ -271,6 +275,30 @@ function MapEditor({ map, meta, onSave, onClose }) {
               <div style={{ display:'flex', alignItems:'center', gap:10 }}>
                 <input type="checkbox" id="pub" checked={isPublic} onChange={e => setPublic(e.target.checked)} />
                 <label htmlFor="pub" style={{ fontSize:13, color:'var(--text2)' }}>Öffentlich in der Galerie</label>
+              </div>
+              <div style={{ borderTop:'1px solid var(--border2)', paddingTop:10, marginTop:4 }}>
+                <div style={{ fontSize:11, color:'var(--text3)', fontWeight:700, marginBottom:8 }}>🎨 Aussehen</div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                  <div><label style={{ fontSize:10, color:'var(--text3)' }}>Hintergrund</label>
+                    <select className="input" value={bgStyle} onChange={e=>setBgStyle(e.target.value)}>
+                      <option value="grass">🌿 Gras</option><option value="snow">❄️ Schnee</option>
+                      <option value="desert">🏜️ Wüste</option><option value="lava">🌋 Lava</option>
+                      <option value="dark">🌑 Dunkel</option><option value="forest">🌲 Wald</option>
+                    </select></div>
+                  <div><label style={{ fontSize:10, color:'var(--text3)' }}>Pfad-Textur</label>
+                    <select className="input" value={pathStyle} onChange={e=>setPathStyle(e.target.value)}>
+                      <option value="dirt">🟫 Erde</option><option value="stone">🪨 Stein</option>
+                      <option value="ice">🧊 Eis</option><option value="sand">🏜️ Sand</option>
+                    </select></div>
+                  <div><label style={{ fontSize:10, color:'var(--text3)' }}>Start-Icon</label>
+                    <select className="input" value={startIcon} onChange={e=>setStartIcon(e.target.value)}>
+                      {['▼','⬇️','🚪','⛩️','🏕️','🌀'].map(i=><option key={i} value={i}>{i}</option>)}
+                    </select></div>
+                  <div><label style={{ fontSize:10, color:'var(--text3)' }}>Ziel-Icon</label>
+                    <select className="input" value={goalIcon} onChange={e=>setGoalIcon(e.target.value)}>
+                      {['🏰','⬆️','👑','🔮','⭐','💀'].map(i=><option key={i} value={i}>{i}</option>)}
+                    </select></div>
+                </div>
               </div>
             </div>
           )}

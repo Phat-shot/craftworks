@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { api } from '../api';
+import { WaveSetEditor } from './WaveSetEditor';
 
 // ── Shared constants ───────────────────────────────────────────
 const DMG_TYPES  = ['phys','magic','expl'];
@@ -361,7 +362,6 @@ export function BuildingEditor({ building, onSave, onClose }) {
         </div>
         <div style={{ flex:1,overflow:'auto',padding:'12px 16px' }}>
           {tab==='stats'&&<>
-            <BuiltinGallery items={builtinBldg} type="buildings" label="Gebäude" onCopy={copyBuiltin} />
             <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
               <div style={{ gridColumn:'1/-1',display:'flex',gap:8,alignItems:'center' }}>
                 <select value={form.icon} onChange={e=>set('icon',e.target.value)}
@@ -427,7 +427,6 @@ export function BuildingEditor({ building, onSave, onClose }) {
           )}
           {tab==='abilities'&&(
             <div>
-              <BuiltinGallery items={builtinAbil} type="abilities" label="Abilities" onCopy={a=>{/* copy to custom */}} />
               <AbilityPicker selectedIds={form.ability_ids} onChange={ids=>set('ability_ids',ids)}
                 builtinAbilities={builtinAbil} customAbilities={customAbil} />
             </div>
@@ -495,7 +494,6 @@ export function UnitEditor({ unit, onSave, onClose }) {
           <span onClick={onClose} style={{ cursor:'pointer',color:'var(--text3)',fontSize:20 }}>✕</span>
         </div>
         <div style={{ flex:1,overflow:'auto',padding:'12px 16px' }}>
-          <BuiltinGallery items={builtinUnits} type="units" label="Einheiten" onCopy={copyBuiltin} />
           <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10 }}>
             <div style={{ gridColumn:'1/-1',display:'flex',gap:8,alignItems:'center' }}>
               <select value={form.icon} onChange={e=>set('icon',e.target.value)}
@@ -542,7 +540,6 @@ export function UnitEditor({ unit, onSave, onClose }) {
           </div>
           <div style={{ borderTop:'1px solid var(--border2)',paddingTop:10 }}>
             <div style={{ fontSize:11,fontWeight:700,color:'var(--text2)',marginBottom:8 }}>✨ Abilities (bis zu 3)</div>
-            <BuiltinGallery items={builtinAbil} type="abilities" label="Abilities" onCopy={()=>{}} />
             <AbilityPicker selectedIds={form.ability_ids} onChange={ids=>set('ability_ids',ids)}
               builtinAbilities={builtinAbil} customAbilities={customAbil} />
           </div>
@@ -629,7 +626,6 @@ export function RaceEditor({ race, onSave, onClose }) {
             <input type="color" value={form.color} onChange={e=>set('color',e.target.value)} style={{ width:40,height:36,border:'none',background:'none',cursor:'pointer' }} />
           </div>
           <input className="input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschreibung" style={{ marginBottom:14 }} />
-          <BuiltinGallery items={allBuildings.filter(b=>b.race&&b.race!=='custom')} type="buildings" label="Gebäude wählen" onCopy={()=>{}} />
           <div style={{ fontSize:10,color:'var(--text3)',marginBottom:6 }}>
             Gewählt: {form.building_ids.length} Gebäude
           </div>
@@ -678,22 +674,35 @@ export default function WorkshopContent() {
   const [units,setUnits]=useState([]);
   const [races,setRaces]=useState([]);
   const [abilities,setAbilities]=useState([]);
+  const [waveSets,setWaveSets]=useState([]);
   const [editor,setEditor]=useState(null);
   const [loading,setLoading]=useState(false);
+
+  const [builtinBldg, setBuiltinBldg] = useState([]);
+  const [builtinUnits2, setBuiltinUnits2] = useState([]);
+  const [builtinAbil2, setBuiltinAbil2] = useState([]);
 
   const load=useCallback(async()=>{
     setLoading(true);
     try{
-      const [br,ur,rr,ar]=await Promise.all([
+      const [br,ur,rr,ar,bbl,bbu,bba]=await Promise.all([
         api.get('/workshop/buildings?mine=true').catch(()=>({data:[]})),
         api.get('/workshop/units?mine=true').catch(()=>({data:[]})),
         api.get('/workshop/races').catch(()=>({data:[]})),
         api.get('/workshop/abilities').catch(()=>({data:[]})),
+        api.get('/workshop/buildings/builtin').catch(()=>({data:[]})),
+        api.get('/workshop/units/builtin').catch(()=>({data:[]})),
+        api.get('/workshop/abilities/builtin').catch(()=>({data:[]})),
       ]);
       setBuildings(Array.isArray(br.data)?br.data:[]);
       setUnits(Array.isArray(ur.data)?ur.data:[]);
       setRaces(Array.isArray(rr.data)?rr.data:[]);
       setAbilities(Array.isArray(ar.data)?ar.data:[]);
+      const wsr = await api.get('/workshop/wave-sets').catch(()=>({data:[]}));
+      setWaveSets(Array.isArray(wsr.data)?wsr.data:[]);
+      setBuiltinBldg(Array.isArray(bbl.data)?bbl.data:[]);
+      setBuiltinUnits2(Array.isArray(bbu.data)?bbu.data.map(u=>({...u,icon:u.icon||'👾',color:u.col||'#b02810'})):[]);
+      setBuiltinAbil2(Array.isArray(bba.data)?bba.data:[]);
     }catch(e){console.error('Load error:',e);}
     setLoading(false);
   },[]);
@@ -715,7 +724,7 @@ export default function WorkshopContent() {
     </button>
   );
 
-  const itemTypeLabel={buildings:'Gebäude',units:'Einheit',races:'Rasse',abilities:'Ability'};
+  const itemTypeLabel={buildings:'Gebäude',units:'Einheit',races:'Rasse',abilities:'Ability','wave-sets':'Wave-Set'};
 
   const renderItems=(items,type)=>{
     const filtered=(items||[]).filter(x=>!x.is_builtin);
@@ -732,6 +741,7 @@ export default function WorkshopContent() {
                   {type==='units'&&`${item.base_hp||0}HP · ×${item.base_speed||0}`}
                   {type==='races'&&`${item.building_ids?.length||0} Gebäude`}
                   {type==='abilities'&&`${(item.levels||[]).length} Stufen`}
+                  {type==='wave-sets'&&`${item.wave_count||25} Waves`}
                 </div>
               </div>
               <div style={{ width:10,height:10,borderRadius:'50%',background:item.color||'#888',border:'1px solid rgba(255,255,255,.2)',flexShrink:0 }} />
@@ -747,7 +757,7 @@ export default function WorkshopContent() {
         ))}
         {filtered.length===0&&(
           <div className="empty-state" style={{ gridColumn:'1/-1' }}>
-            <div className="empty-icon">{type==='buildings'?'🏰':type==='units'?'👾':type==='races'?'⚔️':'✨'}</div>
+            <div className="empty-icon">{type==='buildings'?'🏰':type==='units'?'👾':type==='races'?'⚔️':type==='wave-sets'?'🌊':'✨'}</div>
             Erstelle dein erstes {itemTypeLabel[type]}!
           </div>
         )}
@@ -755,7 +765,7 @@ export default function WorkshopContent() {
     );
   };
 
-  const newLabel={buildings:'Gebäude',units:'Einheit',races:'Rasse',abilities:'Ability'}[tab];
+  const newLabel={buildings:'Gebäude',units:'Einheit',races:'Rasse',abilities:'Ability','wave-sets':'Wave-Set'}[tab];
 
   return (
     <div style={{ height:'100%',overflow:'auto' }}>
@@ -770,19 +780,44 @@ export default function WorkshopContent() {
         {tabBtn('units','👾 Einheiten',units.length)}
         {tabBtn('races','⚔️ Rassen',races.filter(x=>!x.is_builtin).length)}
         {tabBtn('abilities','✨ Abilities',abilities.length)}
+        {tabBtn('wave-sets','🌊 Wave-Sets',waveSets.length)}
       </div>
       {loading?<div className="loading-screen">⏳</div>:(
         <>
-          {tab==='buildings'&&renderItems(buildings,'buildings')}
-          {tab==='units'    &&renderItems(units,'units')}
-          {tab==='races'    &&renderItems(races,'races')}
-          {tab==='abilities'&&renderItems(abilities,'abilities')}
+          {tab==='buildings'&&<>
+            <div style={{ padding:'10px 16px 0' }}>
+              <BuiltinGallery items={builtinBldg} type="buildings" label="Eingebaute Gebäude"
+                onCopy={item=>setEditor({type:'buildings',item:{...item,id:null,name:item.name+' (Kopie)',
+                  base_dmg:item.baseDmg||item.base_dmg||20,base_range:item.baseRange||item.base_range||3,
+                  base_cd:item.baseCd||item.base_cd||1000,cost:item.cost||100,
+                  dmg_type:item.dmgType||item.dmg_type||'phys',can_hit_air:item.canHitAir??item.can_hit_air??true}})} />
+            </div>
+            {renderItems(buildings,'buildings')}
+          </>}
+          {tab==='units'&&<>
+            <div style={{ padding:'10px 16px 0' }}>
+              <BuiltinGallery items={builtinUnits2} type="units" label="Eingebaute Einheiten"
+                onCopy={item=>setEditor({type:'units',item:{...item,id:null,name:item.name+' (Kopie)',
+                  base_hp:item.base_hp||100,base_speed:item.base_speed||1.5,base_reward:item.base_reward||10}})} />
+            </div>
+            {renderItems(units,'units')}
+          </>}
+          {tab==='races'&&renderItems(races,'races')}
+          {tab==='wave-sets'&&renderItems(waveSets,'wave-sets')}
+          {tab==='abilities'&&<>
+            <div style={{ padding:'10px 16px 0' }}>
+              <BuiltinGallery items={builtinAbil2} type="abilities" label="Eingebaute Abilities (Tower-Pfade)"
+                onCopy={item=>setEditor({type:'abilities',item:{...item,id:null,name:item.name+' (Kopie)'}})} />
+            </div>
+            {renderItems(abilities,'abilities')}
+          </>}
         </>
       )}
       {editor?.type==='buildings'&&<BuildingEditor building={editor.item} onSave={()=>{setEditor(null);load();}} onClose={()=>setEditor(null)} />}
       {editor?.type==='units'    &&<UnitEditor unit={editor.item}         onSave={()=>{setEditor(null);load();}} onClose={()=>setEditor(null)} />}
       {editor?.type==='races'    &&<RaceEditor race={editor.item}         onSave={()=>{setEditor(null);load();}} onClose={()=>setEditor(null)} />}
       {editor?.type==='abilities'&&<AbilityEditor ability={editor.item}   onSave={()=>{setEditor(null);load();}} onClose={()=>setEditor(null)} />}
+      {editor?.type==='wave-sets'&&<WaveSetEditor waveSet={editor.item} onSave={()=>{setEditor(null);load();}} onClose={()=>setEditor(null)} />}
     </div>
   );
 }

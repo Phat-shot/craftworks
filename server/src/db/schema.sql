@@ -300,3 +300,24 @@ CREATE TABLE IF NOT EXISTS workshop_abilities (
 );
 
 CREATE INDEX IF NOT EXISTS idx_workshop_abilities_creator ON workshop_abilities(creator_id);
+
+-- ── WORKSHOP: WAVE SETS ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workshop_wave_sets (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  creator_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name          VARCHAR(64) NOT NULL,
+  description   VARCHAR(256),
+  wave_count    INTEGER NOT NULL DEFAULT 25,
+  mode          VARCHAR(16) NOT NULL DEFAULT 'standard', -- 'standard'|'full_custom'
+  default_spawn VARCHAR(16) NOT NULL DEFAULT 'snake',    -- 'snake'|'group'|'parallel'|'random'
+  standard      JSONB NOT NULL DEFAULT '{}',  -- StandardConfig: base_type,hp_factor,count_start,...
+  waves         JSONB NOT NULL DEFAULT '[]',  -- Per-wave overrides
+  is_public     BOOLEAN DEFAULT FALSE,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_workshop_wave_sets_creator ON workshop_wave_sets(creator_id);
+
+ALTER TABLE workshop_wave_sets ADD COLUMN IF NOT EXISTS mode VARCHAR(16) NOT NULL DEFAULT 'standard';
+ALTER TABLE workshop_wave_sets ADD COLUMN IF NOT EXISTS default_spawn VARCHAR(16) NOT NULL DEFAULT 'snake';
+ALTER TABLE workshop_wave_sets ADD COLUMN IF NOT EXISTS standard JSONB NOT NULL DEFAULT '{}';

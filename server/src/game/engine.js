@@ -197,8 +197,8 @@ let _eid = 0;
 let _bid = 0;
 
 function mkEnemy(cfg, wave) {
-  const b   = EBASE[cfg.type];
-  const hp  = Math.round(EBASE_HP[cfg.type] * cfg.hpMult);
+  const b   = EBASE[cfg.type] || EBASE['basic'];
+  const hp  = cfg.hp !== undefined ? Math.round(cfg.hp) : Math.round((EBASE_HP[cfg.type]||100) * (cfg.hpMult||1));
   const spd = b.spdBase * cfg.spdMult;
   const rew = cfg.rew || Math.round(b.rewBase * (1 + wave * .04));
   return {
@@ -215,7 +215,7 @@ function mkEnemy(cfg, wave) {
   };
 }
 
-function createGame(sessionId, difficulty, mode, players, playerRaces = {}) {
+function createGame(sessionId, difficulty, mode, players, playerRaces = {}, workshopConfig = null) {
   const diffMult = { easy:1.0, normal:1.5, hard:2.0, expert:2.5, horror:3.0 }[difficulty] || 1.5;
   const playerCount = players.length;
 
@@ -235,8 +235,12 @@ function createGame(sessionId, difficulty, mode, players, playerRaces = {}) {
   const path = findPath([]);
   const pathSet = new Set((path||[]).map(([r,c]) => `${r},${c}`));
 
+  const maxWaves = workshopConfig?.wave_set?.wave_count || 25;
+
   return {
     sessionId, difficulty, mode, diffMult, playerCount,
+    workshopConfig,
+    maxWaves,
     players: playerState,
     towers: [], enemies: [], bullets: [], particles: [], bolts: [], fireZones: [],
     wave: 0, waveActive: false, gameOver: false,
@@ -270,7 +274,29 @@ function tick(gs) {
 function updateSpawn(gs, dt) {
   if (!gs.waveActive || gs.spawnIdx >= gs.spawnQ.length) return;
   gs.spawnTimer -= dt * 1000;
-  if (gs.spawnTimer <= 0) {
+  if (gs.spawnTimer > 0) return;
+
+  const spawnType = gs.waveSpawnType || 'snake';
+
+  if (spawnType === 'parallel') {
+    // All at once
+    while (gs.spawnIdx < gs.spawnQ.length)
+      gs.enemies.push(gs.spawnQ[gs.spawnIdx++]);
+
+  } else if (spawnType === 'group') {
+    // Spawn GROUP_SIZE at once, then pause
+    const GROUP_SIZE = Math.max(2, Math.floor(gs.spawnQ.length / 4));
+    const end = Math.min(gs.spawnIdx + GROUP_SIZE, gs.spawnQ.length);
+    while (gs.spawnIdx < end) gs.enemies.push(gs.spawnQ[gs.spawnIdx++]);
+    gs.spawnTimer = gs.spawnInterval * 3; // long pause between groups
+
+  } else if (spawnType === 'random') {
+    // Random jitter ±40%
+    gs.enemies.push(gs.spawnQ[gs.spawnIdx++]);
+    gs.spawnTimer = gs.spawnInterval * (0.6 + Math.random() * 0.8);
+
+  } else {
+    // 'snake': default — tight formation, short interval
     gs.enemies.push(gs.spawnQ[gs.spawnIdx++]);
     gs.spawnTimer = gs.spawnInterval;
   }
@@ -683,18 +709,85 @@ function checkWaveEnd(gs) {
   }
   gs._waveEndBonus = bonus;
   gs._waveJustEnded = true;
-  if (gs.wave >= 25) endGame(gs, true);
+  if (gs.wave >= (gs.maxWaves || 25)) endGame(gs, true);
+}
+
+function buildWaveConfig(gs, waveNum) {
+  // Check for workshop wave set override
+  const wsConfig = gs.workshopConfig;
+  if (wsConfig?.wave_set) {
+    const ws = wsConfig.wave_set;
+    const mode = ws.mode || 'standard';
+
+    if (mode === 'standard') {
+      // Standard mode: base type with scaling + special rules
+      const std = ws.standard || {};
+      const baseType = std.base_type || 'basic';
+      const hpFactor = std.hp_factor || 1.15;
+      const countStart = std.count_start || 6;
+      const countPerWave = std.count_per_wave || 1.5;
+
+      // Apply special rules to override type
+      let type = baseType;
+      const rules = std.special_rules || [];
+      for (const rule of rules) {
+        if (rule.waves && rule.waves.includes(waveNum)) { type = rule.type; break; }
+        if (rule.every && waveNum % rule.every === 0) { type = rule.type; break; }
+      }
+
+      const bossNum = Math.floor(waveNum / (std.boss_interval || 10));
+      const hp = EBASE_HP[type] * Math.pow(hpFactor, waveNum - 1) * gs.diffMult;
+      const count = type === 'boss' ? 1 : Math.round(countStart + waveNum * countPerWave);
+      return {
+        type, isAir: type.startsWith('air'), count,
+        hp, hpMult: 1,
+        spdMult: 1 + Math.min(0.5, (waveNum-1)*0.018),
+        armorPhys: type==='boss' ? Math.min(0.4, 0.05*bossNum) : 0,
+        armorMagic: type==='boss' ? Math.min(0.3, 0.03*bossNum) : 0,
+        rew: null,
+        spawn: (ws.waves?.find(w=>w.wave===waveNum)?.spawn) || ws.default_spawn || 'snake',
+      };
+    }
+
+    if (mode === 'full_custom') {
+      const wovr = ws.waves?.find(w => w.wave === waveNum);
+      if (wovr && !wovr.disabled) {
+        const baseCfg = getWaveConfig(waveNum, gs.diffMult);
+        return {
+          ...baseCfg,
+          type: wovr.type || baseCfg.type,
+          count: wovr.count || baseCfg.count,
+          hp: baseCfg.hp * (wovr.hpMult || 1),
+          spawn: wovr.spawn || ws.default_spawn || 'snake',
+        };
+      }
+    }
+  }
+  // Default: use engine config
+  const cfg = getWaveConfig(waveNum, gs.diffMult);
+  return { ...cfg, spawn: 'snake' };
 }
 
 function startWave(gs) {
-  if (gs.waveActive || gs.gameOver || gs.wave >= 25) return false;
+  if (gs.waveActive || gs.gameOver || gs.wave >= (gs.workshopConfig?.wave_set?.wave_count || 25)) return false;
   gs.wave++;
-  const cfg = getWaveConfig(gs.wave, gs.diffMult);
+  const cfg = buildWaveConfig(gs, gs.wave);
+  if (!cfg) return false;
   gs.waveActive = true;
   gs.spawnQ = [];
-  for (let i = 0; i < cfg.count; i++) gs.spawnQ.push(mkEnemy(cfg, gs.wave));
+  // Use cfg.hp directly if provided (workshop), else multiply EBASE_HP
+  const hpBase = cfg.hp !== undefined ? cfg.hp : (EBASE_HP[cfg.type]||100) * cfg.hpMult;
+  for (let i = 0; i < cfg.count; i++) {
+    gs.spawnQ.push({
+      ...mkEnemy({...cfg, hp: hpBase}, gs.wave),
+    });
+  }
   gs.spawnIdx = 0;
-  gs.spawnInterval = Math.max(230, 1300 - gs.wave*30);
+  gs.waveSpawnType = cfg.spawn || 'snake';
+  const baseInterval = gs.workshopConfig?.wave_set?.standard?.spawn_interval || Math.max(180, 1300 - gs.wave*28);
+  gs.spawnInterval = gs.waveSpawnType === 'snake' ? baseInterval * 0.7
+                   : gs.waveSpawnType === 'group' ? baseInterval
+                   : baseInterval;
   gs.spawnTimer = 0;
   gs._waveJustStarted = true;
   return true;
