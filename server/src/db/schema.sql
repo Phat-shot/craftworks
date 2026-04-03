@@ -280,3 +280,23 @@ ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS
 CREATE INDEX IF NOT EXISTS idx_workshop_buildings_creator ON workshop_buildings(creator_id);
 CREATE INDEX IF NOT EXISTS idx_workshop_units_creator     ON workshop_units(creator_id);
 CREATE INDEX IF NOT EXISTS idx_workshop_races_creator     ON workshop_races(creator_id);
+
+-- ── WORKSHOP: ABILITIES ───────────────────────────────────────
+-- Abilities are reusable upgrade paths assignable to buildings and units
+-- Each ability has up to 6 levels (0=passive/base, 1-5=upgrades)
+CREATE TABLE IF NOT EXISTS workshop_abilities (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  creator_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        VARCHAR(64) NOT NULL,
+  description VARCHAR(256),
+  icon        VARCHAR(8)  NOT NULL DEFAULT '⬆️',
+  -- levels: array of 6 objects [{desc, cost, effects:{dmg,rangeDelta,...}}]
+  -- level 0 = passive/always-on base effect (cost=0)
+  -- levels 1-5 = upgrades
+  levels      JSONB NOT NULL DEFAULT '[]',
+  is_public   BOOLEAN DEFAULT FALSE,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workshop_abilities_creator ON workshop_abilities(creator_id);

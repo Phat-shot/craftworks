@@ -262,4 +262,78 @@ router.delete('/races/:id', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ═══════════════════════════════════════════════════════════════
+//  ABILITIES
+// ═══════════════════════════════════════════════════════════════
+
+// Builtin abilities = all upgrade paths of all builtin towers
+router.get('/abilities/builtin', (req, res) => {
+  const { TDB } = require('../game/towers');
+  const abilities = [];
+  for (const [towerId, tower] of Object.entries(TDB)) {
+    (tower.paths || []).forEach((path, pi) => {
+      abilities.push({
+        id: `${towerId}_${path.id}`,
+        name: path.name,
+        icon: path.icon,
+        tower: tower.name,
+        tower_id: towerId,
+        race: tower.race,
+        path_index: pi,
+        levels: [
+          { desc: 'Basis (kein Upgrade)', cost: 0, effects: {} },
+          ...path.upgrades.map(u => ({ desc: u.desc, cost: u.cost, effects:
+            Object.fromEntries(Object.entries(u).filter(([k])=>!['desc','cost'].includes(k)))
+          }))
+        ],
+        is_builtin: true,
+      });
+    });
+  }
+  res.json(abilities);
+});
+
+router.get('/abilities', optionalAuth, async (req, res) => {
+  try {
+    const uid = req.user?.id || null;
+    const { rows } = await req.db.query(`
+      SELECT a.*, u.username AS creator_name
+      FROM workshop_abilities a JOIN users u ON u.id=a.creator_id
+      WHERE ($1::uuid IS NOT NULL AND a.creator_id=$1) OR a.is_public=true
+      ORDER BY a.updated_at DESC
+    `, [uid]);
+    res.json(rows);
+  } catch (e) { console.error('Abilities GET error:', e.message); res.status(500).json({ error: 'db_error' }); }
+});
+
+router.post('/abilities', requireAuth, async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'not_authenticated' });
+  const { name, description='', icon='⬆️', levels=[], is_public=false } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: 'name_required' });
+  try {
+    const { rows } = await req.db.query(`
+      INSERT INTO workshop_abilities (creator_id,name,description,icon,levels,is_public)
+      VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
+    `, [req.user.id, name.trim(), description, icon, JSON.stringify(levels), is_public]);
+    res.json(rows[0]);
+  } catch (e) { console.error('Ability save error:', e.message); res.status(500).json({ error: 'db_error', detail: e.message }); }
+});
+
+router.put('/abilities/:id', requireAuth, async (req, res) => {
+  const { name, description, icon, levels, is_public } = req.body;
+  try {
+    const { rows } = await req.db.query(`
+      UPDATE workshop_abilities SET name=$1,description=$2,icon=$3,levels=$4,is_public=$5,updated_at=NOW()
+      WHERE id=$6 AND creator_id=$7 RETURNING *
+    `, [name, description, icon, JSON.stringify(levels), is_public, req.params.id, req.user.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: 'db_error' }); }
+});
+
+router.delete('/abilities/:id', requireAuth, async (req, res) => {
+  await req.db.query('DELETE FROM workshop_abilities WHERE id=$1 AND creator_id=$2', [req.params.id, req.user.id]);
+  res.json({ ok: true });
+});
+
 module.exports = router;
