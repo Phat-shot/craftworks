@@ -16,14 +16,26 @@ export function LobbyList() {
   const [joinCode, setJoinCode] = useState('');
   const [form, setForm] = useState({ name: '', game_mode: 'coop', difficulty: 'normal', max_players: 4, is_public: true });
   const [error, setError] = useState('');
+  const [builtinMaps, setBuiltinMaps] = useState([]);
+  const [selectedMap, setSelectedMap] = useState(null);
 
   const load = () => api.get('/lobbies/public').then(r => setLobbies(r.data)).catch(()=>{});
+  useEffect(() => {
+    api.get('/workshop/maps/builtin')
+      .then(r => { if(Array.isArray(r.data)) setBuiltinMaps(r.data); })
+      .catch(() => setBuiltinMaps([
+        {id:'builtin_td_default',title:'Grünes Tal',  icon:'🌿',game_mode:'td',difficulty:'normal'},
+        {id:'builtin_td_desert', title:'Wüstenpfad',  icon:'🏜️',game_mode:'td',difficulty:'hard'},
+        {id:'builtin_vs_arena',  title:'Zentralarena',icon:'⚔️',game_mode:'vs',difficulty:'normal'},
+        {id:'builtin_ta_spiral', title:'Spirale',      icon:'🌀',game_mode:'time_attack',difficulty:'normal'},
+      ]));
+  }, []);
   useEffect(() => { load(); const iv = setInterval(load, 8000); return () => clearInterval(iv); }, []);
 
   const create = async () => {
     setError('');
     try {
-      const { data } = await api.post('/lobbies', form);
+      const { data } = await api.post('/lobbies', { ...form, workshop_map_config: selectedMap?.config || selectedMap || null });
       navigate(`/lobby/${data.id}`);
     } catch (e) { setError(e.response?.data?.error || 'error'); }
   };
@@ -80,6 +92,36 @@ export function LobbyList() {
               </select>
             </div>
           </div>
+          {/* Map gallery */}
+          {builtinMaps.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <label className="form-label">🗺️ Map</label>
+              <div style={{ display:'flex', gap:6, overflowX:'auto', paddingBottom:4 }}>
+                {builtinMaps.map(m => (
+                  <div key={m.id} onClick={() => setSelectedMap(m)} style={{
+                    flexShrink:0, width:76, padding:'6px 4px', textAlign:'center', cursor:'pointer',
+                    borderRadius:7, border:`2px solid ${selectedMap?.id===m.id?'var(--gold)':'var(--border2)'}`,
+                    background: selectedMap?.id===m.id?'rgba(240,200,60,.1)':'var(--bg2)',
+                    transition:'all .15s',
+                  }}>
+                    <div style={{ fontSize:18 }}>{m.icon||'🗺️'}</div>
+                    <div style={{ fontSize:8, fontWeight:700, color:'var(--text2)', lineHeight:1.3, marginTop:2 }}>{(m.title||m.name||'?').slice(0,12)}</div>
+                    <div style={{ fontSize:7, color:'var(--text3)', marginTop:1 }}>{m.game_mode}</div>
+                  </div>
+                ))}
+              </div>
+              {selectedMap && (
+                <div style={{ fontSize:10, color:'var(--text3)', marginTop:4 }}>
+                  Gewählt: {selectedMap.icon} {selectedMap.title||selectedMap.name} — {selectedMap.game_mode}
+                  {selectedMap.game_mode !== form.game_mode && (
+                    <span style={{ color:'var(--gold)', marginLeft:6 }}>
+                      ⚠️ Map-Modus ({selectedMap.game_mode}) weicht von Lobby-Modus ({form.game_mode}) ab
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <button className="btn btn-primary" onClick={create} disabled={!form.name}>{t('create_lobby')}</button>
         </div>
       )}

@@ -16,6 +16,14 @@ import { useAuth } from '../App';
 import { api } from '../api';
 
 // ── Constants ──────────────────────────────────────────────────
+const BUILTIN_MAPS = [
+  { id:'builtin_td_default', title:'Grünes Tal',   game_mode:'td',          difficulty:'normal', icon:'🌿', description:'Klassische TD-Karte.' },
+  { id:'builtin_td_desert',  title:'Wüstenpfad',   game_mode:'td',          difficulty:'hard',   icon:'🏜️', description:'Schnelle Gegner, Gruppen-Spawn.' },
+  { id:'builtin_vs_arena',   title:'Zentralarena', game_mode:'vs',          difficulty:'normal', icon:'⚔️', description:'VS: 4 Spieler, Fog of War.' },
+  { id:'builtin_ta_spiral',  title:'Spirale',       game_mode:'time_attack', difficulty:'normal', icon:'🌀', description:'Time Attack: 5 Runden.' },
+];
+const MODE_LABELS = { td:'🏰 TD', vs:'⚔️ VS', time_attack:'⏱️ Time Attack', solo:'🎮 Solo' };
+
 const DIFFICULTIES = ['easy','normal','hard','expert','horror'];
 const DIFF_LABELS  = { easy:'Easy (100%)', normal:'Normal (150%)', hard:'Hard (200%)', expert:'Expert (250%)', horror:'Horror (300%)' };
 const WAVE_TYPES   = ['basic','fast','armored','healer','air_light','air_heavy','boss'];
