@@ -3,6 +3,7 @@
 -- ══════════════════════════════════════════
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm"; -- for username search
 
 -- ── USERS ────────────────────────────────
@@ -424,7 +425,7 @@ CREATE TABLE IF NOT EXISTS challenges (
   require_email  BOOLEAN DEFAULT TRUE,
   newsletter_opt_in_text TEXT,
   -- Access
-  share_token   VARCHAR(64) NOT NULL UNIQUE DEFAULT encode(gen_random_bytes(32),'hex'),
+  share_token   VARCHAR(64) NOT NULL UNIQUE DEFAULT replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''),
   qr_code_url   VARCHAR(512),
   is_active     BOOLEAN DEFAULT TRUE,
   created_at    TIMESTAMPTZ DEFAULT NOW()

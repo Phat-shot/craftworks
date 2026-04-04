@@ -119,8 +119,10 @@ module.exports = function setupSocket(io, db) {
     });
 
     socket.on('lobby:start', async ({ lobbyId }) => {
+      try {
       const { rows } = await db.query('SELECT * FROM lobbies WHERE id=$1', [lobbyId]);
-      if (!rows[0] || rows[0].host_id !== userId) return socket.emit('error', { code: 'not_host' });
+      if (!rows[0]) return socket.emit('error', { code: 'lobby_not_found' });
+      if (rows[0].host_id !== userId) return socket.emit('error', { code: 'not_host' });
       const lobby = rows[0];
 
       const { rows: session } = await db.query(
@@ -141,7 +143,7 @@ module.exports = function setupSocket(io, db) {
       // Create game in worker thread
       const playerRaces = {};
       for (const m of members) playerRaces[m.userId] = m.race || 'standard';
-      const workshopMapConfig = lobby.workshop_map_config || null;
+      const workshopMapConfig = lobby.workshop_map_config || null; // column added via migration
 
       gameManager.create(sessionId, {
         difficulty: lobby.difficulty, mode: lobby.game_mode,
@@ -165,6 +167,10 @@ module.exports = function setupSocket(io, db) {
         players: members, playerCount: members.length,
         races: RACES,
       });
+      } catch(e) {
+        console.error('lobby:start error:', e.message);
+        socket.emit('error', { code: 'server_error', detail: e.message });
+      }
     });
 
     // ── GAME ACTIONS (server-authoritative) ──
@@ -181,11 +187,16 @@ module.exports = function setupSocket(io, db) {
 
     // Solo game: start engine without lobby
     socket.on('game:solo_start', async ({ difficulty, race = 'standard', workshopConfig = null, mode = 'solo' }) => {
+      try {
       const effectiveDifficulty = workshopConfig?.difficulty || difficulty;
-      const gameMode = workshopConfig?.game_mode || mode; // td/solo/vs/time_attack
+      // Normalize gameMode: 'td' -> 'solo' for engine, keep original for DB
+      const rawMode = workshopConfig?.game_mode || mode;
+      const gameMode = rawMode === 'td' ? 'solo' : rawMode;
+      const dbMode   = rawMode; // store original in DB
+      console.log(`[solo_start] user=${userId} mode=${gameMode} diff=${effectiveDifficulty} race=${race}`);
       const { rows } = await db.query(
         `INSERT INTO game_sessions (lobby_id, game_mode, difficulty) VALUES (NULL,$1,$2) RETURNING id`,
-        [gameMode, effectiveDifficulty]
+        [dbMode, effectiveDifficulty]
       );
       const sessionId = rows[0].id;
 
@@ -202,6 +213,11 @@ module.exports = function setupSocket(io, db) {
 
       socket.join(`game:${sessionId}`);
       socket.emit('game:solo_started', { sessionId, difficulty: effectiveDifficulty, race, mode: gameMode });
+      console.log(`[solo_started] sessionId=${sessionId} mode=${gameMode}`);
+      } catch(e) {
+        console.error('[solo_start error]', e.message);
+        socket.emit('game:error', { code: 'start_failed', detail: e.message });
+      }
     });
 
     // ── RACE SELECTION ───────────────────

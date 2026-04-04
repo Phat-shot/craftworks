@@ -32,6 +32,16 @@ export default function MapSelect() {
   const [error,     setError]     = useState('');
 
   useEffect(() => {
+    // Check if a map was pre-selected (from Workshop page)
+    const pre = sessionStorage.getItem('preselect_map');
+    if (pre) {
+      try {
+        const m = JSON.parse(pre);
+        setSelMap(m);
+        if (m.difficulty) setSelDiff(m.difficulty);
+        sessionStorage.removeItem('preselect_map');
+      } catch {}
+    }
     api.get('/workshop/maps/builtin')
       .then(r => { if(Array.isArray(r.data) && r.data.length) setMaps(r.data); })
       .catch(() => {});
@@ -47,7 +57,10 @@ export default function MapSelect() {
     setStarting(true);
     const rawMode = selMap?.game_mode || 'td';
     const mode = rawMode === 'td' ? 'solo' : rawMode;
-    const workshopConfig = selMap?.config ? selMap.config : { ...selMap, game_mode: rawMode };
+    // workshopConfig carries map identity - difficulty/race come separately
+    const workshopConfig = selMap?.config 
+      ? { ...selMap.config, game_mode: rawMode }
+      : { id: selMap.id, title: selMap.title, game_mode: rawMode };
 
     // Write everything to session — td/vs/ta-game.html will pick it up and start
     sessionStorage.setItem('mp_session', JSON.stringify({

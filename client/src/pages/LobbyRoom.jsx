@@ -57,10 +57,12 @@ export default function LobbyRoom() {
     socket.on('lobby:all_ready',     () => setAllReady(true));
     socket.on('lobby:host_changed',  ({ newHostId }) => setLobby(l => ({ ...l, host_id: newHostId })));
     socket.on('game:start', ({ sessionId, difficulty, mode, playerCount }) => navigate(`/game/${sessionId}`, { state: { difficulty: difficulty || 'normal', mode: mode || 'coop', playerCount: playerCount || 2 } }));
+    socket.on('error', ({ code }) => setError(`Server-Fehler: ${code}`));
+    socket.on('connect_error', (e) => setError(`Verbindungsfehler: ${e.message}`));
 
     return () => {
       socket.emit('lobby:leave', { lobbyId: id });
-      ['lobby:state','lobby:player_joined','lobby:player_left','lobby:player_ready','lobby:all_ready','lobby:host_changed','game:start']
+      ['lobby:state','lobby:player_joined','lobby:player_left','lobby:player_ready','lobby:all_ready','lobby:host_changed','game:start','error','connect_error']
         .forEach(e => socket.off(e));
     };
   }, [id]);

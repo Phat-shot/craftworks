@@ -404,22 +404,10 @@ export default function Workshop() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handlePlay = async (map) => {
-    try {
-      const { data } = await api.post(`/workshop/maps/${map.id}/play`);
-      // Start solo game with this map's config
-      sessionStorage.setItem('mp_session', JSON.stringify({
-        solo: true,
-        userId: user.id,
-        username: user.username,
-        mode: 'solo',
-        workshopMapId: map.id,
-        workshopConfig: data.config,
-      }));
-      window.location.href = '/td-game.html';
-    } catch (e) {
-      alert('Fehler beim Starten der Map');
-    }
+  const handlePlay = (map) => {
+    // Navigate to MapSelect (/play) with this map pre-selected via sessionStorage
+    sessionStorage.setItem('preselect_map', JSON.stringify(map));
+    navigate('/play');
   };
 
   const handleSave = (savedMap) => {

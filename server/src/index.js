@@ -29,11 +29,16 @@ async function migrate() {
       // Extract only IF NOT EXISTS statements to safely add new tables
       const incrementalStatements = sql
         .split(';')
-        .filter(s => s.match(/CREATE TABLE IF NOT EXISTS|CREATE INDEX IF NOT EXISTS|ALTER TABLE.*ADD COLUMN IF NOT EXISTS/i))
+        .filter(s => s.match(/CREATE EXTENSION IF NOT EXISTS|CREATE TABLE IF NOT EXISTS|CREATE INDEX IF NOT EXISTS|ALTER TABLE.*ADD COLUMN IF NOT EXISTS/i))
         .map(s => s.trim())
         .filter(Boolean);
       for (const stmt of incrementalStatements) {
-        try { await client.query(stmt); } catch (e) { /* ignore if already exists */ }
+        try { await client.query(stmt); }
+        catch (e) {
+          if (!e.message.includes('already exists') && !e.message.includes('does not exist')) {
+            console.warn('Migration warning:', e.message.slice(0, 120));
+          }
+        }
       }
       console.log('✅ PostgreSQL connected (incremental migrations applied)');
       return;
