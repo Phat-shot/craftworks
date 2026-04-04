@@ -27,6 +27,19 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 #diff-screen{position:absolute;inset:0;z-index:300;background:rgba(4,2,8,.97);
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:20px}
 #diff-screen h1{font-size:28px;font-weight:900;color:var(--gold);text-shadow:0 0 30px #f0804060;text-align:center;line-height:1.3}
+/* Map gallery */
+#map-gallery{width:100%;max-width:420px;margin-bottom:6px}
+#map-gallery-title{font-size:9px;color:#604828;letter-spacing:1px;text-align:center;margin-bottom:6px}
+#map-gallery-row{display:flex;gap:7px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch}
+#map-gallery-row::-webkit-scrollbar{height:3px}
+#map-gallery-row::-webkit-scrollbar-thumb{background:#3a2808;border-radius:2px}
+.map-card{flex-shrink:0;width:80px;background:#0c0806;border:2px solid #2a1806;border-radius:8px;
+  padding:7px 5px;cursor:pointer;text-align:center;transition:all .15s}
+.map-card:hover{border-color:#4a3010;background:#12100a}
+.map-card.sel{border-color:var(--gold);background:rgba(240,200,60,.1)}
+.map-card-ic{font-size:18px;line-height:1;margin-bottom:3px}
+.map-card-nm{font-size:7px;font-weight:700;color:#c09850;line-height:1.3;word-break:break-word}
+.map-card-mode{font-size:6px;color:#604830;margin-top:2px}
 #diff-screen .sub{font-size:10px;color:#604828;text-align:center;line-height:1.7}
 .diff-btns{display:flex;flex-direction:column;gap:10px;width:100%;max-width:300px}
 .diff-btn{padding:14px;font-family:'Cinzel',serif;font-size:13px;font-weight:700;border-radius:4px;cursor:pointer;text-align:center;border:2px solid}
@@ -174,6 +187,11 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
   <div id="diff-screen">
     <h1>⚔ WARCRAFT<br>TOWER DEFENSE</h1>
     <div class="sub">Wähle Rasse &amp; Schwierigkeit<br>Wave 5&amp;15 = Luft 🦅 · W10/20/25 = Boss 👑</div>
+
+    <div id="map-gallery">
+      <div id="map-gallery-title">MAP WÄHLEN</div>
+      <div id="map-gallery-row"><!-- filled by loadMaps() --></div>
+    </div>
 
     <div style="width:100%;max-width:380px;margin-bottom:10px">
       <div style="font-size:9px;color:#604828;letter-spacing:1px;text-align:center;margin-bottom:6px">RASSE WÄHLEN</div>
@@ -1299,19 +1317,84 @@ function toast(msg,err=true){
 function hideDiffScreen(){
   document.getElementById('diff-screen').style.display='none';
 }
+let selectedMap = null; // {id, config, game_mode}
+const BUILTIN_MAPS_LOCAL = [
+  {id:'builtin_td_default',title:'Grünes Tal',  icon:'🌿',game_mode:'td',          difficulty:'normal'},
+  {id:'builtin_td_desert', title:'Wüstenpfad',  icon:'🏜️',game_mode:'td',          difficulty:'hard'},
+  {id:'builtin_vs_arena',  title:'Zentralarena',icon:'⚔️',game_mode:'vs',          difficulty:'normal'},
+  {id:'builtin_ta_spiral', title:'Spirale',      icon:'🌀',game_mode:'time_attack', difficulty:'normal'},
+];
+
+function loadMaps(){
+  const row = document.getElementById('map-gallery-row');
+  if (!row) return;
+  // Fetch maps from server
+  const token = localStorage.getItem('access_token');
+  fetch('/api/workshop/maps/builtin', token?{headers:{Authorization:'Bearer '+token}}:{})
+    .then(r=>r.json()).then(maps=>{
+      const all = [...(maps||BUILTIN_MAPS_LOCAL)];
+      renderMapGallery(all);
+    }).catch(()=>renderMapGallery(BUILTIN_MAPS_LOCAL));
+  // Also load user's maps
+  if(token){
+    fetch('/api/workshop/maps/mine',{headers:{Authorization:'Bearer '+token}})
+      .then(r=>r.json()).then(mine=>{
+        if(mine?.length) appendMapGallery(mine);
+      }).catch(()=>{});
+  }
+}
+
+function renderMapGallery(maps){
+  const row = document.getElementById('map-gallery-row');
+  if(!row) return;
+  row.innerHTML = maps.map(m=>`
+    <div class="map-card${selectedMap?.id===m.id?' sel':''}" onclick="selectMap(${JSON.stringify(JSON.stringify(m))})" data-mapid="${m.id}">
+      <div class="map-card-ic">${m.icon||'🗺️'}</div>
+      <div class="map-card-nm">${(m.title||m.name||'?').slice(0,14)}</div>
+      <div class="map-card-mode">${m.game_mode||'td'}</div>
+    </div>`).join('');
+  if(!selectedMap && maps.length>0) selectMapObj(maps[0]);
+}
+
+function appendMapGallery(maps){
+  const row = document.getElementById('map-gallery-row');
+  if(!row) return;
+  maps.forEach(m=>{
+    const d=document.createElement('div');
+    d.className='map-card';
+    d.setAttribute('data-mapid',m.id);
+    d.onclick=()=>selectMapObj(m);
+    d.innerHTML=`<div class="map-card-ic">${m.icon||'🗺️'}</div><div class="map-card-nm">${(m.title||m.name||'?').slice(0,14)}</div><div class="map-card-mode">${m.game_mode||'td'}</div>`;
+    row.appendChild(d);
+  });
+}
+
+function selectMap(jsonStr){
+  selectMapObj(JSON.parse(jsonStr));
+}
+
+function selectMapObj(m){
+  selectedMap = m;
+  document.querySelectorAll('.map-card').forEach(el=>{
+    el.classList.toggle('sel', el.getAttribute('data-mapid')===m.id);
+  });
+}
+
 function showDiffScreen(){
   document.getElementById('gameover').classList.remove('on');
   document.getElementById('diff-screen').style.display='flex';
+  loadMaps();
 }
 
 function startDiff(diff){
   hideDiffScreen();
   const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
   if(sess&&sess.solo&&socket){
-    // Solo: start the server game with selected difficulty now
-    socket.emit('game:solo_start',{difficulty:diff,race:myRace});
+    const workshopConfig = selectedMap?.config || selectedMap || null;
+    const mode = selectedMap?.game_mode || 'solo';
+    socket.emit('game:solo_start',{difficulty:diff, race:myRace, workshopConfig, mode});
   }
-  // MP: game already running, nothing to do (diff set in lobby)
+  // MP: game already running, nothing to do
 }
 
 // ═══════════════════════════════════════════════════════

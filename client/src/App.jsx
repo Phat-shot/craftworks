@@ -91,6 +91,7 @@ export default function App() {
           <Route path="/workshop"         element={<ErrorBoundary><Workshop /></ErrorBoundary>} />
           <Route path="/workshop/content" element={<ErrorBoundary><WorkshopContent /></ErrorBoundary>} />
           <Route path="/verify-email" element={<div>Verifying…</div>} />
+          <Route path="/challenge/:token"  element={<ChallengePage />} />
 
           {/* Protected */}
           <Route path="/" element={<RequireAuth><Nav /></RequireAuth>}>

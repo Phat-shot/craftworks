@@ -17,6 +17,8 @@ export default function LobbyRoom() {
   const [qr,       setQr]       = useState(null);
   const [error,    setError]    = useState('');
   const [myRace,   setMyRace]   = useState('standard');
+  const [builtinMaps, setBuiltinMaps] = useState([]);
+  const [selectedMap, setSelectedMap] = useState(null);
   const socketRef  = useRef(null);
 
   const RACES = {
@@ -37,6 +39,12 @@ export default function LobbyRoom() {
     const socket = getSocket();
     socketRef.current = socket;
     socket.emit('lobby:join', { lobbyId: id });
+    // Load map gallery
+    const token = localStorage.getItem('access_token');
+    const headers = token ? { Authorization: 'Bearer ' + token } : {};
+    fetch('/api/workshop/maps/builtin', { headers })
+      .then(r=>r.json()).then(maps=>{ if(Array.isArray(maps)) setBuiltinMaps(maps); })
+      .catch(()=>{});
 
     socket.on('lobby:state',         ({ members: m }) => setMembers(m));
     socket.on('lobby:race_changed',  ({ userId: uid, race }) => {
@@ -69,7 +77,7 @@ export default function LobbyRoom() {
   };
 
   const startGame = () => {
-    getSocket().emit('lobby:start', { lobbyId: id });
+    getSocket().emit('lobby:start', { lobbyId: id, workshopMapConfig: selectedMap?.config || selectedMap || null });
   };
 
   const loadQr = async () => {
@@ -157,6 +165,36 @@ export default function LobbyRoom() {
         {lobby.game_mode === 'tournament' && '🏆 Turnier: Jeder Spieler startet die nächste Wave 15s nach Abschluss seiner eigenen.'}
         {lobby.game_mode === 'chaos'      && '💀 Chaos: Waves starten automatisch – auch wenn die vorherige noch läuft!'}
       </div>
+
+      {/* Map selection (host only) */}
+      {isHost && builtinMaps.length > 0 && (
+        <div style={{ marginBottom:16 }}>
+          <div className="section-title">🗺️ Map wählen</div>
+          <div style={{ display:'flex', gap:7, overflowX:'auto', paddingBottom:6 }}>
+            {builtinMaps.map(m=>(
+              <div key={m.id} onClick={()=>setSelectedMap(m)} style={{
+                flexShrink:0, width:80, background:'var(--bg2)',
+                border:`2px solid ${selectedMap?.id===m.id?'var(--gold)':'var(--border2)'}`,
+                borderRadius:8, padding:'7px 5px', cursor:'pointer', textAlign:'center',
+                background:selectedMap?.id===m.id?'rgba(240,200,60,.08)':'var(--bg2)',
+                transition:'all .15s',
+              }}>
+                <div style={{ fontSize:18 }}>{m.icon||'🗺️'}</div>
+                <div style={{ fontSize:8, fontWeight:700, color:'var(--text2)', lineHeight:1.3, marginTop:2 }}>{(m.title||m.name||'?').slice(0,12)}</div>
+                <div style={{ fontSize:7, color:'var(--text3)', marginTop:1 }}>{m.game_mode||'td'}</div>
+              </div>
+            ))}
+          </div>
+          {selectedMap && <div style={{ fontSize:10, color:'var(--text3)', marginTop:4 }}>
+            Gewählt: {selectedMap.icon} {selectedMap.title||selectedMap.name} — {selectedMap.game_mode}
+          </div>}
+        </div>
+      )}
+      {!isHost && selectedMap && (
+        <div style={{ marginBottom:12, padding:'8px 12px', background:'rgba(60,60,60,.2)', borderRadius:6, fontSize:11, color:'var(--text3)' }}>
+          🗺️ Map: {selectedMap.icon} {selectedMap.title||selectedMap.name}
+        </div>
+      )}
 
       {/* Players */}
       <div className="section-title">{t('players')}</div>

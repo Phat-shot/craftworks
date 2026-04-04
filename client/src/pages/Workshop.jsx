@@ -187,6 +187,7 @@ function WaveEditor({ waves, previews, onChange }) {
 function MapEditor({ map, meta, onSave, onClose }) {
   const isNew = !map?.id;
   const [title, setTitle]       = useState(map?.title || '');
+  const [mapIcon, setMapIcon]   = useState(map?.icon || '🗺️');
   const [desc, setDesc]         = useState(map?.description || '');
   const [isPublic, setPublic]   = useState(map?.is_public ?? true);
   const [difficulty, setDiff]   = useState(map?.config?.difficulty || 'normal');
@@ -204,6 +205,7 @@ function MapEditor({ map, meta, onSave, onClose }) {
     setSaving(true);
     const payload = {
       title: title.trim(),
+      icon: mapIcon,
       description: desc.trim(),
       game_mode: 'td',
       is_public: isPublic,
@@ -257,6 +259,11 @@ function MapEditor({ map, meta, onSave, onClose }) {
             <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
               <div>
                 <label style={{ fontSize:11, color:'var(--text3)' }}>Titel *</label>
+                <div style={{ display:'flex',gap:8,marginBottom:8,alignItems:'center' }}>
+                <select value={mapIcon} onChange={e=>setMapIcon(e.target.value)}
+                  style={{ width:52,fontSize:22,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:6,color:'var(--text)',cursor:'pointer' }}>
+                  {['🗺️','🌿','🏜️','❄️','🌋','🌑','🌲','⚔️','🏰','🌊','🔥','🌀','💀','🎯','⛩️','🏕️'].map(i=><option key={i} value={i}>{i}</option>)}
+                </select>
                 <input className="input" value={title} onChange={e => setTitle(e.target.value)}
                   placeholder="Map Name" maxLength={64} />
               </div>
@@ -370,11 +377,13 @@ export default function Workshop() {
   const [loading, setLoading] = useState(true);
   const [editor, setEditor]   = useState(null); // null | 'new' | map object
   const [expBuiltin, setExpBuiltin] = useState(null);
+  const [builtinMaps, setBuiltinMaps] = useState(BUILTIN_MAPS);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const metaR = await api.get('/workshop/meta').catch(()=>({data:{races:{},towers:{},wavePreviews:[]}}));
+      api.get('/workshop/maps/builtin').then(r=>{ if(Array.isArray(r.data)) setBuiltinMaps(r.data); }).catch(()=>{});
       const mapsR = await api.get(`/workshop/maps?sort=${sort}&search=${search}`).catch(()=>({data:[]}));
       const mineR = user ? await api.get('/workshop/maps/mine').catch(()=>({data:[]})) : {data:[]};
       setMeta(metaR.data || {races:{},towers:{},wavePreviews:[]});
