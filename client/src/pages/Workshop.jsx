@@ -259,13 +259,14 @@ function MapEditor({ map, meta, onSave, onClose }) {
             <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
               <div>
                 <label style={{ fontSize:11, color:'var(--text3)' }}>Titel *</label>
-                <div style={{ display:'flex',gap:8,marginBottom:8,alignItems:'center' }}>
-                <select value={mapIcon} onChange={e=>setMapIcon(e.target.value)}
-                  style={{ width:52,fontSize:22,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:6,color:'var(--text)',cursor:'pointer' }}>
-                  {['🗺️','🌿','🏜️','❄️','🌋','🌑','🌲','⚔️','🏰','🌊','🔥','🌀','💀','🎯','⛩️','🏕️'].map(i=><option key={i} value={i}>{i}</option>)}
-                </select>
-                <input className="input" value={title} onChange={e => setTitle(e.target.value)}
-                  placeholder="Map Name" maxLength={64} />
+                <div style={{ display:'flex',gap:8,marginBottom:4,alignItems:'center' }}>
+                  <select value={mapIcon} onChange={e=>setMapIcon(e.target.value)}
+                    style={{ width:52,fontSize:22,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:6,color:'var(--text)',cursor:'pointer' }}>
+                    {['🗺️','🌿','🏜️','❄️','🌋','🌑','🌲','⚔️','🏰','🌊','🔥','🌀','💀','🎯','⛩️','🏕️'].map(i=><option key={i} value={i}>{i}</option>)}
+                  </select>
+                  <input className="input" value={title} onChange={e => setTitle(e.target.value)}
+                    placeholder="Map Name" maxLength={64} />
+                </div>
               </div>
               <div>
                 <label style={{ fontSize:11, color:'var(--text3)' }}>Beschreibung</label>
