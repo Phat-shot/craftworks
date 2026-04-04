@@ -470,13 +470,13 @@ function connectSocket(){
   });
 
   socket.on('game:solo_started',({sessionId:sid,mode:m})=>{
+    // Always write sessionId first so other game pages can use it
+    sessionId=sid;
+    const sess=JSON.parse(sessionStorage.getItem('mp_session')||'{}');
+    sess.sessionId=sid; sess.race=myRace;
+    sessionStorage.setItem('mp_session',JSON.stringify(sess));
     if(m==='vs'){window.location.href='/vs-game.html';return;}
     if(m==='time_attack'){window.location.href='/ta-game.html';return;}
-    sessionId=sid;
-    // Update session with race
-    const sess=JSON.parse(sessionStorage.getItem('mp_session')||'{}');
-    sess.race=myRace;
-    sessionStorage.setItem('mp_session',JSON.stringify(sess));
     hideDiffScreen();
   });
 
@@ -1422,14 +1422,36 @@ function confirmMapSelect(){
 function startDiff(diff){
   hideDiffScreen();
   const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
-  if(sess&&sess.solo&&socket){
-    const workshopConfig = selectedMap?.config || selectedMap || null;
-    const mode = selectedMap?.game_mode || 'solo';
-    const doEmit=()=>socket.emit('game:solo_start',{difficulty:diff,race:myRace,workshopConfig,mode});
-    if(socket.connected) doEmit();
-    else socket.once('connect',doEmit);
-  }
-  // MP: game already running, nothing to do
+  if(!sess||!sess.solo||!socket) return;
+
+  const rawMode = selectedMap?.game_mode || 'td';
+  const mode = rawMode==='td'?'solo':rawMode;
+
+  const doEmit = () => {
+    if(selectedMap?.id && selectedMap.id.startsWith('builtin_')){
+      // For builtin maps: fetch config from server then start
+      const token=localStorage.getItem('access_token');
+      fetch('/api/workshop/maps/'+selectedMap.id+'/play',{
+        method:'POST',
+        headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},
+      }).then(r=>r.json()).then(data=>{
+        const wc = data.workshopConfig || {};
+        wc.game_mode = data.game_mode || rawMode;
+        socket.emit('game:solo_start',{difficulty:diff,race:myRace,workshopConfig:wc,mode});
+      }).catch(()=>{
+        // Fallback: start with minimal config
+        socket.emit('game:solo_start',{difficulty:diff,race:myRace,
+          workshopConfig:{game_mode:rawMode},mode});
+      });
+    } else {
+      // Custom map or no map — start with whatever config we have
+      const wc = selectedMap?.config || (selectedMap?.game_mode?{game_mode:selectedMap.game_mode}:null);
+      socket.emit('game:solo_start',{difficulty:diff,race:myRace,workshopConfig:wc,mode});
+    }
+  };
+
+  if(socket.connected) doEmit();
+  else socket.once('connect',doEmit);
 }
 
 // ═══════════════════════════════════════════════════════
