@@ -19,6 +19,7 @@ export default function LobbyRoom() {
   const [myRace,   setMyRace]   = useState('standard');
   const [builtinMaps, setBuiltinMaps] = useState([]);
   const [selectedMap, setSelectedMap] = useState(null);
+  const [taCountdown, setTaCountdown] = useState(60); // seconds before TA round starts
   const socketRef  = useRef(null);
 
   const RACES = {
@@ -79,7 +80,9 @@ export default function LobbyRoom() {
   };
 
   const startGame = () => {
-    socketRef.current?.emit('lobby:start', { lobbyId: id, workshopMapConfig: selectedMap?.config || selectedMap || null });
+    const wsConfig = selectedMap?.config || selectedMap || {};
+    if (lobby.game_mode === 'time_attack') wsConfig.ta_countdown = taCountdown;
+    socketRef.current?.emit('lobby:start', { lobbyId: id, workshopMapConfig: wsConfig });
   };
 
   const loadQr = async () => {
@@ -159,6 +162,23 @@ export default function LobbyRoom() {
       <div style={{fontSize:10,color:'var(--text3)',marginBottom:16}}>
         + Frost (W10) · Blitz (W20) für alle Rassen
       </div>
+
+      {/* TA countdown picker */}
+      {lobby.game_mode === 'time_attack' && (
+        <div className="card" style={{ marginBottom: 12, padding: '10px 14px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 8 }}>⏱️ Bauzeit pro Runde</div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            {[30,60,90,120].map(s=>(
+              <button key={s} onClick={()=>setTaCountdown(s)} style={{
+                padding:'5px 12px', borderRadius:5, cursor:'pointer', fontSize:11, fontWeight:700,
+                border:`2px solid ${taCountdown===s?'var(--gold)':'var(--border2)'}`,
+                background:taCountdown===s?'rgba(240,200,60,.1)':'var(--bg2)',
+                color:taCountdown===s?'var(--gold)':'var(--text2)',
+              }}>{s}s</button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Mode description */}
       <div className="card" style={{ marginBottom: 16, padding: '10px 14px', fontSize: 12, color: 'var(--text2)' }}>

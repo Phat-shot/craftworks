@@ -54,6 +54,7 @@ function handleAction({ action, userId, data, reqId }) {
     // Time Attack actions
     case 'ta_place_tower':  result = engine.actionTaPlaceTower(gs, userId, data); break;
     case 'ta_ready':        result = engine.actionTaReady(gs, userId); break;
+    case 'ta_remove_tower': result = engine.actionTaRemoveTower(gs, userId, data); break;
     default: result = { ok:false, err:'unknown_action' };
   }
   parentPort.postMessage({ type: 'action_result', reqId, result });

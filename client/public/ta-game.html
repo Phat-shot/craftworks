@@ -176,11 +176,22 @@ function connect(){
 
   socket.on('game:ta_tick',(snap)=>{
     GS=snap;
-    myGold=snap.players[myUserId]?.gold??myGold;
-    myWood=snap.players[myUserId]?.wood??myWood;
-    myScore=snap.players[myUserId]?.score??0;
-    myLastTime=snap.players[myUserId]?.lastTime??null;
+    const me=snap.players?.[myUserId];
+    if(me){
+      myGold=me.gold??myGold;
+      myWood=me.wood??myWood;
+      myScore=me.score??0;
+      myLastTime=me.lastTime??null;
+    }
     updateHUD();
+    // Show ready count in multiplayer
+    const players=Object.values(snap.players||{});
+    const readyCount=players.filter(p=>p.ready).length;
+    const bw=document.getElementById('btn-ready');
+    if(bw&&!bw.disabled&&players.length>1&&snap.phase==='placing'){
+      const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+      if(sess&&!sess.solo) bw.textContent=`✓ Fertig (${readyCount}/${players.length} bereit)`;
+    }
   });
 
   socket.on('game:ta_round_end',({round,players})=>{
@@ -207,10 +218,14 @@ function updateHUD(){
   document.getElementById('r-score').textContent=myScore;
   document.getElementById('r-time').textContent=myLastTime?formatTime(myLastTime):'–';
   const badge=document.getElementById('phase-badge');
+  const cd=GS.countdown;
   badge.className='phase-badge phase-'+GS.phase;
-  badge.textContent=GS.phase==='placing'?'PLATZIEREN':GS.phase==='racing'?'⚡ RENNEN':'ERGEBNIS';
-  document.getElementById('btn-ready').disabled=GS.phase!=='placing';
-  document.getElementById('btn-ready').className=GS.phase==='racing'?'racing':'';
+  badge.textContent=GS.phase==='placing'?
+    (cd!=null?`PLATZIEREN ${cd}s`:'PLATZIEREN'):
+    GS.phase==='racing'?'⚡ RENNEN':'ERGEBNIS';
+  const bready=document.getElementById('btn-ready');
+  bready.disabled=GS.phase!=='placing';
+  bready.className=GS.phase==='racing'?'racing':'';
 }
 
 function formatTime(ms){ return (ms/1000).toFixed(2)+'s'; }
@@ -347,9 +362,12 @@ canvas.addEventListener('click',e=>{
   if(r<0||r+1>=ROWS||c<0||c+1>=COLS) return;
   if(selectedTool==='remove'){
     const t=(GS.myTowers||[]).find(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
-    if(t) sendAction('remove_tower',{towerId:t.id});
+    if(t){ 
+    pm.towers = (pm.towers||[]).filter(x=>x.id!==t.id);
+    sendAction('ta_remove_tower',{towerId:t.id});
+  }
   } else {
-    sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall_tower':'passive_tower',row:r,col:c});
+    sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall':'passive',row:r,col:c});
   }
 });
 canvas.addEventListener('mousemove',e=>{hoverCell=cellFromXY(e.clientX,e.clientY);});
@@ -360,7 +378,7 @@ canvas.addEventListener('touchend',e=>{
   const t=e.changedTouches[0];
   const{r,c}=cellFromXY(t.clientX,t.clientY);
   if(r<0||r+1>=ROWS||c<0||c+1>=COLS) return;
-  sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall_tower':'passive_tower',row:r,col:c});
+  sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall':'passive',row:r,col:c});
 });
 
 function selectTool(t){
@@ -376,8 +394,10 @@ function sendAction(action,data={}){
 
 function sendReady(){
   if(GS.phase!=='placing') return;
+  const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  const isSolo=sess&&sess.solo;
   document.getElementById('btn-ready').disabled=true;
-  document.getElementById('btn-ready').textContent='⏳ Warte auf andere…';
+  document.getElementById('btn-ready').textContent=isSolo?'⏳ Starte…':'⏳ Warte auf andere…';
   sendAction('ta_ready',{});
   raceStartTime=Date.now();
 }

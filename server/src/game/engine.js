@@ -969,7 +969,7 @@ module.exports = {
   actionBuildUnit, actionMoveUnit, actionAttackMove, actionBuildStructure,
   // Time Attack
   createTimeAttackGame, tickTimeAttack, getTaSnapshot,
-  actionTaPlaceTower, actionTaReady,
+  actionTaPlaceTower, actionTaRemoveTower, actionTaReady,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -1263,6 +1263,7 @@ function createTimeAttackGame(sessionId, players, workshopConfig) {
     playerMaps, workshopConfig,
     round: 0, totalRounds: layout.rounds || 5,
     phase: 'placing', // placing | racing | results
+    phaseStartTime: Date.now(), // for countdown
     gameTime: 0, lastTick: Date.now(),
     gameOver: false,
     roundLayouts: layout.round_layouts || [],
@@ -1274,6 +1275,16 @@ function tickTimeAttack(gs) {
   const dt  = Math.min((now - gs.lastTick) / 1000, 0.05);
   gs.lastTick = now;
   gs.gameTime += dt * 1000;
+
+  // Auto-start after countdown (MP only)
+  if (gs.phase === 'placing' && gs.phaseStartTime) {
+    const countdown = gs.workshopConfig?.ta_countdown || 0; // 0 = no auto-start
+    if (countdown > 0 && (now - gs.phaseStartTime) >= countdown * 1000) {
+      gs.phaseStartTime = null;
+      startRacing(gs);
+      return;
+    }
+  }
 
   if (gs.phase !== 'racing') return;
 
@@ -1304,6 +1315,7 @@ function tickTimeAttack(gs) {
 }
 
 function startRacing(gs) {
+  gs.phaseStartTime = null;
   gs.phase = 'racing';
   for (const [uid, pm] of Object.entries(gs.playerMaps)) {
     pm.startTime = gs.gameTime;
@@ -1348,18 +1360,25 @@ function endRound(gs) {
     pm.path   = findPath(prebuilt);
   }
   gs.phase = 'placing';
+  gs.phaseStartTime = Date.now();
 }
 
 function actionTaPlaceTower(gs, userId, data) {
-  const { type, row, col } = data;
+  const { row, col } = data;
+  // Normalize TA type names: wall_tower→'wall', passive_tower→'passive'
+  let type = data.type;
+  const isWall = type === 'wall_tower' || type === 'wall';
+  const isPassive = type === 'passive_tower' || type === 'passive';
+  if (isWall) type = 'wall';
+  if (isPassive) type = 'passive';
+
   const pm = gs.playerMaps[userId];
   const p  = gs.players[userId];
   if (!pm || !p || gs.phase !== 'placing') return { ok:false, err:'not_placing' };
 
-  const b = TDB[type];
-  if (!b) return { ok:false, err:'unknown_type' };
+  // TA uses virtual types 'wall' and 'passive' — no TDB entry needed
+  if (!isWall && !isPassive) return { ok:false, err:'unknown_type' };
 
-  const isWall = b.isWall;
   const cost = isWall ? { gold:0, wood:1 } : { gold:1, wood:0 };
   if ((p.gold||0) < cost.gold || (p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
   if (!canPlaceAt(pm.towers, row, col)) return { ok:false, err:'blocked' };
@@ -1376,12 +1395,27 @@ function actionTaPlaceTower(gs, userId, data) {
   return { ok:true, tower, player:p };
 }
 
+function actionTaRemoveTower(gs, userId, data) {
+  const { towerId } = data;
+  const pm = gs.playerMaps[userId];
+  const p  = gs.players[userId];
+  if (!pm || !p || gs.phase !== 'placing') return { ok:false, err:'not_placing' };
+  const tower = pm.towers.find(t => t.id === towerId && t.owner === userId && !t._prebuilt);
+  if (!tower) return { ok:false, err:'not_found' };
+  // Refund
+  if (tower.type === 'wall') p.wood = (p.wood||0) + 1;
+  else p.gold = (p.gold||0) + 1;
+  pm.towers = pm.towers.filter(t => t.id !== towerId);
+  pm.path = findPath(pm.towers);
+  return { ok:true, player: p };
+}
+
 function actionTaReady(gs, userId) {
   const p = gs.players[userId];
   if (p) p.ready = true;
-  // Start racing when all players ready
   const all = Object.values(gs.players);
-  if (all.every(p => p.ready || p.status === 'eliminated')) {
+  // Start when ALL ready OR only 1 player (solo)
+  if (all.length === 1 || all.every(p => p.ready || p.status === 'eliminated')) {
     all.forEach(p => p.ready = false);
     startRacing(gs);
     return { ok:true, started:true };
@@ -1391,9 +1425,13 @@ function actionTaReady(gs, userId) {
 
 function getTaSnapshot(gs, forUserId) {
   const pm = gs.playerMaps[forUserId];
+  const countdown = gs.workshopConfig?.ta_countdown || 0;
+  const elapsed = gs.phaseStartTime ? (Date.now() - gs.phaseStartTime) / 1000 : 0;
+  const remaining = countdown > 0 ? Math.max(0, Math.ceil(countdown - elapsed)) : null;
   return {
     gameTime: gs.gameTime, phase: gs.phase, round: gs.round,
     totalRounds: gs.totalRounds, gameOver: gs.gameOver,
+    countdown: remaining, // null = no auto-start
     players: gs.players,
     myTowers: pm?.towers || [],
     myPath:   pm?.path || [],
