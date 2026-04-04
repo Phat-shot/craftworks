@@ -94,7 +94,7 @@ export default function LobbyRoom() {
   if (!lobby) return <div className="loading-screen">{t('loading')}</div>;
 
   const isHost = lobby.host_id === user.id;
-  const canStart = isHost && members.length >= 2;
+  const canStart = isHost && members.length >= 1; // host can start with 1 player
 
   return (
     <div className="lobby-room">

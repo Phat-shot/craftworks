@@ -454,8 +454,9 @@ function pickRace(race){
 //  SOCKET CONNECTION
 // ═══════════════════════════════════════════════════════
 function connectSocket(){
+  if(socket)return; // already connected
   const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
-  if(!sess)return; // standalone: no socket
+  if(!sess)return;
   myUserId=sess.userId;
   sessionId=sess.sessionId;
 
@@ -1217,7 +1218,7 @@ function sendAction(action,data={}){
 }
 
 function startWave(){
-  if(GS.waveActive||GS.gameOver||GS.wave>=25)return;
+  if(GS.waveActive||GS.gameOver||GS.wave>=(GS.maxWaves||25))return;
   sendAction('start_wave');
 }
 
@@ -1500,19 +1501,20 @@ function loop(){
 // ═══════════════════════════════════════════════════════
 (function boot(){
   const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
-  const fromPlatform=sess&&!sess.solo;
-  const isSolo=sess&&sess.solo;
+  const fromPlatform=!!(sess&&!sess.solo);
+  const isSolo=!!(sess&&sess.solo);
+  let _booted=false;
 
-  // Set initial orientation from screen
   ORIENT=(window.innerWidth>=window.innerHeight)?'landscape':'portrait';
   const icons={portrait:'📱',landscape:'🖥️'};
   document.getElementById('btn-orient').textContent=icons[ORIENT];
 
   function doInit(){
+    if(_booted)return;
     const wrap=document.getElementById('canvaswrap');
     if(!wrap||wrap.clientWidth===0)return;
+    _booted=true;
     applyLayout();
-    // Draw initial button sprites HiDPI
     const dpr=window.devicePixelRatio||1;
     ['dart','poison','splash','lightning','frost'].forEach(type=>{
       const el=document.getElementById('tc-'+type);
@@ -1524,11 +1526,17 @@ function loop(){
       }
     });
     myAvailableTowers=['dart','poison','splash','frost','lightning'];
-    refreshTwrBtns(); // initial state
+    refreshTwrBtns();
     connectSocket();
     requestAnimationFrame(loop);
-    if(fromPlatform) hideDiffScreen();
-    else if(isSolo) showMapScreen();
+    if(fromPlatform){
+      hideDiffScreen(); // MP: game already started, just show the map
+    } else if(isSolo){
+      showMapScreen(); // Solo: let user pick map first
+    } else {
+      // No session — show map screen anyway (dev/direct access)
+      showMapScreen();
+    }
   }
 
   const wrap=document.getElementById('canvaswrap');
@@ -1536,10 +1544,8 @@ function loop(){
     const ro=new ResizeObserver(()=>{doInit();ro.disconnect();});
     ro.observe(wrap);
   }
-  window.addEventListener('load',()=>{doInit();setTimeout(doInit,100);});
-  window.addEventListener('resize',()=>{
-    applyLayout();
-  });
+  window.addEventListener('load',()=>doInit());
+  window.addEventListener('resize',()=>applyLayout());
 })();
 </script>
 </body>
