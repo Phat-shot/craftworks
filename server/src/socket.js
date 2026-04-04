@@ -1,6 +1,7 @@
 'use strict';
-const jwt    = require('jsonwebtoken');
-const engine = require('./game/engine');
+const jwt         = require('jsonwebtoken');
+const engine      = require('./game/engine');
+const gameManager = require('./game/game_manager');
 const { RACES, TDB, getTowersForRace } = require('./game/towers');
 
 
