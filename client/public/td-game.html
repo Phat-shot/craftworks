@@ -263,7 +263,7 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
   <div id="tower-row"><!-- dynamic: built by buildTowerButtons() --></div>
   <div id="action-row">
     <button id="btn-back" onclick="quitGame()" title="Verlassen" style="width:44px;background:#1a0a04;border:none;color:#804030;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-right:1px solid #201604">🚪</button>
-    <button id="btn-wave" onclick="startWave()">▶ Wave 1 starten</button>
+    <button id="btn-wave" onclick="startWave()" disabled style="opacity:.4">⏳ Verbinde…</button>
     <button id="btn-spd"  onclick="toggleSpd()"><span style="font-size:18px">⏩</span><span id="spd-lbl">1×</span></button>
     <button id="btn-orient" onclick="cycleOrient()" title="Orientierung">🔄</button>
   </div>
@@ -478,6 +478,8 @@ function connectSocket(){
     if(m==='vs'){window.location.href='/vs-game.html';return;}
     if(m==='time_attack'){window.location.href='/ta-game.html';return;}
     hideDiffScreen();
+    const bw=document.getElementById('btn-wave');
+    if(bw){bw.disabled=false;bw.textContent='▶ Wave 1 starten';bw.style.opacity='';}
   });
 
   socket.on('game:tick',(snap)=>{
@@ -1424,19 +1426,22 @@ function startDiff(diff){
   const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
   if(!sess||!sess.solo||!socket) return;
 
-  const rawMode = selectedMap?.game_mode || 'td';
-  const mode = rawMode==='td'?'solo':rawMode;
+  // If launched from Workshop with workshopConfig already set, use that
+  const sessionWc = sess.workshopConfig || null;
+  const effectiveMap = selectedMap || (sessionWc ? {...sessionWc, id:sessionWc.id||'session_map'} : null);
+  const rawMode = effectiveMap?.game_mode || 'td';
+  const mode = rawMode==='td'||rawMode==='solo'?'solo':rawMode;
 
   const doEmit = () => {
-    if(selectedMap?.id && selectedMap.id.startsWith('builtin_')){
+    if(effectiveMap?.id && effectiveMap.id.startsWith('builtin_')){
       // For builtin maps: fetch config from server then start
       const token=localStorage.getItem('access_token');
-      fetch('/api/workshop/maps/'+selectedMap.id+'/play',{
+      fetch('/api/workshop/maps/'+effectiveMap.id+'/play',{
         method:'POST',
         headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},
       }).then(r=>r.json()).then(data=>{
         const wc = data.workshopConfig || {};
-        wc.game_mode = data.game_mode || rawMode;
+        wc.game_mode = data.game_mode || rawMode || effectiveMap?.game_mode;
         socket.emit('game:solo_start',{difficulty:diff,race:myRace,workshopConfig:wc,mode});
       }).catch(()=>{
         // Fallback: start with minimal config
@@ -1445,7 +1450,7 @@ function startDiff(diff){
       });
     } else {
       // Custom map or no map — start with whatever config we have
-      const wc = selectedMap?.config || (selectedMap?.game_mode?{game_mode:selectedMap.game_mode}:null);
+      const wc = effectiveMap?.config || (effectiveMap?.game_mode?{game_mode:effectiveMap.game_mode}:null) || sessionWc;
       socket.emit('game:solo_start',{difficulty:diff,race:myRace,workshopConfig:wc,mode});
     }
   };

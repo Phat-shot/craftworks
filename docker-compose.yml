@@ -44,5 +44,8 @@ services:
       SMTP_PASS:          ${SMTP_PASS:-}
       SMTP_FROM:          ${SMTP_FROM:-noreply@localhost}
       HASH_SALT:          ${HASH_SALT}
+    volumes:
+      - ./uploads:/app/uploads
 
 # No named volumes — data is in ./data next to this file
+# Uploads persist in ./uploads next to this file
