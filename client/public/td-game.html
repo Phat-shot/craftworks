@@ -981,7 +981,10 @@ function drawHover(){
   if(!pickedType||!hoverCell)return;
   const{r,c}=hoverCell;
   const myTower=GS.towers.find(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
-  const blocked=!!myTower||r<0||r+1>=ROWS||c<0||c+1>=COLS;
+  // Check if any cell of 2x2 footprint is on path or entry/exit
+  const footprint=[[r,c],[r,c+1],[r+1,c],[r+1,c+1]];
+  const onPath=footprint.some(([fr,fc])=>GS.pathSet.has(`${fr},${fc}`));
+  const blocked=!!myTower||onPath||r<0||r+1>=ROWS||c<0||c+1>=COLS;
   const ok=!blocked&&myGold>=TDB[pickedType].cost;
   ctx.fillStyle=ok?'rgba(120,255,80,.18)':'rgba(255,60,60,.22)';
   ctx.fillRect(gcx(c,r),gcy(c,r),TILE*2,TILE*2);
@@ -1030,7 +1033,11 @@ function drawTowers(){
 
 function drawEnemies(){
   for(const e of interpEnemies()){
+    if(e.dead||e.escaped)continue;
     const px=gx(sc(e.px),sc(e.py)),py=gy(sc(e.px),sc(e.py));
+    // Skip if outside canvas bounds
+    const cW=getOrient()==='landscape'?CH:CW, cH=getOrient()==='landscape'?CW:CH;
+    if(px<-TILE||px>cW+TILE||py<-TILE||py>cH+TILE)continue;
     const spr=getESpr(e.type,e.armorPhys,e.armorMagic,e.szF);
     const sz=spr.width;
     if(e.poison){ctx.beginPath();ctx.arc(px,py,sz*.52+2,0,Math.PI*2);ctx.strokeStyle='rgba(50,210,30,.7)';ctx.lineWidth=2;ctx.stroke();}
@@ -1187,7 +1194,8 @@ function handleTap(r,c){
     const b=TDB[pickedType];
     if(b&&myGold>=b.cost&&(!b.unlock||GS.wave>=b.unlock)){
       const occupied=GS.towers.some(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
-      if(!occupied&&r>=0&&r+1<35&&c>=0&&c+1<25){
+      const footprintOnPath=[[r,c],[r,c+1],[r+1,c],[r+1,c+1]].some(([fr,fc])=>GS.pathSet.has(`${fr},${fc}`));
+      if(!occupied&&!footprintOnPath&&r>=0&&r+1<ROWS&&c>=0&&c+1<COLS){
         myGold-=b.cost;
         GS.towers=[...GS.towers,{id:'_opt_'+Date.now(),type:pickedType,row:r,col:c,
           paths:[0,0,0],lastFire:0,cd:b.baseCd,owner:myUserId,invested:b.cost,_optimistic:true}];
