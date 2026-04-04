@@ -1361,39 +1361,46 @@ function loadMapsGrid(){
   }
 }
 
+const _mapRegistry = {};
 function renderMsGrid(maps){
   const grid = document.getElementById('ms-grid');
   if(!grid) return;
+  maps.forEach(m=>{ _mapRegistry[m.id]=m; });
   grid.innerHTML = maps.map(m=>`
-    <div class="ms-card${selectedMap?.id===m.id?' sel':''}" onclick="selectMapObj(${JSON.stringify(JSON.stringify(m))})" data-mapid="${m.id}">
+    <div class="ms-card${selectedMap?.id===m.id?' sel':''}" onclick="selectMapById('${m.id}')" data-mapid="${m.id}">
       <div class="ms-card-ic">${m.icon||'🗺️'}</div>
       <div class="ms-card-nm">${m.title||m.name||'?'}</div>
       <div class="ms-card-mode">${m.game_mode||'td'}</div>
       <div class="ms-card-desc">${m.description||m.difficulty||''}</div>
     </div>`).join('');
-  if(!selectedMap && maps.length>0) selectMapObj(maps[0], false);
+  if(!selectedMap && maps.length>0) selectMapById(maps[0].id);
 }
 
 function appendMsGrid(maps){
   const grid = document.getElementById('ms-grid');
   if(!grid) return;
   maps.forEach(m=>{
+    _mapRegistry[m.id]=m;
     const d=document.createElement('div');
     d.className='ms-card'; d.setAttribute('data-mapid',m.id);
-    d.onclick=()=>selectMapObj(JSON.stringify(m));
+    d.onclick=()=>selectMapById(m.id);
     d.innerHTML=`<div class="ms-card-ic">${m.icon||'🗺️'}</div><div class="ms-card-nm">${m.title||m.name||'?'}</div><div class="ms-card-mode">${m.game_mode||'td'}</div><div class="ms-card-desc">${m.description||m.difficulty||''}</div>`;
     grid.appendChild(d);
   });
 }
 
-function selectMapObj(mOrJson, updateCards=true){
-  const m = typeof mOrJson==='string' ? JSON.parse(mOrJson) : mOrJson;
+function selectMapById(id){
+  const m = _mapRegistry[id];
+  if(!m) return;
   selectedMap = m;
-  if(updateCards){
-    document.querySelectorAll('.ms-card,.map-card').forEach(el=>{
-      el.classList.toggle('sel', el.getAttribute('data-mapid')===m.id);
-    });
-  }
+  document.querySelectorAll('.ms-card,.map-card').forEach(el=>{
+    el.classList.toggle('sel', el.getAttribute('data-mapid')===id);
+  });
+}
+function selectMapObj(mOrJson, updateCards=true){
+  const m = typeof mOrJson==='string'?JSON.parse(mOrJson):mOrJson;
+  _mapRegistry[m.id]=m;
+  selectMapById(m.id);
 }
 
 function showMapScreen(){
@@ -1418,7 +1425,9 @@ function startDiff(diff){
   if(sess&&sess.solo&&socket){
     const workshopConfig = selectedMap?.config || selectedMap || null;
     const mode = selectedMap?.game_mode || 'solo';
-    socket.emit('game:solo_start',{difficulty:diff, race:myRace, workshopConfig, mode});
+    const doEmit=()=>socket.emit('game:solo_start',{difficulty:diff,race:myRace,workshopConfig,mode});
+    if(socket.connected) doEmit();
+    else socket.once('connect',doEmit);
   }
   // MP: game already running, nothing to do
 }
