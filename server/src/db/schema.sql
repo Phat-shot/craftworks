@@ -454,3 +454,5 @@ CREATE INDEX IF NOT EXISTS idx_challenges_brand   ON challenges(brand_id);
 CREATE INDEX IF NOT EXISTS idx_challenges_token   ON challenges(share_token);
 CREATE INDEX IF NOT EXISTS idx_entries_challenge  ON challenge_entries(challenge_id);
 CREATE INDEX IF NOT EXISTS idx_entries_score      ON challenge_entries(challenge_id, score DESC);
+
+ALTER TABLE lobbies ADD COLUMN IF NOT EXISTS workshop_map_config JSONB DEFAULT NULL;

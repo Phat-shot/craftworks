@@ -25,7 +25,7 @@ body{font-family:'Cinzel',serif;background:var(--bg);color:#e0c870;display:flex;
 canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)}
 
 #diff-screen{position:absolute;inset:0;z-index:300;background:rgba(4,2,8,.97);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:20px}
+  display:none;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:20px}
 #diff-screen h1{font-size:28px;font-weight:900;color:var(--gold);text-shadow:0 0 30px #f0804060;text-align:center;line-height:1.3}
 /* Map select screen */
 #map-screen{position:absolute;inset:0;z-index:301;background:rgba(4,2,8,.98);
@@ -1099,6 +1099,23 @@ function updateHUD(){
     if(pCount>1) parts.push(`<span style="color:#4080a0">👥${pCount}</span>`);
     modeEl.innerHTML=parts.join('<span style="color:#302010;padding:0 2px">·</span>');
   }
+  // Wave button: update based on current game state (handles MP join mid-game)
+  if(sessionId){
+    const bw=document.getElementById('btn-wave');
+    if(bw&&!GS.gameOver){
+      const maxW=GS.maxWaves||25;
+      if(GS.waveActive){
+        bw.disabled=true;
+        bw.textContent=`⚔ Wave ${GS.wave}…`;
+      } else if(GS.wave>=maxW){
+        bw.disabled=true; bw.textContent='✅ Fertig!';
+      } else if(!bw.disabled||bw.textContent.includes('Verbinde')){
+        bw.disabled=false;
+        bw.textContent=`▶ Wave ${GS.wave+1} starten`;
+        bw.style.opacity='';
+      }
+    }
+  }
 }
 
 let _lastTowerSet='';
@@ -1194,7 +1211,8 @@ document.addEventListener('keydown',e=>{
 });
 
 function sendAction(action,data={}){
-  if(!socket||!sessionId){toast('Nicht verbunden!');return;}
+  if(!socket){toast('Keine Verbindung — bitte neu laden.');return;}
+  if(!sessionId){toast('Spiel startet... bitte warten!');return;}
   socket.emit('game:action',{sessionId,action,data});
 }
 
@@ -1336,6 +1354,15 @@ function toast(msg,err=true){
 
 function hideDiffScreen(){
   document.getElementById('diff-screen').style.display='none';
+  document.getElementById('map-screen').style.display='none';
+  // Enable wave button for MP (solo enables it on solo_started)
+  const bw=document.getElementById('btn-wave');
+  const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  if(bw&&sess&&!sess.solo){
+    bw.disabled=false;
+    bw.textContent='▶ Wave 1 starten';
+    bw.style.opacity='';
+  }
 }
 let selectedMap = null; // {id, config, game_mode}
 const BUILTIN_MAPS_LOCAL = [
@@ -1413,6 +1440,7 @@ function showMapScreen(){
 
 function showDiffScreen(){
   document.getElementById('gameover').classList.remove('on');
+  document.getElementById('map-screen').style.display='none';
   document.getElementById('diff-screen').style.display='flex';
 }
 

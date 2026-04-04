@@ -111,9 +111,10 @@ lobbiesRouter.post('/', requireAuth, async (req, res) => {
     if (!rows[0]) break;
   }
   const { rows } = await db.query(
-    `INSERT INTO lobbies (name, game_mode, host_id, code, max_players, difficulty, is_public)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [name, game_mode, req.user.id, code, Math.min(+max_players, 8), difficulty, is_public]
+    `INSERT INTO lobbies (name, game_mode, host_id, code, max_players, difficulty, is_public, workshop_map_config)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [name, game_mode, req.user.id, code, Math.min(+max_players, 8), difficulty, is_public,
+     req.body.workshop_map_config ? JSON.stringify(req.body.workshop_map_config) : null]
   );
   await db.query(
     'INSERT INTO lobby_members (lobby_id, user_id) VALUES ($1,$2)',
