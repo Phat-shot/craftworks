@@ -18,6 +18,7 @@ import Legal    from './pages/Legal';
 import Workshop from './pages/Workshop';
 import WorkshopContent from './pages/WorkshopContent';
 import Brands         from './pages/Brands';
+import MapSelect      from './pages/MapSelect';
 import ChallengePage  from './pages/ChallengePage';
 import ErrorBoundary    from './components/ErrorBoundary';
 import './App.css';
@@ -108,6 +109,7 @@ export default function App() {
             <Route path="workshop"           element={<ErrorBoundary><Workshop /></ErrorBoundary>} />
             <Route path="workshop/content"   element={<ErrorBoundary><WorkshopContent /></ErrorBoundary>} />
             <Route path="brands"              element={<Brands />} />
+            <Route path="play"                element={<MapSelect />} />
 
           </Route>
         </Routes>

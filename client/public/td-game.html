@@ -198,15 +198,6 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 <div id="canvaswrap">
   <canvas id="gc"></canvas>
   <div id="toast"></div>
-  <div id="map-screen">
-    <h2>⚔ MAP WÄHLEN</h2>
-    <div class="sub">Wähle eine Map für dein Spiel</div>
-    <div class="ms-grid" id="ms-grid"><!-- filled by JS --></div>
-    <button onclick="confirmMapSelect()" style="padding:12px 36px;font-family:'Cinzel',serif;font-size:13px;font-weight:700;background:linear-gradient(180deg,#1a3808,#0e2004);border:2px solid #3a7010;color:#80d040;border-radius:6px;cursor:pointer">
-      Weiter ▶
-    </button>
-  </div>
-
   <div id="diff-screen">
     <h1>⚔ WARCRAFT<br>TOWER DEFENSE</h1>
     <div class="sub">Wähle Rasse &amp; Schwierigkeit<br>Wave 5&amp;15 = Luft 🦅 · W10/20/25 = Boss 👑</div>
@@ -234,7 +225,7 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
   <div id="gameover">
     <div id="go-title">GAME OVER</div>
     <div id="go-sub"></div>
-    <button class="restart-btn" onclick="showMapScreen()">▶ Nochmal spielen</button>
+    <button class="restart-btn" onclick="restartGame()">▶ Nochmal spielen</button>
   </div>
   <div id="sheet">
     <div class="sh-handle" id="sh-handle"></div>
@@ -270,6 +261,7 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/game-common.js"></script>
 <script>
 'use strict';
 // ═══════════════════════════════════════════════════════
@@ -464,10 +456,20 @@ function connectSocket(){
   socket=io({auth:{token}});
 
   socket.on('connect',()=>{
-    if(!sess.solo){
+    if(sess.solo){
+      // MapSelect already chose everything — start immediately
+      const workshopConfig = sess.workshopConfig || null;
+      const mode = sess.mode || 'solo';
+      if(workshopConfig) workshopConfig.game_mode = workshopConfig.game_mode || 'td';
+      socket.emit('game:solo_start',{
+        difficulty: sess.difficulty || 'normal',
+        race: sess.race || 'standard',
+        workshopConfig,
+        mode,
+      });
+    } else {
       socket.emit('game:join',{sessionId});
     }
-    // solo: wait for user to pick difficulty in diff screen
   });
 
   socket.on('game:solo_started',({sessionId:sid,mode:m})=>{
@@ -1236,6 +1238,12 @@ function cancelPick(){
   pickedType=null;document.querySelectorAll('.twrb').forEach(el=>el.classList.remove('sel'));
 }
 
+function restartGame(){
+  const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  if(sess&&sess.solo) window.location.href='/play';
+  else showDiffScreen();
+}
+
 function quitGame(){
   if(confirm('Spiel beenden?')){
     if(socket)socket.disconnect();
@@ -1433,11 +1441,7 @@ function selectMapObj(mOrJson, updateCards=true){
   selectMapById(m.id);
 }
 
-function showMapScreen(){
-  document.getElementById('gameover').classList.remove('on');
-  document.getElementById('map-screen').style.display='flex';
-  loadMapsGrid();
-}
+function showMapScreen(){ showDiffScreen(); } // legacy stub
 
 function showDiffScreen(){
   document.getElementById('gameover').classList.remove('on');
@@ -1529,14 +1533,10 @@ function loop(){
     refreshTwrBtns();
     connectSocket();
     requestAnimationFrame(loop);
-    if(fromPlatform){
-      hideDiffScreen(); // MP: game already started, just show the map
-    } else if(isSolo){
-      showMapScreen(); // Solo: let user pick map first
-    } else {
-      // No session — show map screen anyway (dev/direct access)
-      showMapScreen();
+    if(fromPlatform || isSolo){
+      hideDiffScreen(); // game session already configured via platform
     }
+    // If no session at all: diff-screen stays hidden, user sees game canvas
   }
 
   const wrap=document.getElementById('canvaswrap');

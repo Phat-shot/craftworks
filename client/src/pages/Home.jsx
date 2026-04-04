@@ -15,17 +15,7 @@ export function Home() {
     api.get('/games/history').then(r => setHistory(r.data)).catch(()=>{});
   }, []);
 
-  const startSolo = () => {
-    // SP: same server arch as coop, just skip lobby
-    // Store solo session info — no sessionId yet, server assigns it
-    sessionStorage.setItem('mp_session', JSON.stringify({
-      solo: true,
-      userId: user.id,
-      username: user.username,
-      mode: 'solo',
-    }));
-    window.location.href = '/td-game.html';
-  };
+  const startSolo = () => navigate('/play');
 
   return (
     <div style={{ padding: 24, maxWidth: 640, margin: '0 auto' }}>

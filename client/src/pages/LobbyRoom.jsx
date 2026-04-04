@@ -67,17 +67,17 @@ export default function LobbyRoom() {
 
   const selectRace = (race) => {
     setMyRace(race);
-    getSocket().emit('lobby:set_race', { lobbyId: id, race });
+    socketRef.current?.emit('lobby:set_race', { lobbyId: id, race });
   };
 
   const toggleReady = () => {
     const newReady = !ready;
     setReady(newReady);
-    getSocket().emit('lobby:ready', { lobbyId: id, ready: newReady });
+    socketRef.current?.emit('lobby:ready', { lobbyId: id, ready: newReady });
   };
 
   const startGame = () => {
-    getSocket().emit('lobby:start', { lobbyId: id, workshopMapConfig: selectedMap?.config || selectedMap || null });
+    socketRef.current?.emit('lobby:start', { lobbyId: id, workshopMapConfig: selectedMap?.config || selectedMap || null });
   };
 
   const loadQr = async () => {

@@ -106,6 +106,7 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/game-common.js"></script>
 <script>
 'use strict';
 // ── State ──────────────────────────────────────────────
@@ -145,7 +146,33 @@ function connect(){
   const token=localStorage.getItem('access_token');
   socket=io({auth:{token}});
 
-  socket.on('connect',()=>{ socket.emit('game:join',{sessionId}); });
+  socket.on('connect',()=>{
+    const s=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+    if(s&&s.solo){
+      // Solo: start game with config from MapSelect
+      const wc=s.workshopConfig||null;
+      socket.emit('game:solo_start',{
+        difficulty:s.difficulty||'normal',
+        race:s.race||'standard',
+        workshopConfig:wc,
+        mode:s.mode||'solo',
+      });
+    } else {
+      socket.emit('game:join',{sessionId});
+    }
+  });
+
+  socket.on('game:solo_started',({sessionId:sid,mode:m})=>{
+    sessionId=sid;
+    const sess=JSON.parse(sessionStorage.getItem('mp_session')||'{}')||{};
+    sess.sessionId=sid;
+    sessionStorage.setItem('mp_session',JSON.stringify(sess));
+    // Redirect if wrong game page
+    if(m==='td'||m==='solo'||m==='coop'){window.location.href='/td-game.html';return;}
+    if(m==='vs'&&!window.location.href.includes('vs-game')){window.location.href='/vs-game.html';return;}
+    if(m==='time_attack'&&!window.location.href.includes('ta-game')){window.location.href='/ta-game.html';return;}
+    // Correct page — just hide any loading screen
+  });
 
   socket.on('game:ta_tick',(snap)=>{
     GS=snap;
