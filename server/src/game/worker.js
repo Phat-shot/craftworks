@@ -98,6 +98,14 @@ function tick() {
 
   } else if (mode === 'time_attack') {
     engine.tickTimeAttack(gs);
+    // Emit per-player TA snapshots
+    for (const uid of Object.keys(gs.players)) {
+      parentPort.postMessage({ type:'ta_tick', userId:uid, snap:engine.getTaSnapshot(gs, uid) });
+    }
+    if (gs._roundJustEnded) {
+      gs._roundJustEnded = false;
+      parentPort.postMessage({ type:'ta_round_end', round:gs.round, players:gs.players });
+    }
   } else if (mode === 'pve') {
     engine.tickPve(gs);
     for (const uid of Object.keys(gs.players)) {

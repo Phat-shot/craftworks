@@ -163,6 +163,7 @@ module.exports = function setupSocket(io, db) {
 
       await db.query("UPDATE lobbies SET status='in_progress' WHERE id=$1", [lobbyId]);
 
+      console.log(`[game:start] sessionId=${sessionId} mode=${lobby.game_mode} players=${members.length}`);
       io.to(`lobby:${lobbyId}`).emit('game:start', {
         sessionId, mode: lobby.game_mode, difficulty: lobby.difficulty,
         players: members, playerCount: members.length,

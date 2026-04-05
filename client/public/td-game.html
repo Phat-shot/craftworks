@@ -456,10 +456,16 @@ function connectSocket(){
   const token=localStorage.getItem('access_token');
   socket=io({auth:{token}});
 
+  let _gameStarted = false;
   socket.on('connect',()=>{
     if(sess.solo){
-      // MapSelect already chose everything — start immediately
-      const workshopConfig = sess.workshopConfig || null;
+      if(_gameStarted){
+        // Reconnect: re-join the existing game session (don't create a new one)
+        if(sessionId) socket.emit('game:join',{sessionId});
+        return;
+      }
+      _gameStarted = true;
+      const workshopConfig = sess.workshopConfig ? JSON.parse(JSON.stringify(sess.workshopConfig)) : null;
       const mode = sess.mode || 'solo';
       if(workshopConfig) workshopConfig.game_mode = workshopConfig.game_mode || 'td';
       socket.emit('game:solo_start',{

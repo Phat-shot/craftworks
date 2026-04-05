@@ -147,11 +147,16 @@ function connect(){
   const token=localStorage.getItem('access_token');
   socket=io({auth:{token}});
 
+  let _gameStarted=false;
   socket.on('connect',()=>{
     const s=JSON.parse(sessionStorage.getItem('mp_session')||'null');
     if(s&&s.solo){
-      // Solo: start game with config from MapSelect
-      const wc=s.workshopConfig||null;
+      if(_gameStarted){
+        if(sessionId) socket.emit('game:join',{sessionId});
+        return;
+      }
+      _gameStarted=true;
+      const wc=s.workshopConfig?JSON.parse(JSON.stringify(s.workshopConfig)):null;
       socket.emit('game:solo_start',{
         difficulty:s.difficulty||'normal',
         race:s.race||'standard',
@@ -366,13 +371,11 @@ function cellFromXY(cx2,cy2){
 canvas.addEventListener('click',e=>{
   if(GS.phase!=='placing') return;
   const{r,c}=cellFromXY(e.clientX,e.clientY);
-  if(r<0||r+1>=ROWS||c<0||c+1>=COLS) return;
+  const taCols=GS.cols||COLS, taRows=GS.rows||ROWS;
+  if(r<0||r+1>=taRows||c<0||c+1>=taCols) return;
   if(selectedTool==='remove'){
     const t=(GS.myTowers||[]).find(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
-    if(t){ 
-    pm.towers = (pm.towers||[]).filter(x=>x.id!==t.id);
-    sendAction('ta_remove_tower',{towerId:t.id});
-  }
+    if(t) sendAction('ta_remove_tower',{towerId:t.id});
   } else {
     sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall':'passive',row:r,col:c});
   }
@@ -384,7 +387,8 @@ canvas.addEventListener('touchend',e=>{
   if(GS.phase!=='placing') return;
   const t=e.changedTouches[0];
   const{r,c}=cellFromXY(t.clientX,t.clientY);
-  if(r<0||r+1>=ROWS||c<0||c+1>=COLS) return;
+  const taCols=GS.cols||COLS, taRows=GS.rows||ROWS;
+  if(r<0||r+1>=taRows||c<0||c+1>=taCols) return;
   sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall':'passive',row:r,col:c});
 });
 

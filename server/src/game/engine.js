@@ -1466,7 +1466,21 @@ function actionTaPlaceTower(gs, userId, data) {
 
   const cost = isWall ? { gold:0, wood:1 } : { gold:1, wood:0 };
   if ((p.gold||0) < cost.gold || (p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
-  if (!canPlaceAt(pm.towers, row, col)) return { ok:false, err:'blocked' };
+  // TA boundary check uses actual TA grid dimensions (not global ROWS/COLS)
+  const taCols = gs.cols || 15, taRows = gs.rows || 20;
+  const taEntry = gs.taEntryCol || Math.floor(taCols/2);
+  if (row < 0 || row+1 >= taRows || col < 0 || col+1 >= taCols) return { ok:false, err:'blocked' };
+  const footprint = [[row,col],[row,col+1],[row+1,col],[row+1,col+1]];
+  for (const [rr,cc] of footprint) {
+    if ((rr === 0 || rr === taRows-1) && cc === taEntry) return { ok:false, err:'blocked' };
+  }
+  // Check collision with existing towers
+  for (const t of pm.towers) {
+    const tr = [[t.row,t.col],[t.row,t.col+1],[t.row+1,t.col],[t.row+1,t.col+1]];
+    for (const [rr,cc] of footprint)
+      for (const [tr2,tc2] of tr)
+        if (rr===tr2 && cc===tc2) return { ok:false, err:'blocked' };
+  }
   const newPath = gs.findTaPath([...pm.towers, {row,col}]);
   if (!newPath) return { ok:false, err:'blocks_path' };
 
@@ -1491,7 +1505,7 @@ function actionTaRemoveTower(gs, userId, data) {
   if (tower.type === 'wall') p.wood = (p.wood||0) + 1;
   else p.gold = (p.gold||0) + 1;
   pm.towers = pm.towers.filter(t => t.id !== towerId);
-  pm.path = findPath(pm.towers);
+  pm.path = gs.findTaPath(pm.towers);
   return { ok:true, player: p };
 }
 
@@ -1516,6 +1530,7 @@ function getTaSnapshot(gs, forUserId) {
   return {
     gameTime: gs.gameTime, phase: gs.phase, round: gs.round,
     totalRounds: gs.totalRounds, gameOver: gs.gameOver,
+    cols: gs.cols, rows: gs.rows,
     countdown: remaining, // null = no auto-start
     players: gs.players,
     myTowers: pm?.towers || [],

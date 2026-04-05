@@ -151,11 +151,16 @@ function connect(){
   myUserId=sess.userId; sessionId=sess.sessionId;
   const token=localStorage.getItem('access_token');
   socket=io({auth:{token}});
+  let _gameStarted=false;
   socket.on('connect',()=>{
     const s=JSON.parse(sessionStorage.getItem('mp_session')||'null');
     if(s&&s.solo){
-      // Solo: start game with config from MapSelect
-      const wc=s.workshopConfig||null;
+      if(_gameStarted){
+        if(sessionId) socket.emit('game:join',{sessionId});
+        return;
+      }
+      _gameStarted=true;
+      const wc=s.workshopConfig?JSON.parse(JSON.stringify(s.workshopConfig)):null;
       socket.emit('game:solo_start',{
         difficulty:s.difficulty||'normal',
         race:s.race||'standard',
