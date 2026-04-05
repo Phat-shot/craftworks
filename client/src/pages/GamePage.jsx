@@ -20,6 +20,7 @@ export default function GamePage() {
       mode,
       playerCount,
       solo: false,
+      workshopConfig: location.state?.workshopConfig || null,
     }));
     const gameUrl = mode === 'vs' ? '/vs-game.html'
       : mode === 'time_attack' ? '/ta-game.html'

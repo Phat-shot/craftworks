@@ -167,6 +167,7 @@ module.exports = function setupSocket(io, db) {
         sessionId, mode: lobby.game_mode, difficulty: lobby.difficulty,
         players: members, playerCount: members.length,
         races: RACES,
+        workshopConfig: workshopMapConfig,
       });
       } catch(e) {
         console.error('lobby:start error:', e.message);
@@ -180,8 +181,10 @@ module.exports = function setupSocket(io, db) {
     });
 
     socket.on('game:action', async ({ sessionId, action, data }) => {
-      if (!gameManager.has(sessionId))
+      if (!gameManager.has(sessionId)) {
+        console.warn(`[game:action] no_session: sid=${sessionId} action=${action} user=${userId}`);
         return socket.emit('game:action_result', { ok:false, err:'no_session' });
+      }
       const result = await gameManager.action(sessionId, userId, action, data || {});
       socket.emit('game:action_result', { action, ...result });
     });
@@ -207,10 +210,13 @@ module.exports = function setupSocket(io, db) {
         playerRaces: { [userId]: race },
         workshopConfig,
       });
-      gameManager.on(sessionId, 'tick',         ({ snap })        => socket.emit('game:tick', snap));
-      gameManager.on(sessionId, 'wave_started',  ({ wave })        => socket.emit('game:wave_started', { wave }));
-      gameManager.on(sessionId, 'wave_ended',    ({ wave, bonus }) => socket.emit('game:wave_ended', { wave, bonus }));
-      gameManager.on(sessionId, 'game_over',     ({ win, players })=> finalizeGameFromWorker(io, db, sessionId, players, win));
+      gameManager.on(sessionId, 'tick',         ({ snap })         => socket.emit('game:tick', snap));
+      gameManager.on(sessionId, 'wave_started', ({ wave })         => socket.emit('game:wave_started', { wave }));
+      gameManager.on(sessionId, 'wave_ended',   ({ wave, bonus })  => socket.emit('game:wave_ended', { wave, bonus }));
+      gameManager.on(sessionId, 'vs_tick',      ({ userId, snap }) => socket.emit('game:vs_tick', snap));
+      gameManager.on(sessionId, 'ta_tick',      ({ userId, snap }) => socket.emit('game:ta_tick', snap));
+      gameManager.on(sessionId, 'ta_round_end', (msg)              => socket.emit('game:ta_round_end', msg));
+      gameManager.on(sessionId, 'game_over',    ({ win, players }) => finalizeGameFromWorker(io, db, sessionId, players, win));
 
       socket.join(`game:${sessionId}`);
       socket.emit('game:solo_started', { sessionId, difficulty: effectiveDifficulty, race, mode: gameMode });

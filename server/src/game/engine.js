@@ -232,7 +232,19 @@ function createGame(sessionId, difficulty, mode, players, playerRaces = {}, work
     };
   }
 
-  const path = findPath([]);
+  // Apply layout_items as prebuilt towers
+  const layoutItems = workshopConfig?.layout_items || workshopConfig?.prebuilt_items || [];
+  const prebuiltTowers = layoutItems
+    .filter(it => it.category === 'tower' && TDB[it.item_id])
+    .map((it, i) => ({
+      id: `prebuilt_${i}`, type: it.item_id, row: it.row, col: it.col,
+      paths: [0,0,0], lastFire: 0, cd: TDB[it.item_id].baseCd || 60,
+      owner: it.entity === 'cpu' ? 'cpu' : (players[0]?.userId || 'system'),
+      invested: TDB[it.item_id].cost || 0, entity: it.entity || 'passive',
+      _prebuilt: true,
+    }));
+
+  const path = findPath(prebuiltTowers);
   const pathSet = new Set((path||[]).map(([r,c]) => `${r},${c}`));
 
   const maxWaves = workshopConfig?.wave_set?.wave_count || 25;
