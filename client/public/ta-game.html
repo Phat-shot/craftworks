@@ -107,6 +107,7 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/game-common.js"></script>
+<script src="/game-brand.js"></script>
 <script>
 'use strict';
 // ── State ──────────────────────────────────────────────
@@ -175,6 +176,9 @@ function connect(){
   });
 
   socket.on('game:ta_tick',(snap)=>{
+    // Update grid dimensions from server (TA grid can vary)
+    if(snap.cols && snap.cols !== COLS){ COLS=snap.cols; applyLayout(); }
+    if(snap.rows && snap.rows !== ROWS){ ROWS=snap.rows; applyLayout(); }
     GS=snap;
     const me=snap.players?.[myUserId];
     if(me){

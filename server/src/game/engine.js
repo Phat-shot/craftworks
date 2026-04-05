@@ -242,7 +242,7 @@ function createGame(sessionId, difficulty, mode, players, playerRaces = {}, work
     workshopConfig,
     maxWaves,
     players: playerState,
-    towers: [], enemies: [], bullets: [], particles: [], bolts: [], fireZones: [],
+    towers: [...prebuiltTowers], enemies: [], bullets: [], particles: [], bolts: [], fireZones: [],
     wave: 0, waveActive: false, gameOver: false,
     spawnQ: [], spawnIdx: 0, spawnTimer: 0, spawnInterval: 0,
     gameTime: 0, lastTick: Date.now(),
@@ -957,6 +957,47 @@ function getSnapshot(gs) {
   };
 }
 
+
+// ── PvE Mode (stub — CPU entities act on behalf of the 'cpu' faction) ────────
+function createPveGame(sessionId, players, playerRaces, workshopConfig) {
+  // PvE reuses TD engine but with CPU-controlled units on one side
+  const layout = workshopConfig?.layout || {};
+  const cols = layout.cols || COLS, rows = layout.rows || ROWS;
+  const cpuItems = (layout.layout_items || []).filter(it => it.entity === 'cpu');
+  const friendlyItems = (layout.layout_items || []).filter(it => it.entity === 'friendly' || it.entity?.startsWith('player'));
+
+  // Create base game with human players
+  const gs = createGame(sessionId, workshopConfig?.difficulty || 'normal', 'pve', players, playerRaces, workshopConfig);
+  
+  // Tag CPU-entity prebuilt towers (built at start, controlled by server)
+  for (const it of cpuItems) {
+    if (it.category === 'tower') {
+      gs.towers.push({
+        id: `cpu_${it.id}`, type: it.item_id, row: it.row, col: it.col,
+        paths: [0,0,0], lastFire: 0, cd: (TDB[it.item_id]?.baseCd||60),
+        owner: 'cpu', invested: 0, entity: 'cpu',
+      });
+    }
+  }
+  
+  gs.pveConfig = {
+    cols, rows, cpuItems, friendlyItems,
+    cpuTick: 0, cpuStrategy: workshopConfig?.pve_strategy || 'defend',
+  };
+  return gs;
+}
+
+function tickPve(gs) {
+  // PvE: run normal TD tick, then run CPU logic
+  tick(gs);
+  // Future: CPU places towers, triggers waves, responds to player actions
+  // Currently just a passthrough to normal TD engine
+}
+
+function getPveSnapshot(gs, forUserId) {
+  return { ...getSnapshot(gs), pveConfig: gs.pveConfig };
+}
+
 module.exports = {
   EBASE, EBASE_HP, getWaveConfig,
   COLS, ROWS, ENTRY_COL, TILE, TDB, EBASE, EBASE_HP,
@@ -1238,6 +1279,37 @@ function getVsSnapshot(gs, forUserId) {
 function createTimeAttackGame(sessionId, players, workshopConfig) {
   const layout = workshopConfig?.ta_layout || {};
   const cols = layout.cols || 15, rows = layout.rows || 20;
+  const taEntryCol = Math.floor(cols / 2);
+
+  // TA-specific BFS pathfinder using the actual TA grid size
+  function findTaPath(towers) {
+    const blocked = new Set(towers.flatMap(t => [
+      `${t.row},${t.col}`, `${t.row},${t.col+1}`,
+      `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
+    ]));
+    const queue = [[0, taEntryCol]];
+    const par   = new Map([[`0,${taEntryCol}`, null]]);
+    const dirs  = [[1,0],[0,1],[0,-1],[-1,0]];
+    while (queue.length) {
+      const [r, c] = queue.shift();
+      if (r === rows - 1) {
+        const path = []; let k = `${r},${c}`;
+        while (k !== null) {
+          const [pr, pc] = k.split(',').map(Number);
+          path.unshift([pr, pc]); k = par.get(k);
+        }
+        return path;
+      }
+      for (const [dr, dc] of dirs) {
+        const nr = r+dr, nc = c+dc;
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const k = `${nr},${nc}`;
+        if (blocked.has(k) || par.has(k)) continue;
+        par.set(k, `${r},${c}`); queue.push([nr, nc]);
+      }
+    }
+    return null;
+  }
 
   const playerState = {};
   const playerMaps  = {}; // userId -> { towers, path }
@@ -1247,7 +1319,7 @@ function createTimeAttackGame(sessionId, players, workshopConfig) {
       ...t, id:`pt_${p.userId}_${i}`, owner: p.userId,
       paths:[0,0,0], lastFire:0, invested:0,
     }));
-    const path = findPath(prebuilt); // use TD pathfinder on smaller grid
+    const path = findTaPath(prebuilt); // use TD pathfinder on smaller grid
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
       gold: layout.gold_per_round || 100,
@@ -1259,7 +1331,8 @@ function createTimeAttackGame(sessionId, players, workshopConfig) {
 
   return {
     sessionId, mode:'time_attack',
-    cols, rows, players: playerState,
+    cols, rows, taEntryCol, findTaPath,
+    players: playerState,
     playerMaps, workshopConfig,
     round: 0, totalRounds: layout.rounds || 5,
     phase: 'placing', // placing | racing | results
@@ -1357,7 +1430,7 @@ function endRound(gs) {
     const prebuilt = (nextLayout.prebuilt_towers || gs.workshopConfig?.ta_layout?.prebuilt_towers || [])
       .map((t,i) => ({ ...t, id:`pt_${uid}_r${gs.round}_${i}`, owner:uid, paths:[0,0,0], lastFire:0, invested:0 }));
     pm.towers = prebuilt;
-    pm.path   = findPath(prebuilt);
+    pm.path   = gs.findTaPath(prebuilt);
   }
   gs.phase = 'placing';
   gs.phaseStartTime = Date.now();
@@ -1382,7 +1455,7 @@ function actionTaPlaceTower(gs, userId, data) {
   const cost = isWall ? { gold:0, wood:1 } : { gold:1, wood:0 };
   if ((p.gold||0) < cost.gold || (p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
   if (!canPlaceAt(pm.towers, row, col)) return { ok:false, err:'blocked' };
-  const newPath = findPath([...pm.towers, {row,col}]);
+  const newPath = gs.findTaPath([...pm.towers, {row,col}]);
   if (!newPath) return { ok:false, err:'blocks_path' };
 
   p.gold -= cost.gold;

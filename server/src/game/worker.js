@@ -20,6 +20,8 @@ parentPort.on('message', (msg) => {
         gs = engine.createVsGame(msg.sessionId, msg.players, msg.playerRaces, msg.workshopConfig);
       } else if (msg.mode === 'time_attack') {
         gs = engine.createTimeAttackGame(msg.sessionId, msg.players, msg.workshopConfig);
+      } else if (msg.mode === 'pve') {
+        gs = engine.createPveGame(msg.sessionId, msg.players, msg.playerRaces, msg.workshopConfig);
       } else {
         gs = engine.createGame(msg.sessionId, msg.difficulty, msg.mode, msg.players, msg.playerRaces, msg.workshopConfig);
       }
@@ -96,6 +98,8 @@ function tick() {
 
   } else if (mode === 'time_attack') {
     engine.tickTimeAttack(gs);
+  } else if (mode === 'pve') {
+    engine.tickPve(gs);
     for (const uid of Object.keys(gs.players)) {
       parentPort.postMessage({ type:'ta_tick', userId:uid, snap:engine.getTaSnapshot(gs, uid) });
     }

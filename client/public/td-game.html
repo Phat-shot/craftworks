@@ -262,6 +262,7 @@ canvas{display:block;touch-action:none;position:absolute;top:50%;left:50%;transf
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/game-common.js"></script>
+<script src="/game-brand.js"></script>
 <script>
 'use strict';
 // ═══════════════════════════════════════════════════════
@@ -473,8 +474,10 @@ function connectSocket(){
   });
 
   socket.on('game:solo_started',({sessionId:sid,mode:m})=>{
-    // Always write sessionId first so other game pages can use it
     sessionId=sid;
+    // Apply brand config from session
+    const sessWc = JSON.parse(sessionStorage.getItem('mp_session')||'{}').workshopConfig;
+    if(sessWc && window.applyBrandConfig) applyBrandConfig(sessWc);
     const sess=JSON.parse(sessionStorage.getItem('mp_session')||'{}');
     sess.sessionId=sid; sess.race=myRace;
     sessionStorage.setItem('mp_session',JSON.stringify(sess));
@@ -486,6 +489,7 @@ function connectSocket(){
   });
 
   socket.on('game:tick',(snap)=>{
+    if(!window._brandApplied){ window._brandApplied=true; const wc=JSON.parse(sessionStorage.getItem('mp_session')||'{}').workshopConfig; if(wc&&window.applyBrandConfig) applyBrandConfig(wc); }
     prevGS=GS;
     const now=performance.now();
     if(snapTime>0)snapInterval=Math.max(16,Math.min(100,now-snapTime))*0.9+snapInterval*0.1;
@@ -934,7 +938,10 @@ function render(){
 
 function drawMap(){
   if(!grassTex||!pathTex||!TILE)return;
-  const gP=ctx.createPattern(grassTex,'repeat'),pP=ctx.createPattern(pathTex,'repeat');
+  // Brand texture overrides
+const _gt = window.BRAND?.bgTextureUrl   ? (()=>{ const i=new Image(); i.src=window.BRAND.bgTextureUrl;   return grassTex; })() : grassTex;
+const _pt = window.BRAND?.pathTextureUrl ? (()=>{ const i=new Image(); i.src=window.BRAND.pathTextureUrl; return pathTex;  })() : pathTex;
+const gP=ctx.createPattern(_gt,'repeat'),pP=ctx.createPattern(_pt,'repeat');
   for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
     ctx.fillStyle=GS.pathSet.has(`${r},${c}`)?pP:gP;
     ctx.fillRect(gcx(c,r),gcy(c,r),TILE,TILE);

@@ -19,6 +19,7 @@ import Workshop from './pages/Workshop';
 import WorkshopContent from './pages/WorkshopContent';
 import Brands         from './pages/Brands';
 import MapSelect      from './pages/MapSelect';
+import MapEditor      from './pages/MapEditor';
 import ChallengePage  from './pages/ChallengePage';
 import ErrorBoundary    from './components/ErrorBoundary';
 import './App.css';
@@ -110,6 +111,8 @@ export default function App() {
             <Route path="workshop/content"   element={<ErrorBoundary><WorkshopContent /></ErrorBoundary>} />
             <Route path="brands"              element={<Brands />} />
             <Route path="play"                element={<MapSelect />} />
+            <Route path="workshop/editor/:id"   element={<MapEditor />} />
+            <Route path="workshop/editor"        element={<MapEditor />} />
 
           </Route>
         </Routes>

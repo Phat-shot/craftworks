@@ -457,3 +457,23 @@ CREATE INDEX IF NOT EXISTS idx_entries_challenge  ON challenge_entries(challenge
 CREATE INDEX IF NOT EXISTS idx_entries_score      ON challenge_entries(challenge_id, score DESC);
 
 ALTER TABLE lobbies ADD COLUMN IF NOT EXISTS workshop_map_config JSONB DEFAULT NULL;
+
+-- ═══════════════════════════════════════════════════════════════
+-- MAP EDITOR: layout items, prebuilt sequences, PvE prep
+-- ═══════════════════════════════════════════════════════════════
+ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS game_type VARCHAR(32) NOT NULL DEFAULT 'td';
+ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS cols     INTEGER NOT NULL DEFAULT 25;
+ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS rows     INTEGER NOT NULL DEFAULT 35;
+ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS layout_items JSONB NOT NULL DEFAULT '[]';
+-- layout_items: [{type:'tower'|'unit'|'structure'|'waypoint'|'zone',
+--   item_id, row, col, entity:'passive'|'cpu'|'friendly'|'player_1'..'player_8',
+--   round:null|int, meta:{}}]
+
+ALTER TABLE workshop_maps ADD COLUMN IF NOT EXISTS prebuilt_sequences JSONB NOT NULL DEFAULT '[]';
+-- prebuilt_sequences: [{name, mode:'sequential'|'shuffle', items:[{row,col,tower_type,entity}]}]
+
+-- PvE mode: CPU player entity
+ALTER TABLE game_sessions ADD COLUMN IF NOT EXISTS pve_config JSONB DEFAULT NULL;
+
+-- Brand: store resolved workshopConfig with skins
+ALTER TABLE brand_maps ADD COLUMN IF NOT EXISTS game_config JSONB DEFAULT NULL;

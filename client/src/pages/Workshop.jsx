@@ -50,7 +50,7 @@ function StarRating({ value, onChange, readonly }) {
   );
 }
 
-function MapCard({ map, onPlay, onEdit, onDelete, isOwn }) {
+function MapCard({ map, onPlay, onEdit, onLayoutEdit, onDelete, isOwn }) {
   const [rating, setRating] = useState(map.my_rating || 0);
 
   const handleRate = async (r) => {
@@ -437,7 +437,7 @@ export default function Workshop() {
         <span className="page-title">🔧 Workshop</span>
         <div style={{ display:'flex', gap:8 }}>
           <Link to="/workshop/content" className="btn btn-ghost btn-sm">🔨 Gebäude &amp; Rassen</Link>
-          <button className="btn btn-primary btn-sm" onClick={() => setEditor('new')}>+ Neue Map</button>
+          <button className="btn btn-primary btn-sm" onClick={()=>navigate('/workshop/editor')}>+ Neue Map</button>
         </div>
       </div>
 
@@ -508,6 +508,7 @@ export default function Workshop() {
               <MapCard key={m.id} map={m}
                 isOwn={user && m.creator_id === user.id}
                 onPlay={handlePlay}
+                onLayoutEdit={(map) => navigate(`/workshop/editor/${map.id}`)}
                 onEdit={(map) => setEditor(map)}
                 onDelete={handleDelete}
               />

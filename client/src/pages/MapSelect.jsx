@@ -58,9 +58,26 @@ export default function MapSelect() {
     const rawMode = selMap?.game_mode || 'td';
     const mode = rawMode === 'td' ? 'solo' : rawMode;
     // workshopConfig carries map identity - difficulty/race come separately
-    const workshopConfig = selMap?.config 
-      ? { ...selMap.config, game_mode: rawMode }
-      : { id: selMap.id, title: selMap.title, game_mode: rawMode };
+    const workshopConfig = {
+      ...(selMap?.config || {}),
+      id: selMap.id,
+      title: selMap.title,
+      game_mode: rawMode,
+      layout_items: selMap.layout_items || selMap?.config?.prebuilt_items || [],
+      prebuilt_sequences: selMap.prebuilt_sequences || selMap?.config?.prebuilt_sequences || [],
+      // Brand overrides (populated if launched from challenge/brand context)
+      building_skins: selMap.building_skins || {},
+      unit_skins: selMap.unit_skins || {},
+      label_gold: selMap.label_gold || null,
+      label_score: selMap.label_score || null,
+      label_lives: selMap.label_lives || null,
+      icon_gold: selMap.icon_gold || null,
+      icon_score: selMap.icon_score || null,
+      icon_lives: selMap.icon_lives || null,
+      bg_texture_url: selMap.bg_texture_url || null,
+      path_texture_url: selMap.path_texture_url || null,
+      logo_overlay_url: selMap.logo_overlay_url || null,
+    };
 
     // Write everything to session — td/vs/ta-game.html will pick it up and start
     sessionStorage.setItem('mp_session', JSON.stringify({

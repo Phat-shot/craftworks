@@ -102,9 +102,13 @@ router.post('/maps', requireAuth,
     const { title, description='', game_mode='td', config, is_public=true } = req.body;
     try {
       const { rows } = await req.db.query(`
-        INSERT INTO workshop_maps (creator_id, title, description, game_mode, config, is_public)
-        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
-      `, [req.user.id, title, description.slice(0,256), game_mode, JSON.stringify(config), is_public]);
+        INSERT INTO workshop_maps (creator_id, title, description, game_mode, config, is_public,
+        game_type, cols, rows, layout_items, prebuilt_sequences)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *
+      `, [req.user.id, title, description.slice(0,256),
+          req.body.game_type||game_mode||'td', JSON.stringify(config), is_public,
+          req.body.game_type||'td', req.body.cols||25, req.body.rows||35,
+          JSON.stringify(req.body.layout_items||[]), JSON.stringify(req.body.prebuilt_sequences||[])]);
       res.json(rows[0]);
     } catch (e) { res.status(500).json({ error: 'db_error' }); }
   }
@@ -115,9 +119,14 @@ router.put('/maps/:id', requireAuth, async (req, res) => {
   const { title, description, config, is_public } = req.body;
   try {
     const { rows } = await req.db.query(`
-      UPDATE workshop_maps SET title=$1, description=$2, config=$3, is_public=$4, updated_at=NOW()
+      UPDATE workshop_maps SET title=$1, description=$2, config=$3, is_public=$4, updated_at=NOW(),
+      game_type=COALESCE($7,'td'), cols=COALESCE($8,cols), rows=COALESCE($9,rows),
+      layout_items=COALESCE($10,layout_items), prebuilt_sequences=COALESCE($11,prebuilt_sequences)
       WHERE id=$5 AND creator_id=$6 RETURNING *
-    `, [title, description, JSON.stringify(config), is_public, req.params.id, req.user.id]);
+    `, [title, description, JSON.stringify(config), is_public, req.params.id, req.user.id,
+        req.body.game_type||null, req.body.cols||null, req.body.rows||null,
+        req.body.layout_items?JSON.stringify(req.body.layout_items):null,
+        req.body.prebuilt_sequences?JSON.stringify(req.body.prebuilt_sequences):null]);
     if (!rows[0]) return res.status(404).json({ error: 'not_found' });
     res.json(rows[0]);
   } catch (e) { res.status(500).json({ error: 'db_error' }); }
