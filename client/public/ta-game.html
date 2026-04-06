@@ -113,6 +113,11 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 // ── State ──────────────────────────────────────────────
 let COLS=15, ROWS=20, TILE=32, CW, CH;
 let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null };
+// Clear stale display values on load
+window.addEventListener('load', () => {
+  document.getElementById('r-time').textContent='–';
+  document.getElementById('r-score').textContent='0';
+});
 let myUserId=null, sessionId=null, socket=null;
 let selectedTool='wall';
 let hoverCell=null;
@@ -226,7 +231,7 @@ function updateHUD(){
   document.getElementById('r-gold').textContent=myGold;
   document.getElementById('r-wood').textContent=myWood;
   document.getElementById('r-score').textContent=myScore;
-  document.getElementById('r-time').textContent=myLastTime?formatTime(myLastTime):'–';
+  document.getElementById('r-time').textContent=(myLastTime&&myLastTime>0)?formatTime(myLastTime):'–';
   const badge=document.getElementById('phase-badge');
   const cd=GS.countdown;
   badge.className='phase-badge phase-'+GS.phase;

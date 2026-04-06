@@ -4,8 +4,8 @@ import { useAuth } from '../App';
 import { api } from '../api';
 
 const BUILTIN_MAPS = [
-  { id:'builtin_td_default', title:'Grünes Tal',   icon:'🌿', game_mode:'td',          difficulty:'normal', description:'Klassische TD-Karte' },
-  { id:'builtin_td_desert',  title:'Wüstenpfad',   icon:'🏜️', game_mode:'td',          difficulty:'hard',   description:'Schnelle Gegner, Gruppen-Spawn' },
+  { id:'builtin_td_default', title:'Grünes Tal',   icon:'🌿', game_mode:'td',          difficulty:'normal', description:'Klassische TD-Karte', bg_style:'grass' },
+  { id:'builtin_td_desert',  title:'Wüstenpfad',   icon:'🏜️', game_mode:'td',          difficulty:'hard',   description:'Schnelle Gegner, Gruppen-Spawn', bg_style:'desert', path_style:'sand' },
   { id:'builtin_vs_arena',   title:'Zentralarena', icon:'⚔️', game_mode:'vs',          difficulty:'normal', description:'VS: Hauptgebäude zerstören' },
   { id:'builtin_ta_spiral',  title:'Spirale',      icon:'🌀', game_mode:'time_attack', difficulty:'normal', description:'Time Attack: Maze bauen' },
 ];
@@ -34,17 +34,33 @@ export default function MapSelect() {
   useEffect(() => {
     // Check if a map was pre-selected (from Workshop page)
     const pre = sessionStorage.getItem('preselect_map');
+    let preMap = null;
     if (pre) {
       try {
-        const m = JSON.parse(pre);
-        setSelMap(m);
-        if (m.difficulty) setSelDiff(m.difficulty);
+        preMap = JSON.parse(pre);
+        setSelMap(preMap);
+        if (preMap.difficulty) setSelDiff(preMap.difficulty);
         sessionStorage.removeItem('preselect_map');
       } catch {}
     }
-    api.get('/workshop/maps/builtin')
-      .then(r => { if(Array.isArray(r.data) && r.data.length) setMaps(r.data); })
-      .catch(() => {});
+
+    // Load all available maps: builtins + user's own
+    const loadMaps = async () => {
+      const allMaps = [...BUILTIN_MAPS];
+      try {
+        const [builtinRes, mineRes] = await Promise.all([
+          api.get('/workshop/maps/builtin').catch(() => ({ data: [] })),
+          api.get('/workshop/maps/mine').catch(() => ({ data: [] })),
+        ]);
+        const builtins = Array.isArray(builtinRes.data) && builtinRes.data.length
+          ? builtinRes.data : BUILTIN_MAPS;
+        const mine = Array.isArray(mineRes.data) ? mineRes.data : [];
+        const combined = [...builtins, ...mine.filter(m => !builtins.find(b => b.id === m.id))];
+        setMaps(combined);
+        if (!preMap && combined.length > 0) setSelMap(combined[0]);
+      } catch {}
+    };
+    loadMaps();
   }, []);
 
   // When map changes, set default diff from map
@@ -63,6 +79,8 @@ export default function MapSelect() {
       id: selMap.id,
       title: selMap.title,
       game_mode: rawMode,
+      bg_style: selMap.bg_style || selMap?.config?.bg_style || 'grass',
+      path_style: selMap.path_style || selMap?.config?.path_style || 'dirt',
       layout_items: selMap.layout_items || selMap?.config?.prebuilt_items || [],
       prebuilt_sequences: selMap.prebuilt_sequences || selMap?.config?.prebuilt_sequences || [],
       // Brand overrides (populated if launched from challenge/brand context)

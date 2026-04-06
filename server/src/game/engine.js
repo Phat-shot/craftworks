@@ -1361,6 +1361,13 @@ function tickTimeAttack(gs) {
   gs.lastTick = now;
   gs.gameTime += dt * 1000;
 
+  if (gs.gameOver) return;
+  // Auto-transition from results phase to next round after delay
+  if (gs.phase === 'results' && gs._nextRoundAt && now >= gs._nextRoundAt) {
+    startNextRound(gs);
+    return;
+  }
+
   // Auto-start after countdown (MP only)
   if (gs.phase === 'placing' && gs.phaseStartTime) {
     const countdown = gs.workshopConfig?.ta_countdown || 0; // 0 = no auto-start
@@ -1369,6 +1376,29 @@ function tickTimeAttack(gs) {
       startRacing(gs);
       return;
     }
+  }
+
+  // Results phase: auto-transition to placing after delay
+  if (gs.phase === 'results') {
+    if (gs._nextRoundAt && gs.gameTime >= gs._nextRoundAt) {
+      gs._nextRoundAt = null;
+      // Reset each player's towers and path for the next round
+      const nextLayout = gs.roundLayouts?.[gs.round] || {};
+      for (const [uid, pm] of Object.entries(gs.playerMaps)) {
+        const p = gs.players[uid];
+        p.gold = gs.workshopConfig?.ta_layout?.gold_per_round || 100;
+        p.wood = gs.workshopConfig?.ta_layout?.wood_per_round || 50;
+        p.lastTime = null; // reset for next round display
+        pm.minion = null;
+        const prebuilt = (nextLayout.prebuilt_towers || gs.workshopConfig?.ta_layout?.prebuilt_towers || [])
+          .map((t,i) => ({ ...t, id:`pt_${uid}_r${gs.round}_${i}`, owner:uid, paths:[0,0,0], lastFire:0, invested:0 }));
+        pm.towers = prebuilt;
+        pm.path   = gs.findTaPath(prebuilt);
+      }
+      gs.phase = 'placing';
+      gs.phaseStartTime = Date.now();
+    }
+    return;
   }
 
   if (gs.phase !== 'racing') return;
@@ -1430,22 +1460,7 @@ function endRound(gs) {
 
   if (gs.round >= gs.totalRounds) { endGame(gs, true); return; }
 
-  // Load next round layout
-  const nextLayout = gs.roundLayouts[gs.round] || {};
-  for (const [uid,pm] of Object.entries(gs.playerMaps)) {
-    const p = gs.players[uid];
-    p.gold = gs.workshopConfig?.ta_layout?.gold_per_round || 100;
-    p.wood = gs.workshopConfig?.ta_layout?.wood_per_round || 50;
-    pm.minion = null;
 
-    // Reset to prebuilt towers for this round
-    const prebuilt = (nextLayout.prebuilt_towers || gs.workshopConfig?.ta_layout?.prebuilt_towers || [])
-      .map((t,i) => ({ ...t, id:`pt_${uid}_r${gs.round}_${i}`, owner:uid, paths:[0,0,0], lastFire:0, invested:0 }));
-    pm.towers = prebuilt;
-    pm.path   = gs.findTaPath(prebuilt);
-  }
-  gs.phase = 'placing';
-  gs.phaseStartTime = Date.now();
 }
 
 function actionTaPlaceTower(gs, userId, data) {

@@ -405,7 +405,11 @@ function applyLayout(){
   canvas.style.width  = cw+'px';
   canvas.style.height = ch+'px';
   ctx.setTransform(dpr,0,0,dpr,0,0); // scale all draws by DPR
-  buildTextures();
+  // Apply map bg_style from workshopConfig
+  const _sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+  const _bgStyle=_sess?.workshopConfig?.bg_style||_sess?.workshopConfig?.config?.bg_style||'grass';
+  window._mapBgStyle=_bgStyle;
+  buildTextures(_bgStyle);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -593,7 +597,18 @@ const TSPRITES={};
 const ESPRITES={};
 let grassTex=null, pathTex=null;
 
-function buildTextures(){
+// Terrain palette per bg_style
+const TERRAIN_PALETTES = {
+  grass:  { bg:['#2d5018','#355e1c','#264814','#3a6820','#2a5216','#4a7828'], path:['#1e3a0e','#233e10','#1a3008','#2a4814'] },
+  desert: { bg:['#c8a050','#d4b060','#b89040','#dcc070','#c0a848','#e8d080'], path:['#a07830','#b08838','#987028','#c09848'] },
+  snow:   { bg:['#d8e8f0','#e4f0f8','#cce0ec','#ddeaf4','#c8dce8','#f0f8ff'], path:['#a0b8c8','#90a8b8','#b0c8d8','#98b0c0'] },
+  lava:   { bg:['#1a0808','#220c0c','#180606','#280e0e','#200808','#1e0a0a'], path:['#802010','#6a1808','#983020','#701808'] },
+  swamp:  { bg:['#1a2a10','#222e14','#182808','#202c0e','#1e2a10','#243214'], path:['#0e1c08','#121e0a','#0a180604','#161c08'] },
+};
+
+function buildTextures(bgStyle){
+  const style = bgStyle || window._mapBgStyle || 'grass';
+  const pal = TERRAIN_PALETTES[style] || TERRAIN_PALETTES.grass;
   const mk=(cols,extra)=>{
     const tc=document.createElement('canvas');tc.width=TILE;tc.height=TILE;
     const tx=tc.getContext('2d');tx.fillStyle=cols[0];tx.fillRect(0,0,TILE,TILE);
@@ -601,11 +616,22 @@ function buildTextures(){
       tx.beginPath();tx.arc(Math.random()*TILE,Math.random()*TILE,Math.random()*2.2+.4,0,Math.PI*2);tx.fill();}
     if(extra)extra(tx);return tc;
   };
-  grassTex=mk(['#2d5018','#355e1c','#264814','#3a6820','#2a5216','#4a7828'],(tx)=>{
+  // Style-specific extras
+  const bgExtra = style==='grass' ? (tx)=>{
     tx.strokeStyle='rgba(80,140,40,.28)';tx.lineWidth=.8;
     for(let i=0;i<8;i++){const px=Math.random()*TILE,py=Math.random()*TILE;
-      tx.beginPath();tx.moveTo(px,py);tx.lineTo(px+(Math.random()-.5)*4,py-3-Math.random()*4);tx.stroke();}});
-  pathTex=mk(['#1e3a0e','#233e10','#1a3008','#2a4814'],null);
+      tx.beginPath();tx.moveTo(px,py);tx.lineTo(px+(Math.random()-.5)*4,py-3-Math.random()*4);tx.stroke();}
+  } : style==='desert' ? (tx)=>{
+    // Sand ripples
+    tx.strokeStyle='rgba(255,220,120,.2)';tx.lineWidth=.6;
+    for(let i=0;i<5;i++){tx.beginPath();tx.moveTo(0,(i+Math.random())*TILE/5);tx.lineTo(TILE,(i+Math.random())*TILE/5);tx.stroke();}
+  } : style==='snow' ? (tx)=>{
+    // Snow sparkles
+    tx.fillStyle='rgba(255,255,255,.6)';
+    for(let i=0;i<4;i++){tx.beginPath();tx.arc(Math.random()*TILE,Math.random()*TILE,1,0,Math.PI*2);tx.fill();}
+  } : null;
+  grassTex=mk(pal.bg, bgExtra);
+  pathTex=mk(pal.path, null);
   Object.keys(TSPRITES).forEach(k=>delete TSPRITES[k]);
   Object.keys(ESPRITES).forEach(k=>delete ESPRITES[k]);
 }
