@@ -112,7 +112,7 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 'use strict';
 // ── State ──────────────────────────────────────────────
 let COLS=15, ROWS=20, TILE=32, CW, CH;
-let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null };
+let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 };
 // Clear stale display values on load
 window.addEventListener('load', () => {
   document.getElementById('r-time').textContent='–';
@@ -190,6 +190,7 @@ function connect(){
     // Update grid dimensions from server (TA grid can vary)
     if(snap.cols && snap.cols !== COLS){ COLS=snap.cols; applyLayout(); }
     if(snap.rows && snap.rows !== ROWS){ ROWS=snap.rows; applyLayout(); }
+    if(snap.entryCol !== undefined) GS.entryCol=snap.entryCol;
     GS=snap;
     const me=snap.players?.[myUserId];
     if(me){
@@ -273,7 +274,7 @@ function drawGrid(){
   for(let r=0;r<=ROWS;r++){ctx.beginPath();ctx.moveTo(0,r*TILE);ctx.lineTo(CW,r*TILE);ctx.stroke();}
   for(let c=0;c<=COLS;c++){ctx.beginPath();ctx.moveTo(c*TILE,0);ctx.lineTo(c*TILE,CH);ctx.stroke();}
   // Entry/Exit
-  const entry=Math.floor(COLS/2);
+  const entry = GS.entryCol !== undefined ? GS.entryCol : Math.floor(COLS/2);
   drawPortal(entry*TILE+TILE/2, TILE/2, '#50ff70', '▼', 'START');
   drawPortal(entry*TILE+TILE/2, (ROWS-1)*TILE+TILE/2, '#ff6050', '▲', 'ZIEL');
 }

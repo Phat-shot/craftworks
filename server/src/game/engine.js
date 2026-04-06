@@ -1434,9 +1434,10 @@ function startRacing(gs) {
   gs.phase = 'racing';
   for (const [uid, pm] of Object.entries(gs.playerMaps)) {
     pm.startTime = gs.gameTime;
+    const _taEntry = gs.taEntryCol !== undefined ? gs.taEntryCol : Math.floor((gs.cols||15)/2);
     pm.minion = {
       id:`minion_${uid}`, owner:uid,
-      px: ENTRY_COL*TILE+TILE/2, py: TILE/2,
+      px: _taEntry*TILE+TILE/2, py: TILE/2,
       pathIdx: 1, spd: 1.8,
       reached:false, escaped:false, time:null,
     };
@@ -1459,8 +1460,8 @@ function endRound(gs) {
   });
 
   if (gs.round >= gs.totalRounds) { endGame(gs, true); return; }
-
-
+  // Schedule auto-transition to placing phase after 5s
+  gs._nextRoundAt = Date.now() + 5000;
 }
 
 function actionTaPlaceTower(gs, userId, data) {
@@ -1546,6 +1547,7 @@ function getTaSnapshot(gs, forUserId) {
     gameTime: gs.gameTime, phase: gs.phase, round: gs.round,
     totalRounds: gs.totalRounds, gameOver: gs.gameOver,
     cols: gs.cols, rows: gs.rows,
+    entryCol: gs.taEntryCol,
     countdown: remaining, // null = no auto-start
     players: gs.players,
     myTowers: pm?.towers || [],
