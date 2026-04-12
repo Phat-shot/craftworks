@@ -88,14 +88,14 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
     </div>
   </div>
   <div id="build-row">
-    <button class="bld-btn sel" id="btn-wall" onclick="selectTool('wall')">
-      🧱<div class="bld-nm">Mauer</div><div class="bld-co">1🪵</div>
+    <button class="bld-btn sel" id="btn-wall_block" onclick="selectTool('wall_block')">
+      🧱<div class="bld-nm">Mauer</div><div class="bld-co">1💰</div>
     </button>
-    <button class="bld-btn" id="btn-passive" onclick="selectTool('passive')">
-      🪨<div class="bld-nm">Passiv</div><div class="bld-co">1💰</div>
+    <button class="bld-btn" id="btn-effect" onclick="selectTool('effect')">
+      🌿<div class="bld-nm" id="effect-nm">Effekt</div><div class="bld-co">1🪵</div>
     </button>
     <button class="bld-btn" id="btn-remove" onclick="selectTool('remove')">
-      🗑️<div class="bld-nm">Entfernen</div><div class="bld-co">Refund</div>
+      🗑️<div class="bld-nm">Entfernen</div><div class="bld-co">—</div>
     </button>
   </div>
   <div id="action-row">
@@ -119,7 +119,8 @@ window.addEventListener('load', () => {
   document.getElementById('r-score').textContent='0';
 });
 let myUserId=null, sessionId=null, socket=null;
-let selectedTool='wall';
+let selectedTool='wall_block';
+let _effectBlockId='slow_block'; // race-specific, set from snap
 let hoverCell=null;
 let myGold=100, myWood=50, myScore=0, myLastTime=null;
 let raceStartTime=null;
@@ -187,6 +188,11 @@ function connect(){
   });
 
   socket.on('game:ta_tick',(snap)=>{
+    // Update effect block from snap (race-specific)
+    if(snap.availableTaBlocks){
+      const eff=snap.availableTaBlocks.find(b=>b.id!=='wall_block');
+      if(eff) setEffectBlock(eff);
+    }
     // Update grid dimensions from server (TA grid can vary)
     if(snap.cols && snap.cols !== COLS){ COLS=snap.cols; applyLayout(); }
     if(snap.rows && snap.rows !== ROWS){ ROWS=snap.rows; applyLayout(); }
@@ -290,27 +296,53 @@ function drawPortal(x,y,col,arrow,label){
   ctx.fillText(label,x,y+TILE*.5);
 }
 
-function drawTowers(){
-  for(const t of GS.myTowers||[]){
-    const x=t.col*TILE, y=t.row*TILE;
-    if(t.type==='wall'||t.type==='wall_tower'){
-      ctx.fillStyle='#5a4830';
-      ctx.fillRect(x+2,y+2,TILE*2-4,TILE*2-4);
-      ctx.strokeStyle='#8a6840'; ctx.lineWidth=1.5;
-      ctx.strokeRect(x+2,y+2,TILE*2-4,TILE*2-4);
-      ctx.fillStyle='#4a3820';
-      for(let i=0;i<4;i++){const mx=x+(i%2)*(TILE-3)+1,my=y+Math.floor(i/2)*(TILE-3)+1;ctx.fillRect(mx,my,3,3);}
-    } else {
-      // passive tower
-      ctx.fillStyle='#303820'; ctx.fillRect(x+3,y+3,TILE*2-6,TILE*2-6);
-      ctx.strokeStyle='#506030'; ctx.lineWidth=1; ctx.strokeRect(x+3,y+3,TILE*2-6,TILE*2-6);
-      ctx.fillStyle='#608040'; ctx.font=`${TILE*.7}px serif`;
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.fillText('🪨',x+TILE,y+TILE);
-    }
+// TA block visuals — all 2×2 tiles
+const TA_VIS={
+  wall_block:  {bg:'#5a4030',hi:'#8a6040',icon:null},
+  wall:        {bg:'#5a4030',hi:'#8a6040',icon:null},
+  slow_block:  {bg:'#1a2c0c',hi:'#508040',icon:'🌿'},
+  passive:     {bg:'#1a2c0c',hi:'#508040',icon:'🌿'},
+  spike_block: {bg:'#281808',hi:'#c06020',icon:'⚡'},
+  mine_block:  {bg:'#181818',hi:'#707070',icon:'💣'},
+  freeze_block:{bg:'#081828',hi:'#4090c0',icon:'❄️'},
+  root_block:  {bg:'#102008',hi:'#509030',icon:'🌱'},
+};
+
+function drawTaBlock(x,y,type,prebuilt){
+  const sz=TILE*2;
+  const v=TA_VIS[type]||TA_VIS.wall_block;
+  ctx.fillStyle='rgba(0,0,0,.3)'; ctx.fillRect(x+3,y+3,sz,sz);
+  const g=ctx.createLinearGradient(x,y,x+sz,y+sz);
+  g.addColorStop(0,v.hi); g.addColorStop(1,v.bg);
+  ctx.fillStyle=g; ctx.fillRect(x,y,sz,sz);
+  ctx.fillStyle='rgba(255,255,255,.13)';
+  ctx.fillRect(x,y,sz,TILE*.14); ctx.fillRect(x,y,TILE*.14,sz);
+  ctx.fillStyle='rgba(0,0,0,.28)';
+  ctx.fillRect(x,y+sz-TILE*.12,sz,TILE*.12); ctx.fillRect(x+sz-TILE*.12,y,TILE*.12,sz);
+  ctx.strokeStyle=prebuilt?'rgba(255,210,60,.7)':v.hi;
+  ctx.lineWidth=prebuilt?2:1.5; ctx.strokeRect(x+.5,y+.5,sz-1,sz-1);
+  if(v.icon){
+    ctx.font=`${TILE*.9}px serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.shadowColor=v.hi; ctx.shadowBlur=8;
+    ctx.fillText(v.icon,x+TILE,y+TILE); ctx.shadowBlur=0;
+  } else {
+    ctx.strokeStyle='rgba(0,0,0,.3)'; ctx.lineWidth=.6;
+    [.33,.67].forEach(f=>{ctx.beginPath();ctx.moveTo(x,y+f*sz);ctx.lineTo(x+sz,y+f*sz);ctx.stroke();});
+    [.25,.5,.75].forEach(f=>{ctx.beginPath();ctx.moveTo(x+f*sz,y);ctx.lineTo(x+f*sz,y+sz);ctx.stroke();});
+    ctx.fillStyle='rgba(255,220,150,.06)'; ctx.fillRect(x,y,sz,sz*.18);
+  }
+  if(prebuilt){
+    ctx.fillStyle='rgba(255,200,40,.9)'; ctx.font=`bold ${TILE*.22}px Cinzel,serif`;
+    ctx.textAlign='right'; ctx.textBaseline='top'; ctx.fillText('★',x+sz-2,y+2);
   }
 }
 
+function drawTowers(){
+  for(const t of GS.myTowers||[]){
+    const pb=!!(t._prebuilt||t.id?.startsWith('pt_')||t.id?.startsWith('race_'));
+    drawTaBlock(t.col*TILE,t.row*TILE,t.type,pb);
+  }
+}
 function drawPath(){
   const path=GS.myPath||[];
   if(path.length<2) return;
@@ -383,7 +415,7 @@ canvas.addEventListener('click',e=>{
     const t=(GS.myTowers||[]).find(t=>(r===t.row||r===t.row+1)&&(c===t.col||c===t.col+1));
     if(t) sendAction('ta_remove_tower',{towerId:t.id});
   } else {
-    sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall':'passive',row:r,col:c});
+    sendAction('ta_place_tower',{type:selectedTool,row:r,col:c});
   }
 });
 canvas.addEventListener('mousemove',e=>{hoverCell=cellFromXY(e.clientX,e.clientY);});
@@ -395,13 +427,26 @@ canvas.addEventListener('touchend',e=>{
   const{r,c}=cellFromXY(t.clientX,t.clientY);
   const taCols=GS.cols||COLS, taRows=GS.rows||ROWS;
   if(r<0||r+1>=taRows||c<0||c+1>=taCols) return;
-  sendAction('ta_place_tower',{type:selectedTool==='wall'?'wall':'passive',row:r,col:c});
+  sendAction('ta_place_tower',{type:selectedTool,row:r,col:c});
 });
 
 function selectTool(t){
+  if(t==='effect') t=_effectBlockId;
   selectedTool=t;
   document.querySelectorAll('.bld-btn').forEach(b=>b.classList.remove('sel'));
-  document.getElementById('btn-'+t).classList.add('sel');
+  // Map tool to button id
+  const btnId = t==='wall_block'?'btn-wall_block':t==='remove'?'btn-remove':'btn-effect';
+  const el=document.getElementById(btnId);
+  if(el) el.classList.add('sel');
+}
+
+function setEffectBlock(block){
+  _effectBlockId=block.id;
+  const nm=document.getElementById('effect-nm');
+  if(nm) nm.textContent=block.name||'Effekt';
+  const btn=document.getElementById('btn-effect');
+  if(btn) btn.childNodes[0].textContent=block.icon||'🌿';
+  if(selectedTool!=='wall_block'&&selectedTool!=='remove') selectedTool=block.id;
 }
 
 function sendAction(action,data={}){

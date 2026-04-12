@@ -489,4 +489,24 @@ function getTowersForRace(race) {
   return [...raceTowers, ...UNIVERSAL_SPECIALS];
 }
 
-module.exports = { RACES, TDB, TOWERS_BY_RACE, UNIVERSAL_SPECIALS, getTowersForRace };
+
+// ── TA Building types: wall_block=1 gold, effect blocks=1 wood ─────
+const TA_BLOCKS = {
+  wall_block:   { id:'wall_block',   name:'Mauer',    icon:'🧱', cost:{gold:1,wood:0}, effect:'wall'                                     },
+  slow_block:   { id:'slow_block',   name:'Sumpf',    icon:'🌿', cost:{gold:0,wood:1}, effect:'slow',  slowFrac:0.5, slowDur:2.0         },
+  spike_block:  { id:'spike_block',  name:'Stacheln', icon:'⚡', cost:{gold:0,wood:1}, effect:'root',  rootDur:1.0                       },
+  mine_block:   { id:'mine_block',   name:'Mine',     icon:'💣', cost:{gold:0,wood:1}, effect:'stun',  stunDur:1.0                       },
+  freeze_block: { id:'freeze_block', name:'Eis',      icon:'❄️', cost:{gold:0,wood:1}, effect:'slow',  slowFrac:0.5, slowDur:2.0         },
+  root_block:   { id:'root_block',   name:'Ranke',    icon:'🌱', cost:{gold:0,wood:1}, effect:'root',  rootDur:1.0                       },
+};
+const TA_BLOCKS_BY_RACE = {
+  standard: ['wall_block','slow_block'],
+  orcs:     ['wall_block','spike_block'],
+  techies:  ['wall_block','mine_block'],
+  elemente: ['wall_block','freeze_block'],
+  urwald:   ['wall_block','root_block'],
+};
+function getTaBlocksForRace(race) {
+  return (TA_BLOCKS_BY_RACE[race]||TA_BLOCKS_BY_RACE.standard).map(id=>TA_BLOCKS[id]).filter(Boolean);
+}
+module.exports = { RACES, TDB, TOWERS_BY_RACE, UNIVERSAL_SPECIALS, getTowersForRace, TA_BLOCKS, TA_BLOCKS_BY_RACE, getTaBlocksForRace };

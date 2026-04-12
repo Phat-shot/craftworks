@@ -4,7 +4,7 @@
 //  All game logic lives here. Client is view-only.
 // ═══════════════════════════════════════════════════════
 
-const { TDB, RACES, getTowersForRace } = require('./towers');
+const { TDB, RACES, getTowersForRace, TA_BLOCKS, getTaBlocksForRace } = require('./towers');
 
 const COLS = 25, ROWS = 35, ENTRY_COL = 12;
 const TILE = 32;
@@ -1288,7 +1288,16 @@ function getVsSnapshot(gs, forUserId) {
 //  TIME ATTACK MODE
 // ═══════════════════════════════════════════════════════
 
-function createTimeAttackGame(sessionId, players, workshopConfig) {
+
+// Race-specific TA prebuilts: 1 wall + 1 effect per player
+const RACE_TA_PREBUILTS = {
+  standard: [{row:4, col:4, type:'wall_block'}, {row:8, col:10, type:'slow_block'}],
+  orcs:     [{row:3, col:10, type:'wall_block'}, {row:7, col:2, type:'spike_block'}],
+  techies:  [{row:5, col:2, type:'wall_block'}, {row:9, col:10, type:'mine_block'}],
+  elemente: [{row:4, col:10, type:'wall_block'}, {row:10, col:2, type:'freeze_block'}],
+  urwald:   [{row:3, col:2, type:'wall_block'}, {row:9, col:10, type:'root_block'}],
+};
+function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = {}) {
   const layout = workshopConfig?.ta_layout || {};
   const cols = layout.cols || 15, rows = layout.rows || 20;
   const taEntryCol = Math.floor(cols / 2);
@@ -1304,7 +1313,7 @@ function createTimeAttackGame(sessionId, players, workshopConfig) {
     const dirs  = [[1,0],[0,1],[0,-1],[-1,0]];
     while (queue.length) {
       const [r, c] = queue.shift();
-      if (r === rows - 1) {
+      if (r === rows - 1 && c === taEntryCol) {
         const path = []; let k = `${r},${c}`;
         while (k !== null) {
           const [pr, pc] = k.split(',').map(Number);
@@ -1327,23 +1336,45 @@ function createTimeAttackGame(sessionId, players, workshopConfig) {
   const playerMaps  = {}; // userId -> { towers, path }
 
   for (const p of players) {
-    const prebuilt = (layout.prebuilt_towers || []).map((t,i) => ({
-      ...t, id:`pt_${p.userId}_${i}`, owner: p.userId,
-      paths:[0,0,0], lastFire:0, invested:0,
+    const taRaceKey = playerRaces?.[p.userId] || 'standard';
+    const racePrebuilts = RACE_TA_PREBUILTS[taRaceKey] || RACE_TA_PREBUILTS.standard;
+    const sharedPB = (layout.prebuilt_towers || []);
+    const allPB = [...sharedPB, ...racePrebuilts].map((t,i) => ({
+      ...t, id:`pt_${p.userId}_${i}`, owner:p.userId, paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
     }));
+    const testPath = findTaPath(allPB);
+    const prebuilt = testPath ? allPB : sharedPB.map((t,i)=>({...t,id:`pt_${p.userId}_${i}`,owner:p.userId,paths:[0,0,0],lastFire:0,invested:0,_prebuilt:true}));
     const path = findTaPath(prebuilt); // use TD pathfinder on smaller grid
+    const taRace = playerRaces?.[p.userId] || 'standard';
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      gold: layout.gold_per_round || 100,
-      wood: layout.wood_per_round || 50,
-      score: 0, round: 0, status: 'placing',
+      gold: layout.gold_per_round || 50,
+      wood: layout.wood_per_round || 3,
+      score: 0, round: 0, status: 'placing', race: taRace,
     };
     playerMaps[p.userId] = { towers: prebuilt, path, minion: null, startTime: null };
+  }
+
+  // Build round sequence from prebuilt_sequences
+  const allSeqs = layout.prebuilt_sequences || [];
+  const numRounds = layout.rounds || 5;
+  let roundSequence = [];
+  if (allSeqs.length > 0) {
+    if (layout.round_selection === 'random') {
+      const pool = [...allSeqs];
+      for (let i = 0; i < numRounds; i++) {
+        if (pool.length === 0) pool.push(...allSeqs);
+        roundSequence.push(pool.splice(Math.floor(Math.random()*pool.length),1)[0]);
+      }
+    } else {
+      for (let i = 0; i < numRounds; i++) roundSequence.push(allSeqs[i % allSeqs.length]);
+    }
   }
 
   return {
     sessionId, mode:'time_attack',
     cols, rows, taEntryCol, findTaPath,
+    roundSequence,
     players: playerState,
     playerMaps, workshopConfig,
     round: 0, totalRounds: layout.rounds || 5,
@@ -1386,14 +1417,19 @@ function tickTimeAttack(gs) {
       const nextLayout = gs.roundLayouts?.[gs.round] || {};
       for (const [uid, pm] of Object.entries(gs.playerMaps)) {
         const p = gs.players[uid];
-        p.gold = gs.workshopConfig?.ta_layout?.gold_per_round || 100;
-        p.wood = gs.workshopConfig?.ta_layout?.wood_per_round || 50;
+        const rSeq = gs.roundSequence?.[gs.round];
+        p.gold = rSeq?.gold_per_round ?? gs.workshopConfig?.ta_layout?.gold_per_round ?? 50;
+        p.wood = rSeq?.wood_per_round ?? gs.workshopConfig?.ta_layout?.wood_per_round ?? 3;
         p.lastTime = null; // reset for next round display
         pm.minion = null;
-        const prebuilt = (nextLayout.prebuilt_towers || gs.workshopConfig?.ta_layout?.prebuilt_towers || [])
-          .map((t,i) => ({ ...t, id:`pt_${uid}_r${gs.round}_${i}`, owner:uid, paths:[0,0,0], lastFire:0, invested:0 }));
-        pm.towers = prebuilt;
-        pm.path   = gs.findTaPath(prebuilt);
+        const nextSeq = gs.roundSequence?.[gs.round] || {};
+        const sharedItems = (nextSeq?.items || []).map((t,i)=>({...t,id:`pt_${uid}_r${gs.round}_${i}`,owner:uid,paths:[0,0,0],lastFire:0,invested:0,_prebuilt:true}));
+        const raceKey = p.race || 'standard';
+        const racePB2 = (RACE_TA_PREBUILTS[raceKey]||RACE_TA_PREBUILTS.standard).map((t,i)=>({...t,id:`race_${uid}_${gs.round}_${i}`,owner:uid,paths:[0,0,0],lastFire:0,invested:0,_prebuilt:true}));
+        const allPB2 = [...sharedItems, ...racePB2];
+        const testPath2 = gs.findTaPath(allPB2);
+        pm.towers = testPath2 ? allPB2 : sharedItems;
+        pm.path = gs.findTaPath(pm.towers) || gs.findTaPath([]);
       }
       gs.phase = 'placing';
       gs.phaseStartTime = Date.now();
@@ -1466,38 +1502,45 @@ function endRound(gs) {
 
 function actionTaPlaceTower(gs, userId, data) {
   const { row, col } = data;
-  // Normalize TA type names: wall_tower→'wall', passive_tower→'passive'
-  let type = data.type;
-  const isWall = type === 'wall_tower' || type === 'wall';
-  const isPassive = type === 'passive_tower' || type === 'passive';
-  if (isWall) type = 'wall';
-  if (isPassive) type = 'passive';
+  const type = data.type;
+
+  // Accept wall_block and any effect block type
+  const isWall   = type === 'wall_block' || type === 'wall' || type === 'wall_tower';
+  const isEffect = !isWall && type && type !== 'remove';
+  if (!isWall && !isEffect) return { ok:false, err:'unknown_type' };
 
   const pm = gs.playerMaps[userId];
   const p  = gs.players[userId];
   if (!pm || !p || gs.phase !== 'placing') return { ok:false, err:'not_placing' };
 
-  // TA uses virtual types 'wall' and 'passive' — no TDB entry needed
-  if (!isWall && !isPassive) return { ok:false, err:'unknown_type' };
+  // Validate the effect block is available for this player's race
+  if (isEffect) {
+    const { TA_BLOCKS_BY_RACE } = require('./towers');
+    const raceBlocks = TA_BLOCKS_BY_RACE[p.race || 'standard'] || [];
+    if (!raceBlocks.includes(type)) return { ok:false, err:'unknown_type' };
+  }
 
-  const cost = isWall ? { gold:0, wood:1 } : { gold:1, wood:0 };
-  if ((p.gold||0) < cost.gold || (p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
-  // TA boundary check uses actual TA grid dimensions (not global ROWS/COLS)
+  // Cost: wall_block = 1 gold, effect blocks = 1 wood
+  const cost = isWall ? { gold:1, wood:0 } : { gold:0, wood:1 };
+  if ((p.gold||0) < cost.gold) return { ok:false, err:'no_resources' };
+  if ((p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
+
+  // TA-specific boundary check
   const taCols = gs.cols || 15, taRows = gs.rows || 20;
-  const taEntry = gs.taEntryCol || Math.floor(taCols/2);
+  const taEntry = gs.taEntryCol !== undefined ? gs.taEntryCol : Math.floor(taCols/2);
   if (row < 0 || row+1 >= taRows || col < 0 || col+1 >= taCols) return { ok:false, err:'blocked' };
   const footprint = [[row,col],[row,col+1],[row+1,col],[row+1,col+1]];
   for (const [rr,cc] of footprint) {
     if ((rr === 0 || rr === taRows-1) && cc === taEntry) return { ok:false, err:'blocked' };
   }
-  // Check collision with existing towers
   for (const t of pm.towers) {
     const tr = [[t.row,t.col],[t.row,t.col+1],[t.row+1,t.col],[t.row+1,t.col+1]];
     for (const [rr,cc] of footprint)
       for (const [tr2,tc2] of tr)
         if (rr===tr2 && cc===tc2) return { ok:false, err:'blocked' };
   }
-  const newPath = gs.findTaPath([...pm.towers, {row,col}]);
+
+  const newPath = gs.findTaPath([...pm.towers, {row,col,type}]);
   if (!newPath) return { ok:false, err:'blocks_path' };
 
   p.gold -= cost.gold;
@@ -1510,6 +1553,7 @@ function actionTaPlaceTower(gs, userId, data) {
   return { ok:true, tower, player:p };
 }
 
+
 function actionTaRemoveTower(gs, userId, data) {
   const { towerId } = data;
   const pm = gs.playerMaps[userId];
@@ -1518,8 +1562,8 @@ function actionTaRemoveTower(gs, userId, data) {
   const tower = pm.towers.find(t => t.id === towerId && t.owner === userId && !t._prebuilt);
   if (!tower) return { ok:false, err:'not_found' };
   // Refund
-  if (tower.type === 'wall') p.wood = (p.wood||0) + 1;
-  else p.gold = (p.gold||0) + 1;
+  if (tower.type === 'wall_block' || tower.type === 'wall') p.gold = (p.gold||0) + 1;
+  else p.wood = (p.wood||0) + 1;
   pm.towers = pm.towers.filter(t => t.id !== towerId);
   pm.path = gs.findTaPath(pm.towers);
   return { ok:true, player: p };
@@ -1550,6 +1594,7 @@ function getTaSnapshot(gs, forUserId) {
     entryCol: gs.taEntryCol,
     countdown: remaining, // null = no auto-start
     players: gs.players,
+    availableTaBlocks: getTaBlocksForRace(gs.players[forUserId]?.race||'standard'),
     myTowers: pm?.towers || [],
     myPath:   pm?.path || [],
     myMinion: pm?.minion || null,
