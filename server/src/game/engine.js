@@ -1561,8 +1561,9 @@ function actionTaRemoveTower(gs, userId, data) {
   if (!pm || !p || gs.phase !== 'placing') return { ok:false, err:'not_placing' };
   const tower = pm.towers.find(t => t.id === towerId && t.owner === userId && !t._prebuilt);
   if (!tower) return { ok:false, err:'not_found' };
-  // Refund
-  if (tower.type === 'wall_block' || tower.type === 'wall') p.gold = (p.gold||0) + 1;
+  // wall_block costs 1 gold → refund; effect blocks cost 1 wood → refund
+  const isWallType = tower.type === 'wall_block' || tower.type === 'wall' || tower.type === 'wall_tower';
+  if (isWallType) p.gold = (p.gold||0) + 1;
   else p.wood = (p.wood||0) + 1;
   pm.towers = pm.towers.filter(t => t.id !== towerId);
   pm.path = gs.findTaPath(pm.towers);

@@ -52,9 +52,7 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 </head>
 <body>
 <div id="topbar">
-  <div class="res">💰<span class="v-gold" id="v-gold">100</span></div>
-  <div class="res" style="margin-left:6px">🪵<span class="v-wood" id="v-wood">50</span></div>
-  <div id="round-info">Runde <span id="v-round">1</span>/<span id="v-total">5</span></div>
+  <div id="round-info" style="font-family:Cinzel,serif;font-size:11px;color:var(--gold)">Runde <span id="v-round">1</span>/<span id="v-total">5</span></div>
   <span class="phase-badge phase-placing" id="phase-badge">PLATZIEREN</span>
 </div>
 
@@ -72,11 +70,11 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
   <div id="resource-row">
     <div class="res-cell">
       <div class="res-val gold" id="r-gold">100</div>
-      <div style="color:#504020;font-size:7px">GOLD</div>
+      <div style="color:#504020;font-size:7px">💰 MAUERN</div>
     </div>
     <div class="res-cell">
       <div class="res-val wood" id="r-wood">50</div>
-      <div style="color:#504020;font-size:7px">HOLZ</div>
+      <div style="color:#504020;font-size:7px">🪵 EFFEKTE</div>
     </div>
     <div class="res-cell">
       <div class="res-val time" id="r-time">–</div>
@@ -113,6 +111,8 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 // ── State ──────────────────────────────────────────────
 let COLS=15, ROWS=20, TILE=32, CW, CH;
 let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 };
+// Clear stale GS from previous session immediately
+function resetGS(){ GS={ phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 }; _lmx=null; _lmy=null; _ddir=4; }
 // Clear stale display values on load
 window.addEventListener('load', () => {
   document.getElementById('r-time').textContent='–';
@@ -231,8 +231,6 @@ function connect(){
 
 // ── HUD ──────────────────────────────────────────────────
 function updateHUD(){
-  document.getElementById('v-gold').textContent=myGold;
-  document.getElementById('v-wood').textContent=myWood;
   document.getElementById('v-round').textContent=GS.round||1;
   document.getElementById('v-total').textContent=GS.totalRounds||5;
   document.getElementById('r-gold').textContent=myGold;
@@ -370,32 +368,54 @@ function drawHover(){
   ctx.lineWidth=1.5; ctx.strokeRect(c*TILE,r*TILE,TILE*2,TILE*2);
 }
 
-function drawMinion(){
-  const m=GS.myMinion;
-  if(!m||GS.phase!=='racing') return;
-  const px=sc(m.px), py=sc(m.py);
-  // Shadow
-  ctx.fillStyle='rgba(0,0,0,.25)';
-  ctx.beginPath(); ctx.ellipse(px,py+TILE*.35,TILE*.28,TILE*.1,0,0,Math.PI*2); ctx.fill();
-  // Body
-  const g=ctx.createRadialGradient(px-TILE*.08,py-TILE*.08,TILE*.03,px,py,TILE*.3);
-  g.addColorStop(0,'#e0c080'); g.addColorStop(1,'#906030');
-  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(px,py,TILE*.3,0,Math.PI*2); ctx.fill();
-  ctx.strokeStyle='rgba(0,0,0,.4)'; ctx.lineWidth=1.5; ctx.stroke();
-  // Eyes
-  [[-TILE*.1,TILE*.05],[TILE*.1,TILE*.05]].forEach(([ex,ey])=>{
-    ctx.fillStyle='#1a1008'; ctx.beginPath(); ctx.arc(px+ex,py+ey,TILE*.07,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='#fff8e0'; ctx.beginPath(); ctx.arc(px+ex-TILE*.03,py+ey-TILE*.03,TILE*.04,0,Math.PI*2); ctx.fill();
+let _ddir=4,_lmx=null,_lmy=null;
+function _dir8(dx,dy){if(Math.abs(dx)<.1&&Math.abs(dy)<.1)return _ddir;const a=Math.atan2(dy,dx);return[6,5,4,3,2,1,0,7][Math.round((a+Math.PI)/(Math.PI*2)*8)%8];}
+function drawDragon(px,py,dir,elapsed){
+  const T=TILE,sz=T*1.15,t2=Date.now()*.003,hov=Math.sin(t2)*T*.06,py2=py+hov;
+  const D=[[0,-1],[.7,-.7],[1,0],[.7,.7],[0,1],[-.7,.7],[-1,0],[-.7,-.7]],[fdx,fdy]=D[dir],[rdx,rdy]=D[(dir+2)%8];
+  const wb=Math.sin(t2*2.8)*.4+.4;
+  ctx.fillStyle=`rgba(0,0,0,${.12+hov*.004})`;ctx.beginPath();ctx.ellipse(px,py+sz*.5,sz*.36,sz*.1,0,0,Math.PI*2);ctx.fill();
+  ctx.save();ctx.translate(px,py2);
+  [[-1],[1]].forEach(([s])=>{
+    const wx=rdx*s*sz*.7,wy=rdy*s*sz*.7,wx2=rdx*s*sz*1.35+fdx*sz*.15,wy2=rdy*s*sz*1.35+fdy*sz*.15,wt=-sz*(.28+wb*.38);
+    const g=ctx.createLinearGradient(0,0,wx2,wy2+wt);g.addColorStop(0,'rgba(80,20,120,.85)');g.addColorStop(.5,'rgba(140,40,200,.55)');g.addColorStop(1,'rgba(200,120,255,.05)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(0,-sz*.1);ctx.quadraticCurveTo(wx*.5,wy*.5+wt*.8,wx2,wy2+wt);ctx.quadraticCurveTo(wx*1.2,wy*1.2,wx,wy);ctx.closePath();ctx.fill();
   });
-  // Timer above minion
-  if(raceStartTime!=null){
-    const elapsed=((Date.now()-raceStartTime)/1000).toFixed(1);
-    ctx.fillStyle='rgba(0,0,0,.7)'; ctx.beginPath();
-    ctx.roundRect?ctx.roundRect(px-22,py-TILE*.55,44,16,4):ctx.rect(px-22,py-TILE*.55,44,16);
-    ctx.fill();
-    ctx.fillStyle='#80d0ff'; ctx.font=`bold ${TILE*.28}px Cinzel,serif`;
-    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(elapsed+'s',px,py-TILE*.46);
+  const bw=sz*.35,bh=sz*.25;
+  const bg=ctx.createRadialGradient(-bw*.2,-bh*.3,bw*.04,-bw*.1,-bh*.1,bw*.8);
+  bg.addColorStop(0,'#80e060');bg.addColorStop(.35,'#408030');bg.addColorStop(.75,'#204018');bg.addColorStop(1,'#102008');
+  ctx.fillStyle=bg;ctx.beginPath();ctx.ellipse(0,0,bw,bh,0,0,Math.PI*2);ctx.fill();
+  const hx=fdx*sz*.38,hy=fdy*sz*.38;
+  const hg=ctx.createRadialGradient(hx-fdx*sz*.04,hy,sz*.02,hx,hy,sz*.19);
+  hg.addColorStop(0,'#70c050');hg.addColorStop(.5,'#408030');hg.addColorStop(1,'#102008');
+  ctx.fillStyle=hg;ctx.beginPath();ctx.ellipse(hx,hy,sz*.18,sz*.13,Math.atan2(fdy,fdx),0,Math.PI*2);ctx.fill();
+  const sx=fdx*sz*.54,sy=fdy*sz*.54;
+  ctx.fillStyle='#306020';ctx.beginPath();ctx.ellipse(sx,sy,sz*.10,sz*.065,Math.atan2(fdy,fdx),0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='rgba(255,80,0,.7)';ctx.beginPath();ctx.arc(sx+fdx*sz*.04,sy+fdy*sz*.04,sz*.022,0,Math.PI*2);ctx.fill();
+  [.45,-.45].forEach(s=>{
+    const ex=hx+rdx*s*sz*.09,ey=hy+rdy*s*sz*.09;
+    ctx.fillStyle='#e0f8e0';ctx.beginPath();ctx.arc(ex,ey,sz*.05,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#ff4000';ctx.beginPath();ctx.ellipse(ex,ey,sz*.017,sz*.042,Math.atan2(fdy,fdx)+Math.PI/2,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(255,255,200,.6)';ctx.beginPath();ctx.arc(ex-sz*.012,ey-sz*.012,sz*.012,0,Math.PI*2);ctx.fill();
+  });
+  for(let i=0;i<4;i++){const r2=sz*(.1-i*.022);ctx.fillStyle='#408030';ctx.beginPath();ctx.arc(-fdx*sz*.18*(i+1)*.22,-fdy*sz*.18*(i+1)*.22,Math.max(2,r2),0,Math.PI*2);ctx.fill();}
+  ctx.fillStyle='#a0ff60';ctx.strokeStyle='rgba(0,0,0,.3)';ctx.lineWidth=.5;
+  for(let i=0;i<3;i++){const f=(i+.5)/3,tx3=-fdx*sz*.54*f,ty3=-fdy*sz*.54*f;ctx.beginPath();ctx.moveTo(tx3,ty3-sz*.04);ctx.lineTo(tx3+rdx*sz*.05,ty3+sz*.04);ctx.lineTo(tx3-rdx*sz*.05,ty3+sz*.04);ctx.closePath();ctx.fill();ctx.stroke();}
+  ctx.restore();
+  if(elapsed!=null){
+    const l=elapsed.toFixed(1)+'s',bw2=l.length*6+12,bh2=15;
+    ctx.fillStyle='rgba(0,0,0,.78)';
+    if(ctx.roundRect)ctx.roundRect(px-bw2/2,py2-sz*.76-bh2,bw2,bh2,4);else ctx.rect(px-bw2/2,py2-sz*.76-bh2,bw2,bh2);
+    ctx.fill();ctx.fillStyle='#80d0ff';ctx.font=`bold ${T*.25}px Cinzel,serif`;
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(l,px,py2-sz*.76-bh2/2);
   }
+}
+function drawMinion(){
+  const m=GS.myMinion;if(!m||GS.phase!=='racing')return;
+  const px=sc(m.px),py=sc(m.py);
+  if(_lmx!==null){const dx=px-_lmx,dy=py-_lmy;if(Math.hypot(dx,dy)>.5)_ddir=_dir8(dx,dy);}
+  _lmx=px;_lmy=py;
+  drawDragon(px,py,_ddir,raceStartTime!=null?(Date.now()-raceStartTime)/1000:null);
 }
 
 // ── Input ──────────────────────────────────────────────
