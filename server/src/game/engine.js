@@ -1291,11 +1291,12 @@ function getVsSnapshot(gs, forUserId) {
 
 // Race-specific TA prebuilts: 1 wall + 1 effect per player
 const RACE_TA_PREBUILTS = {
-  standard: [{row:4, col:4, type:'wall_block'}, {row:8, col:10, type:'slow_block'}],
-  orcs:     [{row:3, col:10, type:'wall_block'}, {row:7, col:2, type:'spike_block'}],
-  techies:  [{row:5, col:2, type:'wall_block'}, {row:9, col:10, type:'mine_block'}],
-  elemente: [{row:4, col:10, type:'wall_block'}, {row:10, col:2, type:'freeze_block'}],
-  urwald:   [{row:3, col:2, type:'wall_block'}, {row:9, col:10, type:'root_block'}],
+  // Positions for 25x35 grid (entry=12). Wall away from center, effect on opposite side.
+  standard: [{row:5, col:7,  type:'wall_block'}, {row:10, col:16, type:'slow_block'}],
+  orcs:     [{row:4, col:16, type:'wall_block'}, {row:9,  col:4,  type:'spike_block'}],
+  techies:  [{row:6, col:4,  type:'wall_block'}, {row:12, col:18, type:'mine_block'}],
+  elemente: [{row:5, col:18, type:'wall_block'}, {row:11, col:4,  type:'freeze_block'}],
+  urwald:   [{row:4, col:4,  type:'wall_block'}, {row:10, col:18, type:'root_block'}],
 };
 function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = {}) {
   const layout = workshopConfig?.ta_layout || {};
@@ -1474,7 +1475,7 @@ function startRacing(gs) {
     pm.minion = {
       id:`minion_${uid}`, owner:uid,
       px: _taEntry*TILE+TILE/2, py: TILE/2,
-      pathIdx: 1, spd: 1.8,
+      pathIdx: 1, spd: 3.2,
       reached:false, escaped:false, time:null,
     };
   }
