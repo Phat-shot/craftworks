@@ -1291,16 +1291,16 @@ function getVsSnapshot(gs, forUserId) {
 
 // Race-specific TA prebuilts: 1 wall + 1 effect per player
 const RACE_TA_PREBUILTS = {
-  // Positions for 25x35 grid (entry=12). Wall away from center, effect on opposite side.
-  standard: [{row:5, col:7,  type:'wall_block'}, {row:10, col:16, type:'slow_block'}],
-  orcs:     [{row:4, col:16, type:'wall_block'}, {row:9,  col:4,  type:'spike_block'}],
-  techies:  [{row:6, col:4,  type:'wall_block'}, {row:12, col:18, type:'mine_block'}],
-  elemente: [{row:5, col:18, type:'wall_block'}, {row:11, col:4,  type:'freeze_block'}],
-  urwald:   [{row:4, col:4,  type:'wall_block'}, {row:10, col:18, type:'root_block'}],
+  // Positions for 35x50 grid (entry=17). Each race gets a wall + effect on opposite flanks.
+  standard: [{row:6, col:10, type:'wall_block'}, {row:14, col:23, type:'slow_block'}],
+  orcs:     [{row:5, col:23, type:'wall_block'}, {row:12, col:5,  type:'spike_block'}],
+  techies:  [{row:7, col:5,  type:'wall_block'}, {row:15, col:27, type:'mine_block'}],
+  elemente: [{row:6, col:27, type:'wall_block'}, {row:13, col:5,  type:'freeze_block'}],
+  urwald:   [{row:5, col:5,  type:'wall_block'}, {row:14, col:27, type:'root_block'}],
 };
 function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = {}) {
   const layout = workshopConfig?.ta_layout || {};
-  const cols = layout.cols || 15, rows = layout.rows || 20;
+  const cols = layout.cols || 35, rows = layout.rows || 50;
   const taEntryCol = Math.floor(cols / 2);
 
   // TA-specific BFS pathfinder using the actual TA grid size
@@ -1349,8 +1349,8 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
     const taRace = playerRaces?.[p.userId] || 'standard';
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      gold: layout.gold_per_round || 50,
-      wood: layout.wood_per_round || 3,
+      gold: (layout.prebuilt_sequences?.[0]?.gold_per_round) ?? layout.gold_per_round ?? 15,
+      wood: (layout.prebuilt_sequences?.[0]?.wood_per_round) ?? layout.wood_per_round ?? 2,
       score: 0, round: 0, status: 'placing', race: taRace,
     };
     playerMaps[p.userId] = { towers: prebuilt, path, minion: null, startTime: null };
@@ -1548,7 +1548,7 @@ function actionTaPlaceTower(gs, userId, data) {
   p.wood  -= cost.wood;
 
   const tower = { id:`ta_${Date.now()}_${userId}`, type, row, col,
-    paths:[0,0,0], lastFire:0, owner:userId, invested:0 };
+    paths:[0,0,0], lastFire:0, owner:userId, invested:0, _prebuilt:false };
   pm.towers.push(tower);
   pm.path = newPath;
   return { ok:true, tower, player:p };

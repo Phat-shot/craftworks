@@ -74,27 +74,28 @@ export default function MapSelect() {
     const rawMode = selMap?.game_mode || 'td';
     const mode = rawMode === 'td' ? 'solo' : rawMode;
     // workshopConfig carries map identity - difficulty/race come separately
+    const baseCfg = selMap?.config || {};
+    const srcLayout = baseCfg.ta_layout || {};
     const workshopConfig = {
-      ...(selMap?.config || {}),
+      ...baseCfg,
       id: selMap.id,
       title: selMap.title,
       game_mode: rawMode,
-      bg_style: selMap.bg_style || selMap?.config?.bg_style || 'grass',
-      path_style: selMap.path_style || selMap?.config?.path_style || 'dirt',
-      layout_items: selMap.layout_items || selMap?.config?.prebuilt_items || [],
-      prebuilt_sequences: selMap.prebuilt_sequences || selMap?.config?.prebuilt_sequences || [],
-      // Brand overrides (populated if launched from challenge/brand context)
+      bg_style: selMap.bg_style || baseCfg.bg_style || 'grass',
+      // TA layout — always reconstruct so SP gets gold/wood/sequences
+      ta_layout: rawMode === 'time_attack' ? {
+        cols:               selMap.cols  || srcLayout.cols  || 35,
+        rows:               selMap.rows  || srcLayout.rows  || 50,
+        rounds:             selRounds,
+        gold_per_round:     srcLayout.gold_per_round  ?? 15,
+        wood_per_round:     srcLayout.wood_per_round  ?? 2,
+        round_selection:    srcLayout.round_selection || 'random',
+        prebuilt_towers:    srcLayout.prebuilt_towers    || [],
+        prebuilt_sequences: srcLayout.prebuilt_sequences || [],
+      } : undefined,
+      available_races: selMap.available_races || baseCfg.available_races || ['standard','orcs','techies','elemente','urwald'],
       building_skins: selMap.building_skins || {},
       unit_skins: selMap.unit_skins || {},
-      label_gold: selMap.label_gold || null,
-      label_score: selMap.label_score || null,
-      label_lives: selMap.label_lives || null,
-      icon_gold: selMap.icon_gold || null,
-      icon_score: selMap.icon_score || null,
-      icon_lives: selMap.icon_lives || null,
-      bg_texture_url: selMap.bg_texture_url || null,
-      path_texture_url: selMap.path_texture_url || null,
-      logo_overlay_url: selMap.logo_overlay_url || null,
     };
 
     // Write everything to session — td/vs/ta-game.html will pick it up and start

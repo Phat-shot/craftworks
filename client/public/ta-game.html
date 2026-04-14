@@ -112,7 +112,7 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 let COLS=15, ROWS=20, TILE=32, CW, CH;
 let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 };
 // Clear stale GS from previous session immediately
-function resetGS(){ GS={ phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 }; _lmx=null; _lmy=null; _ddir=4; }
+function resetGS(){ GS={ phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 }; _lmx=null; _lmy=null; _ddir=4; Object.keys(_taSprites||{}).forEach(k=>delete _taSprites[k]); }
 // Clear stale display values on load
 window.addEventListener('load', () => {
   document.getElementById('r-time').textContent='–';
@@ -194,10 +194,16 @@ function connect(){
       if(eff) setEffectBlock(eff);
     }
     // Update grid dimensions from server (TA grid can vary)
+    // Apply snap, preserving computed grid dims
+    const prevPhase=GS.phase;
+    GS=snap;
+    // Update grid dimensions if changed
     if(snap.cols && snap.cols !== COLS){ COLS=snap.cols; applyLayout(); }
     if(snap.rows && snap.rows !== ROWS){ ROWS=snap.rows; applyLayout(); }
-    if(snap.entryCol !== undefined) GS.entryCol=snap.entryCol;
-    GS=snap;
+    // Phase transition: clear sprite cache so prebuilt badges update
+    if(prevPhase!==snap.phase && snap.phase==='placing'){
+      Object.keys(_taSprites).forEach(k=>delete _taSprites[k]);
+    }
     const me=snap.players?.[myUserId];
     if(me){
       myGold=me.gold??myGold;
@@ -294,45 +300,141 @@ function drawPortal(x,y,col,arrow,label){
   ctx.fillText(label,x,y+TILE*.5);
 }
 
-// TA block visuals — all 2×2 tiles
-const TA_VIS={
-  wall_block:  {bg:'#5a4030',hi:'#8a6040',icon:null},
-  wall:        {bg:'#5a4030',hi:'#8a6040',icon:null},
-  slow_block:  {bg:'#1a2c0c',hi:'#508040',icon:'🌿'},
-  passive:     {bg:'#1a2c0c',hi:'#508040',icon:'🌿'},
-  spike_block: {bg:'#281808',hi:'#c06020',icon:'⚡'},
-  mine_block:  {bg:'#181818',hi:'#707070',icon:'💣'},
-  freeze_block:{bg:'#081828',hi:'#4090c0',icon:'❄️'},
-  root_block:  {bg:'#102008',hi:'#509030',icon:'🌱'},
-};
+// ──────────────────────────────────────────────────────────────
+//  TA BLOCK SPRITES  (all 2×2 tiles, canvas-drawn 3D)
+// ──────────────────────────────────────────────────────────────
+const _taSprites={};
+function _getTaSprite(type,prebuilt,sz){
+  const k=`${type}_${prebuilt?1:0}_${sz}`;
+  if(_taSprites[k]) return _taSprites[k];
+  const oc=document.createElement('canvas'); oc.width=sz; oc.height=sz;
+  const x=oc.getContext('2d');
+  _drawTaSprite(x,type,prebuilt,sz);
+  _taSprites[k]=oc; return oc;
+}
+
+function _drawTaSprite(x,type,pb,sz){
+  const c=sz/2, pad=sz*.04;
+  // ── Wall Block ──────────────────────────────────────
+  if(type==='wall_block'||type==='wall'){
+    // Stone base with depth
+    const g=x.createLinearGradient(0,0,sz,sz);
+    g.addColorStop(0,'#8a7060'); g.addColorStop(.3,'#6a5040'); g.addColorStop(1,'#3a2818');
+    x.fillStyle=g; x.fillRect(0,0,sz,sz);
+    // Brickwork
+    const bH=sz*.22, bW=sz*.48;
+    const rows2=Math.ceil(sz/bH);
+    for(let r=0;r<rows2;r++){
+      const y0=r*bH, offset=(r%2)*bW*.5;
+      const bricksPerRow=Math.ceil((sz+bW)/bW)+1;
+      for(let c2=0;c2<bricksPerRow;c2++){
+        const x0=c2*bW-offset-bW*.05;
+        // Brick face
+        const bg2=x.createLinearGradient(x0,y0,x0+bW*.9,y0+bH*.9);
+        bg2.addColorStop(0,'#907060'); bg2.addColorStop(.5,'#7a5e48'); bg2.addColorStop(1,'#5a4030');
+        x.fillStyle=bg2; x.fillRect(x0+1,y0+1,bW*.9-1,bH*.9-1);
+        // Top highlight
+        x.fillStyle='rgba(255,220,160,.18)'; x.fillRect(x0+1,y0+1,bW*.9-1,bH*.12);
+        // Mortar lines (dark gaps)
+        x.fillStyle='rgba(0,0,0,.5)';
+        x.fillRect(x0,y0,1,bH); x.fillRect(x0,y0,bW*.9,1);
+      }
+    }
+    // Overall depth shading
+    x.fillStyle='rgba(0,0,0,.22)'; x.fillRect(0,sz*.82,sz,sz*.18);
+    x.fillRect(sz*.82,0,sz*.18,sz);
+    // Top light
+    const shine=x.createLinearGradient(0,0,sz,sz*.15);
+    shine.addColorStop(0,'rgba(255,220,160,.22)'); shine.addColorStop(1,'rgba(255,220,160,0)');
+    x.fillStyle=shine; x.fillRect(0,0,sz,sz);
+  }
+  // ── Effect Blocks ───────────────────────────────────
+  else {
+    const defs={
+      slow_block:   {bg1:'#2a4810',bg2:'#0e200a',glow:'#60c030',rimC:'rgba(80,200,40,.6)'},
+      passive:      {bg1:'#2a4810',bg2:'#0e200a',glow:'#60c030',rimC:'rgba(80,200,40,.6)'},
+      spike_block:  {bg1:'#502808',bg2:'#200e04',glow:'#e08020',rimC:'rgba(220,100,20,.6)'},
+      mine_block:   {bg1:'#242424',bg2:'#101010',glow:'#c0c0c0',rimC:'rgba(160,160,160,.5)'},
+      freeze_block: {bg1:'#0c2040',bg2:'#060c20',glow:'#40b8ff',rimC:'rgba(60,160,255,.65)'},
+      root_block:   {bg1:'#183008',bg2:'#0a1804',glow:'#50a020',rimC:'rgba(70,160,30,.6)'},
+    };
+    const d=defs[type]||defs.slow_block;
+    // Pulsing glow bg
+    const bg=x.createRadialGradient(c,c,sz*.05,c,c,sz*.7);
+    bg.addColorStop(0,d.bg1); bg.addColorStop(1,d.bg2);
+    x.fillStyle=bg; x.fillRect(0,0,sz,sz);
+    // Rim glow
+    x.strokeStyle=d.rimC; x.lineWidth=sz*.06;
+    x.strokeRect(sz*.05,sz*.05,sz*.9,sz*.9);
+    // Subtle grid texture
+    x.strokeStyle='rgba(255,255,255,.05)'; x.lineWidth=.5;
+    for(let i=1;i<4;i++){
+      x.beginPath();x.moveTo(i*sz*.25,0);x.lineTo(i*sz*.25,sz);x.stroke();
+      x.beginPath();x.moveTo(0,i*sz*.25);x.lineTo(sz,i*sz*.25);x.stroke();
+    }
+    // Central glow circle
+    const cg=x.createRadialGradient(c,c,0,c,c,sz*.3);
+    cg.addColorStop(0,d.glow+'ff'); cg.addColorStop(.5,d.glow+'88'); cg.addColorStop(1,d.glow+'00');
+    x.fillStyle=cg; x.beginPath(); x.arc(c,c,sz*.3,0,Math.PI*2); x.fill();
+    // Type-specific inner detail
+    x.shadowColor=d.glow; x.shadowBlur=sz*.12;
+    if(type==='slow_block'||type==='passive'){
+      // Swirl / slowdown symbol
+      x.strokeStyle=d.glow+'cc'; x.lineWidth=sz*.04;
+      x.beginPath(); x.arc(c,c,sz*.18,-Math.PI*.8,Math.PI*.9); x.stroke();
+      x.beginPath(); x.arc(c,c,sz*.1,-Math.PI*.5,Math.PI*.7); x.stroke();
+    } else if(type==='spike_block'){
+      // Spike / stun star
+      x.fillStyle=d.glow; x.strokeStyle=d.bg1; x.lineWidth=sz*.025;
+      for(let i=0;i<6;i++){const a=i*Math.PI/3-Math.PI/6,r1=sz*.22,r2=sz*.1;
+        const pts=[[Math.cos(a)*r1+c,Math.sin(a)*r1+c],[Math.cos(a+Math.PI/6)*r2+c,Math.sin(a+Math.PI/6)*r2+c]];
+        if(i===0){x.beginPath();x.moveTo(...pts[0]);}else x.lineTo(...pts[0]);
+        x.lineTo(...pts[1]);
+      } x.closePath(); x.fill();
+    } else if(type==='mine_block'){
+      // Warning stripes + X
+      x.strokeStyle=d.glow; x.lineWidth=sz*.05;
+      [[0.3,0.3,0.7,0.7],[0.7,0.3,0.3,0.7]].forEach(([x1,y1,x2,y2])=>{
+        x.beginPath();x.moveTo(x1*sz,y1*sz);x.lineTo(x2*sz,y2*sz);x.stroke();
+      });
+      x.fillStyle=d.glow+'88'; x.beginPath(); x.arc(c,c,sz*.07,0,Math.PI*2); x.fill();
+    } else if(type==='freeze_block'){
+      // Snowflake
+      x.strokeStyle=d.glow+'ee'; x.lineWidth=sz*.04;
+      for(let i=0;i<6;i++){const a=i*Math.PI/3;
+        x.beginPath();x.moveTo(c,c);x.lineTo(c+Math.cos(a)*sz*.24,c+Math.sin(a)*sz*.24);x.stroke();
+        x.beginPath();x.moveTo(c+Math.cos(a)*sz*.12,c+Math.sin(a)*sz*.12);
+        x.lineTo(c+Math.cos(a+Math.PI/6)*sz*.08+Math.cos(a)*sz*.12,c+Math.sin(a+Math.PI/6)*sz*.08+Math.sin(a)*sz*.12);x.stroke();
+      }
+    } else if(type==='root_block'){
+      // Vine / root tendrils
+      x.strokeStyle=d.glow+'cc'; x.lineWidth=sz*.04;
+      [[-.2,.1],[.2,-.15],[-.1,-.2],[.15,.2]].forEach(([dx,dy])=>{
+        x.beginPath();x.moveTo(c,c);
+        x.quadraticCurveTo(c+dx*sz*.5,c+dy*sz*.5,c+dx*sz,c+dy*sz);x.stroke();
+      });
+    }
+    x.shadowBlur=0;
+    // Top shine
+    const sh=x.createLinearGradient(0,0,sz*.4,sz*.4);
+    sh.addColorStop(0,'rgba(255,255,255,.15)'); sh.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle=sh; x.fillRect(0,0,sz,sz);
+  }
+
+  // Prebuilt golden border + star
+  if(pb){
+    x.strokeStyle='rgba(255,200,40,.9)'; x.lineWidth=sz*.04;
+    x.strokeRect(sz*.02,sz*.02,sz*.96,sz*.96);
+    x.fillStyle='rgba(255,200,40,.95)';
+    x.font=`bold ${sz*.2}px Cinzel,serif`;
+    x.textAlign='right'; x.textBaseline='top';
+    x.fillText('★',sz-sz*.05,sz*.03);
+  }
+}
 
 function drawTaBlock(x,y,type,prebuilt){
   const sz=TILE*2;
-  const v=TA_VIS[type]||TA_VIS.wall_block;
-  ctx.fillStyle='rgba(0,0,0,.3)'; ctx.fillRect(x+3,y+3,sz,sz);
-  const g=ctx.createLinearGradient(x,y,x+sz,y+sz);
-  g.addColorStop(0,v.hi); g.addColorStop(1,v.bg);
-  ctx.fillStyle=g; ctx.fillRect(x,y,sz,sz);
-  ctx.fillStyle='rgba(255,255,255,.13)';
-  ctx.fillRect(x,y,sz,TILE*.14); ctx.fillRect(x,y,TILE*.14,sz);
-  ctx.fillStyle='rgba(0,0,0,.28)';
-  ctx.fillRect(x,y+sz-TILE*.12,sz,TILE*.12); ctx.fillRect(x+sz-TILE*.12,y,TILE*.12,sz);
-  ctx.strokeStyle=prebuilt?'rgba(255,210,60,.7)':v.hi;
-  ctx.lineWidth=prebuilt?2:1.5; ctx.strokeRect(x+.5,y+.5,sz-1,sz-1);
-  if(v.icon){
-    ctx.font=`${TILE*.9}px serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.shadowColor=v.hi; ctx.shadowBlur=8;
-    ctx.fillText(v.icon,x+TILE,y+TILE); ctx.shadowBlur=0;
-  } else {
-    ctx.strokeStyle='rgba(0,0,0,.3)'; ctx.lineWidth=.6;
-    [.33,.67].forEach(f=>{ctx.beginPath();ctx.moveTo(x,y+f*sz);ctx.lineTo(x+sz,y+f*sz);ctx.stroke();});
-    [.25,.5,.75].forEach(f=>{ctx.beginPath();ctx.moveTo(x+f*sz,y);ctx.lineTo(x+f*sz,y+sz);ctx.stroke();});
-    ctx.fillStyle='rgba(255,220,150,.06)'; ctx.fillRect(x,y,sz,sz*.18);
-  }
-  if(prebuilt){
-    ctx.fillStyle='rgba(255,200,40,.9)'; ctx.font=`bold ${TILE*.22}px Cinzel,serif`;
-    ctx.textAlign='right'; ctx.textBaseline='top'; ctx.fillText('★',x+sz-2,y+2);
-  }
+  ctx.drawImage(_getTaSprite(type,prebuilt,sz),x,y);
 }
 
 function drawTowers(){
