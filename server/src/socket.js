@@ -7,7 +7,6 @@ const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('./game/builtin-maps');
 
 // Enrich TA workshopConfig with server-side sequences (never sent through client)
 function enrichTaConfig(wc) {
-  // Just ensure correct grid dimensions from builtin — worker loads sequences itself
   try {
     if (!wc) return wc;
     const mapId = wc.id || wc.map_id;
@@ -15,16 +14,29 @@ function enrichTaConfig(wc) {
     if (!builtin?.config?.ta_layout) return wc;
     const bTl = builtin.config.ta_layout;
     const cTl = wc.ta_layout || {};
-    // Merge builtin grid/round defaults with client preferences (NO sequences here)
+    const numRounds = cTl.rounds || bTl.rounds || 10;
+    const allSeqs = bTl.prebuilt_sequences || [];
+
+    // Pre-select rounds here (main thread) — send only selected rounds to worker
+    let selectedSeqs = [];
+    if (allSeqs.length > 0) {
+      const pool = [...allSeqs];
+      for (let i = 0; i < numRounds; i++) {
+        if (pool.length === 0) pool.push(...allSeqs);
+        selectedSeqs.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+      }
+    }
+
     const tl = {
       cols: bTl.cols, rows: bTl.rows,
-      round_selection: bTl.round_selection || 'random',
+      rounds: numRounds,
+      round_selection: 'sequential', // already selected & ordered
       gold_per_round: bTl.gold_per_round,
       wood_per_round: bTl.wood_per_round,
       ...cTl,
-      prebuilt_sequences: [], // worker loads sequences itself from builtin-maps.js
+      prebuilt_sequences: selectedSeqs, // only 10 rounds, not 50
     };
-    console.log(`[enrichTa] ${mapId}: cols=${tl.cols}, rows=${tl.rows}, rounds=${tl.rounds}`);
+    console.log('[enrichTa]', mapId + ': ' + selectedSeqs.length + ' rounds selected, cols=' + tl.cols);
     return { ...wc, ta_layout: tl };
   } catch(e) {
     console.error('[enrichTaConfig] error:', e.message);

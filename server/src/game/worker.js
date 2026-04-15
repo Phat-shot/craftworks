@@ -5,21 +5,6 @@
 //  Communicates with main thread via postMessage.
 // ═══════════════════════════════════════════════════════════
 const { parentPort, workerData } = require('worker_threads');
-const { BUILTIN_MAPS } = require('./builtin-maps');
-
-// Enrich TA config in worker (avoids sending 45KB sequences through postMessage)
-function workerEnrichTa(wc) {
-  if (!wc) return wc;
-  const seqs = wc.ta_layout?.prebuilt_sequences;
-  if (seqs && seqs.length > 0) return wc; // already has sequences
-  const mapId = wc.id || wc.map_id;
-  const builtin = mapId && BUILTIN_MAPS?.find(m => m.id === mapId);
-  const bSeqs = builtin?.config?.ta_layout?.prebuilt_sequences;
-  if (!bSeqs?.length) return wc;
-  const bTl = builtin.config.ta_layout;
-  const cTl = wc.ta_layout || {};
-  return { ...wc, ta_layout: { ...bTl, ...cTl, prebuilt_sequences: bSeqs } };
-}
 const engine = require('./engine');
 
 let gs = null;
@@ -34,7 +19,7 @@ parentPort.on('message', (msg) => {
       if (msg.mode === 'vs') {
         gs = engine.createVsGame(msg.sessionId, msg.players, msg.playerRaces, msg.workshopConfig);
       } else if (msg.mode === 'time_attack') {
-        gs = engine.createTimeAttackGame(msg.sessionId, msg.players, workerEnrichTa(msg.workshopConfig), msg.playerRaces);
+        gs = engine.createTimeAttackGame(msg.sessionId, msg.players, msg.workshopConfig, msg.playerRaces);
       } else if (msg.mode === 'pve') {
         gs = engine.createPveGame(msg.sessionId, msg.players, msg.playerRaces, msg.workshopConfig);
       } else {
