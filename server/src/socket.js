@@ -3,7 +3,7 @@ const jwt         = require('jsonwebtoken');
 const engine      = require('./game/engine');
 const gameManager = require('./game/game_manager');
 const { RACES, TDB, getTowersForRace } = require('./game/towers');
-const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('./routes/workshop');
+const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('./game/builtin-maps');
 
 // Enrich TA workshopConfig with server-side sequences (never sent through client)
 function enrichTaConfig(wc) {
