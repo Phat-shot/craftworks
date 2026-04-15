@@ -7,24 +7,24 @@ const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('./game/builtin-maps');
 
 // Enrich TA workshopConfig with server-side sequences (never sent through client)
 function enrichTaConfig(wc) {
+  // Just ensure correct grid dimensions from builtin — worker loads sequences itself
   try {
     if (!wc) return wc;
     const mapId = wc.id || wc.map_id;
     const builtin = mapId && BUILTIN_MAP_LIST?.find(m => m.id === mapId);
-    const seqs = builtin?.config?.ta_layout?.prebuilt_sequences;
-    if (!seqs?.length) return wc;
-    const clientTl = wc.ta_layout || {};
-    const builtinTl = builtin.config.ta_layout || {};
+    if (!builtin?.config?.ta_layout) return wc;
+    const bTl = builtin.config.ta_layout;
+    const cTl = wc.ta_layout || {};
+    // Merge builtin grid/round defaults with client preferences (NO sequences here)
     const tl = {
-      // Start with builtin defaults (cols/rows/etc)
-      ...builtinTl,
-      // Override with client preferences (rounds, countdown)
-      ...clientTl,
-      // Always inject server-side sequences
-      prebuilt_sequences: seqs,
-      round_selection: builtinTl.round_selection || 'random',
+      cols: bTl.cols, rows: bTl.rows,
+      round_selection: bTl.round_selection || 'random',
+      gold_per_round: bTl.gold_per_round,
+      wood_per_round: bTl.wood_per_round,
+      ...cTl,
+      prebuilt_sequences: [], // worker loads sequences itself from builtin-maps.js
     };
-    console.log(`[enrichTa] ${mapId}: ${seqs.length} seqs, cols=${tl.cols}, rows=${tl.rows}`);
+    console.log(`[enrichTa] ${mapId}: cols=${tl.cols}, rows=${tl.rows}, rounds=${tl.rounds}`);
     return { ...wc, ta_layout: tl };
   } catch(e) {
     console.error('[enrichTaConfig] error:', e.message);

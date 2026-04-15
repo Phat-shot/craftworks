@@ -163,6 +163,15 @@ function connect(){
   socket=io({auth:{token}});
 
   let _gameStarted=false;
+  socket.on('disconnect', (reason) => {
+    if (reason === 'io server disconnect' || reason === 'transport close') {
+      // Try auto-reconnect once
+      setTimeout(() => { if(socket && !socket.connected) socket.connect(); }, 2000);
+    }
+  });
+  socket.on('connect_error', (e) => {
+    console.warn('TA connect error:', e.message);
+  });
   socket.on('connect',()=>{
     const s=JSON.parse(sessionStorage.getItem('mp_session')||'null');
     if(s&&s.solo){
