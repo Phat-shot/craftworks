@@ -1396,7 +1396,30 @@ function tickTimeAttack(gs) {
   if (gs.gameOver) return;
   // Auto-transition from results phase to next round after delay
   if (gs.phase === 'results' && gs._nextRoundAt && now >= gs._nextRoundAt) {
-    startNextRound(gs);
+    gs._nextRoundAt = null;
+    if (!gs.gameOver) {
+      // Reset all players for next round using roundSequence
+      const nextSeq = gs.roundSequence?.[gs.round] || {};
+      for (const [uid, pm] of Object.entries(gs.playerMaps)) {
+        const p = gs.players[uid];
+        p.gold = nextSeq?.gold_per_round ?? gs.workshopConfig?.ta_layout?.gold_per_round ?? 15;
+        p.wood = nextSeq?.wood_per_round ?? gs.workshopConfig?.ta_layout?.wood_per_round ?? 2;
+        p.lastTime = null;
+        pm.minion = null;
+        const sharedItems = (nextSeq?.items || [])
+          .map((t,i) => ({...t, id:`pt_${uid}_r${gs.round}_${i}`, owner:uid,
+                          paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true}));
+        const raceKey = p.race || 'standard';
+        const racePB = (RACE_TA_PREBUILTS[raceKey] || RACE_TA_PREBUILTS.standard)
+          .map((t,i) => ({...t, id:`race_${uid}_${gs.round}_${i}`, owner:uid,
+                           paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true}));
+        const allPB = [...sharedItems, ...racePB];
+        pm.towers = gs.findTaPath(allPB) ? allPB : sharedItems;
+        pm.path   = gs.findTaPath(pm.towers) || gs.findTaPath([]);
+      }
+      gs.phase = 'placing';
+      gs.phaseStartTime = Date.now();
+    }
     return;
   }
 
@@ -1410,33 +1433,7 @@ function tickTimeAttack(gs) {
     }
   }
 
-  // Results phase: auto-transition to placing after delay
-  if (gs.phase === 'results') {
-    if (gs._nextRoundAt && gs.gameTime >= gs._nextRoundAt) {
-      gs._nextRoundAt = null;
-      // Reset each player's towers and path for the next round
-      const nextLayout = gs.roundLayouts?.[gs.round] || {};
-      for (const [uid, pm] of Object.entries(gs.playerMaps)) {
-        const p = gs.players[uid];
-        const rSeq = gs.roundSequence?.[gs.round];
-        p.gold = rSeq?.gold_per_round ?? gs.workshopConfig?.ta_layout?.gold_per_round ?? 50;
-        p.wood = rSeq?.wood_per_round ?? gs.workshopConfig?.ta_layout?.wood_per_round ?? 3;
-        p.lastTime = null; // reset for next round display
-        pm.minion = null;
-        const nextSeq = gs.roundSequence?.[gs.round] || {};
-        const sharedItems = (nextSeq?.items || []).map((t,i)=>({...t,id:`pt_${uid}_r${gs.round}_${i}`,owner:uid,paths:[0,0,0],lastFire:0,invested:0,_prebuilt:true}));
-        const raceKey = p.race || 'standard';
-        const racePB2 = (RACE_TA_PREBUILTS[raceKey]||RACE_TA_PREBUILTS.standard).map((t,i)=>({...t,id:`race_${uid}_${gs.round}_${i}`,owner:uid,paths:[0,0,0],lastFire:0,invested:0,_prebuilt:true}));
-        const allPB2 = [...sharedItems, ...racePB2];
-        const testPath2 = gs.findTaPath(allPB2);
-        pm.towers = testPath2 ? allPB2 : sharedItems;
-        pm.path = gs.findTaPath(pm.towers) || gs.findTaPath([]);
-      }
-      gs.phase = 'placing';
-      gs.phaseStartTime = Date.now();
-    }
-    return;
-  }
+  // results phase is handled above via startNextRound()
 
   if (gs.phase !== 'racing') return;
 
@@ -1498,7 +1495,7 @@ function endRound(gs) {
 
   if (gs.round >= gs.totalRounds) { endGame(gs, true); return; }
   // Schedule auto-transition to placing phase after 5s
-  gs._nextRoundAt = Date.now() + 5000;
+  gs._nextRoundAt = Date.now() + 4000; // 4s results → placing
 }
 
 function actionTaPlaceTower(gs, userId, data) {

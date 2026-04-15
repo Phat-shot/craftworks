@@ -613,7 +613,7 @@ function showResults(round,players){
   document.getElementById('res-next').textContent=isLast?'':
     `Nächste Runde in 5s…`;
   ov.classList.add('on');
-  if(!isLast) setTimeout(()=>ov.classList.remove('on'),5000);
+  if(!isLast) setTimeout(()=>ov.classList.remove('on'),3500);
 }
 
 function showFinalResults(rankings){
