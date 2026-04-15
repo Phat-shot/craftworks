@@ -228,3 +228,5 @@ router.post('/maps/:id/rate', requireAuth,
 );
 
 module.exports = router;
+module.exports.BUILTIN_MAPS = BUILTIN_MAPS;
+module.exports.TA_SEQUENCES = TA_SEQUENCES;

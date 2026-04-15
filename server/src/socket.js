@@ -3,6 +3,17 @@ const jwt         = require('jsonwebtoken');
 const engine      = require('./game/engine');
 const gameManager = require('./game/game_manager');
 const { RACES, TDB, getTowersForRace } = require('./game/towers');
+const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('./routes/workshop');
+
+// Enrich TA workshopConfig with server-side sequences (never sent through client)
+function enrichTaConfig(wc) {
+  if (!wc) return wc;
+  const builtin = BUILTIN_MAP_LIST?.find(m => m.id === (wc.id || wc.map_id));
+  const seqs = builtin?.config?.ta_layout?.prebuilt_sequences;
+  if (!seqs?.length) return wc;
+  const tl = { ...builtin.config.ta_layout, ...(wc.ta_layout || {}), prebuilt_sequences: seqs };
+  return { ...wc, ta_layout: tl };
+}
 
 
 
@@ -144,7 +155,8 @@ module.exports = function setupSocket(io, db) {
       // Create game in worker thread
       const playerRaces = {};
       for (const m of members) playerRaces[m.userId] = m.race || 'standard';
-      const workshopMapConfig = lobby.workshop_map_config || null; // column added via migration
+      let workshopMapConfig = lobby.workshop_map_config || null;
+      if (lobby.game_mode === 'time_attack') workshopMapConfig = enrichTaConfig(workshopMapConfig);
 
       gameManager.create(sessionId, {
         difficulty: lobby.difficulty, mode: lobby.game_mode,
@@ -197,6 +209,7 @@ module.exports = function setupSocket(io, db) {
       // Normalize gameMode: 'td' -> 'solo' for engine, keep original for DB
       const rawMode = workshopConfig?.game_mode || mode;
       const gameMode = rawMode === 'td' ? 'solo' : rawMode;
+      if (gameMode === 'time_attack') workshopConfig = enrichTaConfig(workshopConfig);
       const dbMode   = rawMode; // store original in DB
       console.log(`[solo_start] user=${userId} mode=${gameMode} diff=${effectiveDifficulty} race=${race}`);
       const { rows } = await db.query(

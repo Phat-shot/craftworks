@@ -237,7 +237,7 @@ function connect(){
 
 // ── HUD ──────────────────────────────────────────────────
 function updateHUD(){
-  document.getElementById('v-round').textContent=GS.round||1;
+  document.getElementById('v-round').textContent=(GS.round||0)+1;
   document.getElementById('v-total').textContent=GS.totalRounds||5;
   document.getElementById('r-gold').textContent=myGold;
   document.getElementById('r-wood').textContent=myWood;
@@ -609,7 +609,7 @@ function showResults(round,players){
       <span style="color:var(--gold);min-width:32px">+${pts[i]||0}pt</span>
       <span style="color:#a09040">${p.score||0}pt</span>
     </div>`).join('');
-  const isLast=round>=(GS.totalRounds||5);
+  const isLast=round>=(GS.totalRounds||5); // round is 1-based here (endRound did ++)
   document.getElementById('res-next').textContent=isLast?'':
     `Nächste Runde in 5s…`;
   ov.classList.add('on');

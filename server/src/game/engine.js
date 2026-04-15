@@ -1290,14 +1290,7 @@ function getVsSnapshot(gs, forUserId) {
 
 
 // Race-specific TA prebuilts: 1 wall + 1 effect per player
-const RACE_TA_PREBUILTS = {
-  // Positions for 35x50 grid (entry=17). Each race gets a wall + effect on opposite flanks.
-  standard: [{row:6, col:10, type:'wall_block'}, {row:14, col:23, type:'slow_block'}],
-  orcs:     [{row:5, col:23, type:'wall_block'}, {row:12, col:5,  type:'spike_block'}],
-  techies:  [{row:7, col:5,  type:'wall_block'}, {row:15, col:27, type:'mine_block'}],
-  elemente: [{row:6, col:27, type:'wall_block'}, {row:13, col:5,  type:'freeze_block'}],
-  urwald:   [{row:5, col:5,  type:'wall_block'}, {row:14, col:27, type:'root_block'}],
-};
+const RACE_TA_PREBUILTS = {}; // race prebuilts removed - all presets come from roundSequence
 function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = {}) {
   const layout = workshopConfig?.ta_layout || {};
   const cols = layout.cols || 35, rows = layout.rows || 50;
@@ -1333,43 +1326,53 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
     return null;
   }
 
-  const playerState = {};
-  const playerMaps  = {}; // userId -> { towers, path }
-
-  for (const p of players) {
-    const taRaceKey = playerRaces?.[p.userId] || 'standard';
-    const racePrebuilts = RACE_TA_PREBUILTS[taRaceKey] || RACE_TA_PREBUILTS.standard;
-    const sharedPB = (layout.prebuilt_towers || []);
-    const allPB = [...sharedPB, ...racePrebuilts].map((t,i) => ({
-      ...t, id:`pt_${p.userId}_${i}`, owner:p.userId, paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
-    }));
-    const testPath = findTaPath(allPB);
-    const prebuilt = testPath ? allPB : sharedPB.map((t,i)=>({...t,id:`pt_${p.userId}_${i}`,owner:p.userId,paths:[0,0,0],lastFire:0,invested:0,_prebuilt:true}));
-    const path = findTaPath(prebuilt); // use TD pathfinder on smaller grid
-    const taRace = playerRaces?.[p.userId] || 'standard';
-    playerState[p.userId] = {
-      userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      gold: (layout.prebuilt_sequences?.[0]?.gold_per_round) ?? layout.gold_per_round ?? 15,
-      wood: (layout.prebuilt_sequences?.[0]?.wood_per_round) ?? layout.wood_per_round ?? 2,
-      score: 0, round: 0, status: 'placing', race: taRace,
-    };
-    playerMaps[p.userId] = { towers: prebuilt, path, minion: null, startTime: null };
-  }
-
-  // Build round sequence from prebuilt_sequences
+  // Build round sequence FIRST so round 0 can use it
   const allSeqs = layout.prebuilt_sequences || [];
   const numRounds = layout.rounds || 5;
-  let roundSequence = [];
+  const roundSequence = [];
   if (allSeqs.length > 0) {
     if (layout.round_selection === 'random') {
       const pool = [...allSeqs];
       for (let i = 0; i < numRounds; i++) {
         if (pool.length === 0) pool.push(...allSeqs);
-        roundSequence.push(pool.splice(Math.floor(Math.random()*pool.length),1)[0]);
+        roundSequence.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
       }
     } else {
       for (let i = 0; i < numRounds; i++) roundSequence.push(allSeqs[i % allSeqs.length]);
     }
+  }
+
+  // Round 0 sequence (first round)
+  const seq0 = roundSequence[0] || {};
+
+  const playerState = {};
+  const playerMaps  = {};
+
+  for (const p of players) {
+    const taRace = playerRaces?.[p.userId] || 'standard';
+    const racePrebuilts = RACE_TA_PREBUILTS[taRace] || RACE_TA_PREBUILTS.standard;
+
+    // Use round 0 sequence items as shared prebuilts
+    const sharedPB = (seq0.items || layout.prebuilt_towers || []);
+    const allPB = [...sharedPB, ...racePrebuilts].map((t, i) => ({
+      ...t, id:`pt_${p.userId}_0_${i}`, owner:p.userId,
+      paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
+    }));
+    const testPath = findTaPath(allPB);
+    const prebuilt = testPath ? allPB
+      : sharedPB.map((t, i) => ({
+          ...t, id:`pt_${p.userId}_0_${i}`, owner:p.userId,
+          paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
+        }));
+    const path = findTaPath(prebuilt);
+
+    playerState[p.userId] = {
+      userId: p.userId, username: p.username, avatar_color: p.avatar_color,
+      gold: seq0.gold_per_round ?? layout.gold_per_round ?? 15,
+      wood: seq0.wood_per_round ?? layout.wood_per_round ?? 2,
+      score: 0, round: 0, status: 'placing', race: taRace,
+    };
+    playerMaps[p.userId] = { towers: prebuilt, path, minion: null, startTime: null };
   }
 
   return {
