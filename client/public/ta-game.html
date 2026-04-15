@@ -109,8 +109,17 @@ canvas{display:block;position:absolute;top:50%;left:50%;transform:translate(-50%
 <script>
 'use strict';
 // ── State ──────────────────────────────────────────────
-let COLS=15, ROWS=20, TILE=32, CW, CH;
-let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 };
+let COLS=35, ROWS=50, TILE=32, CW, CH;
+// Initialize grid dimensions from session immediately (before first tick)
+(function initGridDims(){
+  try {
+    const s=JSON.parse(sessionStorage.getItem('mp_session')||'null');
+    const tl=s?.workshopConfig?.ta_layout;
+    if(tl?.cols) COLS=tl.cols;
+    if(tl?.rows) ROWS=tl.rows;
+  } catch(e){}
+})();
+let GS = { phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:Math.floor(COLS/2) };
 // Clear stale GS from previous session immediately
 function resetGS(){ GS={ phase:'placing', round:1, totalRounds:5, players:{}, myTowers:[], myPath:[], myMinion:null, entryCol:7 }; _lmx=null; _lmy=null; _ddir=4; Object.keys(_taSprites||{}).forEach(k=>delete _taSprites[k]); }
 // Clear stale display values on load
@@ -231,7 +240,12 @@ function connect(){
   });
 
   socket.on('game:action_result',({action,ok,err})=>{
-    if(!ok) toast(err==='no_resources'?'Nicht genug Ressourcen!':err==='blocks_path'?'⚠️ Würde Weg blockieren!':err||'Fehler');
+    if(!ok){
+      const msgs={'no_resources':'Nicht genug Ressourcen!','blocks_path':'⚠️ Würde Weg blockieren!',
+                  'no_session':'Verbindung verloren - bitte neu laden','not_placing':'Warte auf Runden-Start',
+                  'unknown_type':'Unbekannter Block-Typ'};
+      toast(msgs[err]||err||'Fehler');
+    }
   });
 }
 

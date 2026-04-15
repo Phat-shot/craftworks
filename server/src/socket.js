@@ -7,12 +7,29 @@ const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('./routes/workshop');
 
 // Enrich TA workshopConfig with server-side sequences (never sent through client)
 function enrichTaConfig(wc) {
-  if (!wc) return wc;
-  const builtin = BUILTIN_MAP_LIST?.find(m => m.id === (wc.id || wc.map_id));
-  const seqs = builtin?.config?.ta_layout?.prebuilt_sequences;
-  if (!seqs?.length) return wc;
-  const tl = { ...builtin.config.ta_layout, ...(wc.ta_layout || {}), prebuilt_sequences: seqs };
-  return { ...wc, ta_layout: tl };
+  try {
+    if (!wc) return wc;
+    const mapId = wc.id || wc.map_id;
+    const builtin = mapId && BUILTIN_MAP_LIST?.find(m => m.id === mapId);
+    const seqs = builtin?.config?.ta_layout?.prebuilt_sequences;
+    if (!seqs?.length) return wc;
+    const clientTl = wc.ta_layout || {};
+    const builtinTl = builtin.config.ta_layout || {};
+    const tl = {
+      // Start with builtin defaults (cols/rows/etc)
+      ...builtinTl,
+      // Override with client preferences (rounds, countdown)
+      ...clientTl,
+      // Always inject server-side sequences
+      prebuilt_sequences: seqs,
+      round_selection: builtinTl.round_selection || 'random',
+    };
+    console.log(`[enrichTa] ${mapId}: ${seqs.length} seqs, cols=${tl.cols}, rows=${tl.rows}`);
+    return { ...wc, ta_layout: tl };
+  } catch(e) {
+    console.error('[enrichTaConfig] error:', e.message);
+    return wc;
+  }
 }
 
 
