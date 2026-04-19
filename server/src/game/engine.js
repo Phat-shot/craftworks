@@ -1018,8 +1018,7 @@ module.exports = {
   actionPlaceTower, actionUpgradePath, actionSellTower, actionStartWave,
   calcStats, getUpgradeCost, findPath,
   // VS mode
-  createVsGame, tickVs, getVsSnapshot,
-  actionBuildUnit, actionMoveUnit, actionAttackMove, actionBuildStructure,
+  createVsGame, tickVs, getVsSnapshot, actionVs,
   // Time Attack
   createTimeAttackGame, tickTimeAttack, getTaSnapshot,
   actionTaPlaceTower, actionTaRemoveTower, actionTaReady,
