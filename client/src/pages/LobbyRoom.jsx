@@ -165,7 +165,7 @@ export default function LobbyRoom() {
         ))}
       </div>
       <div style={{fontSize:10,color:'var(--text3)',marginBottom:16}}>
-        + Frost (W10) · Blitz (W20) für alle Rassen
+        {lobby.game_mode === 'vs' ? '🎯 GLA • USA • China spielbar in VS' : '+ Frost (W10) · Blitz (W20) für alle Rassen'}
       </div>
 
       {/* TA countdown picker */}

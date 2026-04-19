@@ -1037,45 +1037,80 @@ const MAIN_HP    = 2000;
 
 // ── VS: create game state ───────────────────────────────
 function createVsGame(sessionId, players, playerRaces, workshopConfig) {
-  const visibilityMode = workshopConfig?.fog || 'explored'; // none|explored|fog
+  const visibilityMode = workshopConfig?.fog || 'explored';
   const playerState = {};
-  const playerUnits  = {}; // userId -> unit[]
-  const structures   = {}; // userId -> structure[]
-  const aidMap       = {}; // unit id -> unit
+  const playerUnits  = {};
+  const structures   = {};
+  const buildQueues  = {}; // userId -> [{type, progress, total, targetRow, targetCol}]
 
-  // Assign spawn corners
   const corners = [
     { row:2,  col:2  }, { row:2,  col:VS_COLS-4 },
     { row:VS_ROWS-4, col:2  }, { row:VS_ROWS-4, col:VS_COLS-4 },
-    { row:2,  col:VS_COLS/2|0 }, { row:VS_ROWS/2|0, col:2 },
-    { row:VS_ROWS-4, col:VS_COLS/2|0 }, { row:VS_ROWS/2|0, col:VS_COLS-4 },
   ];
 
+  let _uid = 0;
+  const mkId = (prefix) => `${prefix}_${++_uid}`;
+
   players.forEach((p, i) => {
-    const spawn = corners[i % corners.length];
-    const race  = playerRaces[p.userId] || 'standard';
+    const spawn   = corners[i % corners.length];
+    const faction = playerRaces[p.userId] || 'gla';
+    const fDef    = GENERALS_FACTIONS[faction] || GENERALS_FACTIONS.gla;
+
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      race, gold: 200, wood: 100, score: 0, status: 'alive',
+      faction, gold: 2000, power: 0, powerUsed: 0,
+      score: 0, kills: 0, status: 'alive',
+      generalPoints: 0, usedPowers: [],
     };
-    playerUnits[p.userId]  = [];
-    const mainBldg = {
-      id: `main_${p.userId}`, type: 'main_building', owner: p.userId,
+
+    // Start: Command Center + 1 Builder
+    const ccDef = fDef.structures.command_center;
+    const ccSize = ccDef.size || 3;
+    const cmdCenter = {
+      id: mkId('cc'), type: 'command_center', owner: p.userId, faction,
       row: spawn.row, col: spawn.col,
-      hp: MAIN_HP, maxHp: MAIN_HP,
-      col2: spawn.col + 2, row2: spawn.row + 2, // 3×3 footprint
+      hp: ccDef.hp, maxHp: ccDef.hp,
+      size: ccSize, power: ccDef.power || 0,
+      buildQueue: [],
     };
-    structures[p.userId] = [mainBldg];
+
+    // Supply depot for gold income
+    const sdDef = fDef.structures.supply_center || fDef.structures.supply_depot || fDef.structures.black_market;
+    const sdSize = sdDef?.size || 3;
+    const supplyBldg = sdDef ? {
+      id: mkId('supply'), type: Object.keys(fDef.structures).find(k=>k.includes('supply')||k.includes('black_market')) || 'supply_center',
+      owner: p.userId, faction,
+      row: spawn.row + ccSize + 1, col: spawn.col,
+      hp: sdDef.hp, maxHp: sdDef.hp,
+      size: sdSize, power: sdDef.power || 0,
+      buildQueue: [],
+    } : null;
+
+    structures[p.userId] = [cmdCenter, supplyBldg].filter(Boolean);
+
+    // Builder unit next to command center
+    const bDef = fDef.units[fDef.builderUnit];
+    const builder = {
+      id: mkId(fDef.builderUnit), type: fDef.builderUnit, owner: p.userId, faction,
+      row: spawn.row, col: spawn.col + ccSize + 1,
+      hp: bDef.hp, maxHp: bDef.hp,
+      spd: bDef.spd || 3, dmg: 0, range: 0,
+      unitType: 'builder',
+      target: null, action: null, buildTarget: null,
+      buildProgress: 0, buildTotal: 0,
+    };
+    playerUnits[p.userId] = [builder];
+    buildQueues[p.userId]  = [];
   });
 
   return {
     sessionId, mode:'vs', players: playerState,
-    playerUnits, structures,
-    visibilityMode, revealed: {}, // revealed[userId] = Set<"r,c">
+    playerUnits, structures, buildQueues,
+    visibilityMode,
     gameTime: 0, lastTick: Date.now(),
-    gameOver: false,
-    workshopConfig,
-    _uidCounter: 0,
+    gameOver: false, workshopConfig,
+    _uid,
+    _goldTick: 0,  // for passive income
   };
 }
 
@@ -1087,523 +1122,172 @@ function tickVs(gs) {
   if (gs.gameOver) return;
   gs.gameTime += dt * 1000;
 
-  // Move units toward their targets
-  for (const uid of Object.keys(gs.playerUnits)) {
-    for (const unit of gs.playerUnits[uid]) {
-      if (unit.dead) continue;
-      moveUnit(gs, unit, dt);
-      attackNearest(gs, unit);
-      updateReveal(gs, uid, unit);
-    }
-    gs.playerUnits[uid] = gs.playerUnits[uid].filter(u => !u.dead);
-  }
-
-  // Check win condition: main building destroyed
-  for (const [uid, structs] of Object.entries(gs.structures)) {
-    const main = structs.find(s => s.type === 'main_building');
-    if (!main || main.hp <= 0) {
-      gs.players[uid].status = 'eliminated';
-      gs.structures[uid] = structs.filter(s => s !== main);
-      // Check if only one player left
-      const alive = Object.values(gs.players).filter(p => p.status === 'alive');
-      if (alive.length <= 1) {
-        endGame(gs, true);
-        if (alive.length === 1) gs._winnerId = alive[0].userId;
-      }
+  // Passive gold income every 3 seconds
+  gs._goldTick = (gs._goldTick||0) + dt;
+  if (gs._goldTick >= 3) {
+    gs._goldTick -= 3;
+    for (const uid of Object.keys(gs.players)) {
+      const p = gs.players[uid];
+      if (p.status !== 'alive') continue;
+      const fDef = GENERALS_FACTIONS[p.faction] || GENERALS_FACTIONS.gla;
+      // Count supply structures
+      const structs = gs.structures[uid] || [];
+      const supplyCount = structs.filter(s => {
+        const sType = s.type;
+        return ['supply_center','supply_depot','black_market'].includes(sType) && !s.building;
+      }).length;
+      p.gold = (p.gold||0) + 100 + supplyCount * 75;
     }
   }
-}
 
-function moveUnit(gs, unit, dt) {
-  if (!unit.targetPos) return;
-  const { tx, ty } = unit.targetPos;
-  const dx = tx - unit.x, dy = ty - unit.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 4) { unit.targetPos = null; return; }
-  const step = unit.speed * TILE * dt;
-  unit.x += (dx/dist) * step;
-  unit.y += (dy/dist) * step;
-}
-
-function attackNearest(gs, unit) {
-  if (gs.gameTime - (unit._lastAttack||0) < (unit.attackCd||1500)) return;
-  const range2 = (unit.range * TILE) ** 2;
-
-  // Find nearest enemy unit or structure
-  for (const [ownerId, units] of Object.entries(gs.playerUnits)) {
-    if (ownerId === unit.owner) continue;
-    for (const e of units) {
-      if (e.dead) continue;
-      if ((e.x-unit.x)**2 + (e.y-unit.y)**2 <= range2) {
-        e.hp -= unit.dmg;
-        if (e.hp <= 0) { e.dead = true; gs.players[unit.owner].score += 10; }
-        unit._lastAttack = gs.gameTime;
-        return;
-      }
-    }
-  }
-  // Attack enemy structures
-  for (const [ownerId, structs] of Object.entries(gs.structures)) {
-    if (ownerId === unit.owner) continue;
-    for (const s of structs) {
-      const sx = s.col*TILE+TILE, sy = s.row*TILE+TILE;
-      if ((sx-unit.x)**2 + (sy-unit.y)**2 <= range2) {
-        s.hp -= unit.dmg;
-        unit._lastAttack = gs.gameTime;
-        return;
-      }
-    }
-  }
-}
-
-function updateReveal(gs, userId, unit) {
-  if (gs.visibilityMode === 'none') return;
-  const r = Math.round(unit.y / TILE), c = Math.round(unit.x / TILE);
-  const sight = 5;
-  if (!gs.revealed[userId]) gs.revealed[userId] = new Set();
-  for (let dr = -sight; dr <= sight; dr++) {
-    for (let dc = -sight; dc <= sight; dc++) {
-      if (dr*dr+dc*dc <= sight*sight)
-        gs.revealed[userId].add(`${r+dr},${c+dc}`);
-    }
-  }
-}
-
-// ── VS: actions ──────────────────────────────────────────
-function actionBuildUnit(gs, userId, data) {
-  const { unitType, fromStructureId } = data;
-  const p = gs.players[userId];
-  if (!p || p.status !== 'alive') return { ok:false, err:'not_in_game' };
-
-  // Unit costs (base)
-  const UNIT_COSTS = { soldier:{gold:50,wood:0}, archer:{gold:60,wood:10},
-    knight:{gold:120,wood:20}, siege:{gold:200,wood:50} };
-  const UNIT_STATS = {
-    soldier:  { hp:120, dmg:18, range:1.2, speed:1.8, attackCd:1000, col:'#ff6040' },
-    archer:   { hp:70,  dmg:25, range:4.5, speed:2.2, attackCd:1200, col:'#80c040' },
-    knight:   { hp:280, dmg:35, range:1.4, speed:1.4, attackCd:1400, col:'#6080ff' },
-    siege:    { hp:400, dmg:80, range:3.0, speed:0.8, attackCd:3000, col:'#c08020' },
-  };
-
-  const cost = UNIT_COSTS[unitType];
-  const stats = UNIT_STATS[unitType];
-  if (!cost || !stats) return { ok:false, err:'unknown_unit' };
-  if ((p.gold||0) < cost.gold) return { ok:false, err:'no_gold' };
-  if ((p.wood||0) < cost.wood) return { ok:false, err:'no_wood' };
-
-  // Find spawn structure
-  const structs = gs.structures[userId] || [];
-  const src = fromStructureId ? structs.find(s=>s.id===fromStructureId) : (structs.find(s=>s.type==='barracks') || structs.find(s=>s.type==='main_building'));
-  if (!src) return { ok:false, err:'no_barracks' };
-
-  p.gold -= cost.gold;
-  p.wood  -= cost.wood;
-
-  const unit = {
-    id: `u_${++gs._uidCounter}`, type: unitType, owner: userId,
-    x: (src.col+1)*TILE, y: (src.row+1)*TILE,
-    hp: stats.hp, maxHp: stats.hp,
-    dmg: stats.dmg, range: stats.range,
-    speed: stats.speed, attackCd: stats.attackCd, col: stats.col,
-    _lastAttack: 0, dead: false, targetPos: null,
-  };
-
-  gs.playerUnits[userId].push(unit);
-  return { ok:true, unit, player: p };
-}
-
-function actionMoveUnit(gs, userId, data) {
-  const { unitIds, tx, ty } = data;
-  const units = gs.playerUnits[userId] || [];
-  for (const id of (unitIds||[])) {
-    const u = units.find(u=>u.id===id);
-    if (u) u.targetPos = { tx: tx*TILE, ty: ty*TILE };
-  }
-  return { ok:true };
-}
-
-function actionAttackMove(gs, userId, data) {
-  const { unitIds, tx, ty } = data;
-  const units = gs.playerUnits[userId] || [];
-  for (const id of (unitIds||[])) {
-    const u = units.find(u=>u.id===id);
-    if (u) { u.targetPos = { tx: tx*TILE, ty: ty*TILE }; u._attackMove = true; }
-  }
-  return { ok:true };
-}
-
-function actionBuildStructure(gs, userId, data) {
-  const { structureType, row, col } = data;
-  const p = gs.players[userId];
-  if (!p || p.status !== 'alive') return { ok:false, err:'not_in_game' };
-
-  const STRUCT_COSTS = { barracks:{gold:150,wood:50}, wall:{gold:20,wood:30},
-    tower:{gold:100,wood:0}, altar:{gold:200,wood:100} };
-  const STRUCT_HP = { barracks:500, wall:200, tower:300, altar:400 };
-
-  const cost = STRUCT_COSTS[structureType];
-  if (!cost) return { ok:false, err:'unknown_structure' };
-  if ((p.gold||0) < cost.gold) return { ok:false, err:'no_gold' };
-  if ((p.wood||0) < cost.wood) return { ok:false, err:'no_wood' };
-
-  p.gold -= cost.gold;
-  p.wood -= cost.wood;
-
-  const s = {
-    id: `s_${++gs._uidCounter}`, type: structureType, owner: userId,
-    row, col, hp: STRUCT_HP[structureType]||300, maxHp: STRUCT_HP[structureType]||300,
-  };
-  gs.structures[userId].push(s);
-  return { ok:true, structure:s, player:p };
-}
-
-// ── VS: snapshot ─────────────────────────────────────────
-function getVsSnapshot(gs, forUserId) {
-  const visible = gs.visibilityMode === 'none' ? null : gs.revealed[forUserId];
-  const isVisible = (x,y) => {
-    if (!visible) return true;
-    const r = Math.round(y/TILE), c = Math.round(x/TILE);
-    return visible.has(`${r},${c}`);
-  };
-  return {
-    gameTime: gs.gameTime, gameOver: gs.gameOver,
-    players:  gs.players,
-    units: Object.entries(gs.playerUnits).flatMap(([uid, units]) =>
-      units.filter(u=>!u.dead&&isVisible(u.x,u.y)).map(u=>({
-        id:u.id, type:u.type, owner:u.owner, x:u.x, y:u.y,
-        hp:u.hp, maxHp:u.maxHp, col:u.col,
-      }))
-    ),
-    structures: Object.entries(gs.structures).flatMap(([uid, ss]) =>
-      ss.filter(s=>isVisible(s.col*TILE,s.row*TILE)).map(s=>({
-        id:s.id, type:s.type, owner:s.owner, row:s.row, col:s.col,
-        hp:s.hp, maxHp:s.maxHp,
-      }))
-    ),
-    revealed: forUserId && gs.revealed[forUserId] ? [...gs.revealed[forUserId]] : null,
-  };
-}
-
-// ═══════════════════════════════════════════════════════
-//  TIME ATTACK MODE
-// ═══════════════════════════════════════════════════════
-
-
-// Race-specific TA prebuilts: 1 wall + 1 effect per player
-const RACE_TA_PREBUILTS = {}; // race prebuilts removed - all presets come from roundSequence
-function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = {}) {
-  const layout = workshopConfig?.ta_layout || {};
-  const cols = layout.cols || 35, rows = layout.rows || 50;
-  const taEntryCol = Math.floor(cols / 2);
-
-  // TA-specific BFS pathfinder using the actual TA grid size
-  function findTaPath(towers) {
-    const blocked = new Set(towers.flatMap(t => [
-      `${t.row},${t.col}`, `${t.row},${t.col+1}`,
-      `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
-    ]));
-    const queue = [[0, taEntryCol]];
-    const par   = new Map([[`0,${taEntryCol}`, null]]);
-    const dirs  = [[1,0],[0,1],[0,-1],[-1,0]];
-    while (queue.length) {
-      const [r, c] = queue.shift();
-      if (r === rows - 1 && c === taEntryCol) {
-        const path = []; let k = `${r},${c}`;
-        while (k !== null) {
-          const [pr, pc] = k.split(',').map(Number);
-          path.unshift([pr, pc]); k = par.get(k);
+  // Process building queues (structures being constructed)
+  for (const uid of Object.keys(gs.structures||{})) {
+    for (const struct of gs.structures[uid]) {
+      if (struct.building) {
+        struct.buildProgress = (struct.buildProgress||0) + dt;
+        if (struct.buildProgress >= struct.buildTotal) {
+          struct.building = false;
+          struct.buildProgress = struct.buildTotal;
+          // Spawn from builder if present
+          const builder = (gs.playerUnits[uid]||[]).find(u=>u.buildTarget===struct.id);
+          if (builder) { builder.buildTarget=null; builder.action=null; builder.target=null; }
         }
-        return path;
       }
-      for (const [dr, dc] of dirs) {
-        const nr = r+dr, nc = c+dc;
-        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        const k = `${nr},${nc}`;
-        if (blocked.has(k) || par.has(k)) continue;
-        par.set(k, `${r},${c}`); queue.push([nr, nc]);
+      // Unit training queues
+      if (!struct.building && struct.buildQueue && struct.buildQueue.length > 0) {
+        const job = struct.buildQueue[0];
+        job.progress = (job.progress||0) + dt;
+        if (job.progress >= job.total) {
+          struct.buildQueue.shift();
+          // Spawn unit near structure
+          const fDef = GENERALS_FACTIONS[gs.players[uid]?.faction] || GENERALS_FACTIONS.gla;
+          const uDef = fDef.units[job.unitType] || { hp:100, spd:4, dmg:20, range:4, type:'infantry' };
+          const spawnR = struct.row + (struct.size||2) + 1;
+          const spawnC = struct.col;
+          if (!gs.playerUnits[uid]) gs.playerUnits[uid]=[];
+          gs.playerUnits[uid].push({
+            id:`u_${++gs._uid}_${uid}`, type:job.unitType, owner:uid, faction:gs.players[uid]?.faction,
+            row:Math.min(VS_ROWS-1,spawnR), col:Math.min(VS_COLS-1,spawnC),
+            hp:uDef.hp, maxHp:uDef.hp, spd:uDef.spd||4,
+            dmg:uDef.dmg||20, range:uDef.range||4,
+            unitType:uDef.type||'infantry', target:null, action:null,
+            armorType:uDef.armorType||null,
+          });
+          // Award general points per unit
+          if (gs.players[uid]) gs.players[uid].generalPoints = Math.min(5,(gs.players[uid].generalPoints||0)+0.1);
+        }
       }
     }
-    return null;
   }
 
-  // Build round sequence FIRST so round 0 can use it
-  const allSeqs = layout.prebuilt_sequences || [];
-  const numRounds = layout.rounds || 5;
-  const roundSequence = [];
-  if (allSeqs.length > 0) {
-    if (layout.round_selection === 'random') {
-      const pool = [...allSeqs];
-      for (let i = 0; i < numRounds; i++) {
-        if (pool.length === 0) pool.push(...allSeqs);
-        roundSequence.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  // Move & combat units
+  for (const uid of Object.keys(gs.playerUnits||{})) {
+    const units = gs.playerUnits[uid];
+    for (const u of units) {
+      if (u.hp <= 0) continue;
+
+      // Builder: move toward build target
+      if (u.unitType === 'builder' && u.action === 'move_to_build' && u.target) {
+        const tr = u.target.row, tc = u.target.col;
+        const dr = tr - u.row, dc = tc - u.col;
+        const dist = Math.hypot(dr, dc);
+        if (dist < 2) { u.action = 'building'; } // close enough
+        else {
+          const speed = u.spd * dt;
+          u.row += (dr/dist)*speed; u.col += (dc/dist)*speed;
+        }
+        continue;
       }
-    } else {
-      for (let i = 0; i < numRounds; i++) roundSequence.push(allSeqs[i % allSeqs.length]);
+
+      // Movement
+      if (u.target && u.action === 'move') {
+        const tr = u.target.row||0, tc = u.target.col||0;
+        const dr = tr - u.row, dc = tc - u.col;
+        const dist = Math.hypot(dr, dc);
+        if (dist < 0.3) { u.target=null; u.action=null; }
+        else {
+          const speed = (u.spd||3) * dt;
+          u.row += (dr/dist)*speed; u.col += (dc/dist)*speed;
+        }
+      }
+
+      // Combat: find nearest enemy and auto-attack in range
+      if (!u.action || u.action === 'move') {
+        const range = u.range || 4;
+        let bestDist = range + 0.5, bestTarget = null;
+        for (const uid2 of Object.keys(gs.playerUnits||{})) {
+          if (uid2 === uid) continue;
+          for (const e of gs.playerUnits[uid2]) {
+            if (e.hp <= 0) continue;
+            const d = Math.hypot(e.row-u.row, e.col-u.col);
+            if (d < bestDist) { bestDist=d; bestTarget={type:'unit',ref:e,owner:uid2}; }
+          }
+        }
+        // Also attack enemy structures
+        for (const uid2 of Object.keys(gs.structures||{})) {
+          if (uid2 === uid) continue;
+          for (const s of gs.structures[uid2]) {
+            const d = Math.hypot(s.row-u.row, s.col-u.col);
+            if (d < bestDist) { bestDist=d; bestTarget={type:'structure',ref:s,owner:uid2}; }
+          }
+        }
+        if (bestTarget) {
+          const dmg = (u.dmg||20) * dt / 1.5; // dmg per 1.5s
+          bestTarget.ref.hp -= dmg;
+          if (bestTarget.ref.hp <= 0) {
+            // Unit kill
+            if (bestTarget.type === 'unit') {
+              gs.playerUnits[bestTarget.owner] = gs.playerUnits[bestTarget.owner].filter(e=>e!==bestTarget.ref);
+              gs.players[uid].kills = (gs.players[uid].kills||0)+1;
+              gs.players[uid].score = (gs.players[uid].score||0)+50;
+              gs.players[uid].generalPoints = Math.min(5,(gs.players[uid].generalPoints||0)+0.2);
+            }
+            // Structure destroy
+            if (bestTarget.type === 'structure') {
+              gs.structures[bestTarget.owner] = gs.structures[bestTarget.owner].filter(s=>s!==bestTarget.ref);
+              gs.players[uid].score = (gs.players[uid].score||0)+200;
+              gs.players[uid].generalPoints = Math.min(5,(gs.players[uid].generalPoints||0)+0.5);
+              // Check: command center destroyed = player eliminated
+              const cmdCenters = (gs.structures[bestTarget.owner]||[]).filter(s=>s.type==='command_center');
+              if (cmdCenters.length === 0) {
+                if (gs.players[bestTarget.owner]) gs.players[bestTarget.owner].status='eliminated';
+                // Check game over
+                const alive = Object.values(gs.players).filter(p=>p.status==='alive');
+                if (alive.length <= 1) endGame(gs, true);
+              }
+            }
+          }
+        }
+      }
+
+      // Clamp to map
+      u.row = Math.max(0, Math.min(VS_ROWS-1, u.row));
+      u.col = Math.max(0, Math.min(VS_COLS-1, u.col));
     }
+    // Remove dead units
+    gs.playerUnits[uid] = (gs.playerUnits[uid]||[]).filter(u=>u.hp>0);
   }
+}
 
-  // Round 0 sequence (first round)
-  const seq0 = roundSequence[0] || {};
 
-  const playerState = {};
-  const playerMaps  = {};
-
-  for (const p of players) {
-    const taRace = playerRaces?.[p.userId] || 'standard';
-    const racePrebuilts = RACE_TA_PREBUILTS[taRace] || RACE_TA_PREBUILTS.standard;
-
-    // Use round 0 sequence items as shared prebuilts
-    const sharedPB = (seq0.items || layout.prebuilt_towers || []);
-    const allPB = [...sharedPB, ...racePrebuilts].map((t, i) => ({
-      ...t, id:`pt_${p.userId}_0_${i}`, owner:p.userId,
-      paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
-    }));
-    const testPath = findTaPath(allPB);
-    const prebuilt = testPath ? allPB
-      : sharedPB.map((t, i) => ({
-          ...t, id:`pt_${p.userId}_0_${i}`, owner:p.userId,
-          paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
-        }));
-    const path = findTaPath(prebuilt);
-
-    playerState[p.userId] = {
-      userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      gold: seq0.gold_per_round ?? layout.gold_per_round ?? 15,
-      wood: seq0.wood_per_round ?? layout.wood_per_round ?? 2,
-      score: 0, round: 0, status: 'placing', race: taRace,
-    };
-    playerMaps[p.userId] = { towers: prebuilt, path, minion: null, startTime: null };
+function getVsSnapshot(gs, forUserId) {
+  // Include all structures and units (simplified - no fog of war for now)
+  const allStructures = [];
+  const allUnits      = [];
+  for (const [uid, structs] of Object.entries(gs.structures||{})) {
+    for (const s of structs) allStructures.push(s);
   }
-
+  for (const [uid, units] of Object.entries(gs.playerUnits||{})) {
+    for (const u of units) allUnits.push(u);
+  }
   return {
-    sessionId, mode:'time_attack',
-    cols, rows, taEntryCol, findTaPath,
-    roundSequence,
-    players: playerState,
-    playerMaps, workshopConfig,
-    round: 0, totalRounds: layout.rounds || 5,
-    phase: 'placing', // placing | racing | results
-    phaseStartTime: Date.now(), // for countdown
-    gameTime: 0, lastTick: Date.now(),
-    gameOver: false,
-    roundLayouts: layout.round_layouts || [],
+    gameTime: gs.gameTime,
+    players:  gs.players,
+    structures: allStructures,
+    units: allUnits,
+    gameOver: gs.gameOver,
+    mode: 'vs',
   };
 }
 
-function tickTimeAttack(gs) {
-  const now = Date.now();
-  const dt  = Math.min((now - gs.lastTick) / 1000, 0.05);
-  gs.lastTick = now;
-  gs.gameTime += dt * 1000;
-
-  if (gs.gameOver) return;
-  // Auto-transition from results phase to next round after delay
-  if (gs.phase === 'results' && gs._nextRoundAt && now >= gs._nextRoundAt) {
-    gs._nextRoundAt = null;
-    if (!gs.gameOver) {
-      // Reset all players for next round using roundSequence
-      const nextSeq = gs.roundSequence?.[gs.round] || {};
-      for (const [uid, pm] of Object.entries(gs.playerMaps)) {
-        const p = gs.players[uid];
-        p.gold = nextSeq?.gold_per_round ?? gs.workshopConfig?.ta_layout?.gold_per_round ?? 15;
-        p.wood = nextSeq?.wood_per_round ?? gs.workshopConfig?.ta_layout?.wood_per_round ?? 2;
-        p.lastTime = null;
-        pm.minion = null;
-        const sharedItems = (nextSeq?.items || [])
-          .map((t,i) => ({...t, id:`pt_${uid}_r${gs.round}_${i}`, owner:uid,
-                          paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true}));
-        const raceKey = p.race || 'standard';
-        const racePB = (RACE_TA_PREBUILTS[raceKey] || RACE_TA_PREBUILTS.standard)
-          .map((t,i) => ({...t, id:`race_${uid}_${gs.round}_${i}`, owner:uid,
-                           paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true}));
-        const allPB = [...sharedItems, ...racePB];
-        pm.towers = gs.findTaPath(allPB) ? allPB : sharedItems;
-        pm.path   = gs.findTaPath(pm.towers) || gs.findTaPath([]);
-      }
-      gs.phase = 'placing';
-      gs.phaseStartTime = Date.now();
-    }
-    return;
-  }
-
-  // Auto-start after countdown (MP only)
-  if (gs.phase === 'placing' && gs.phaseStartTime) {
-    const countdown = gs.workshopConfig?.ta_countdown || 0; // 0 = no auto-start
-    if (countdown > 0 && (now - gs.phaseStartTime) >= countdown * 1000) {
-      gs.phaseStartTime = null;
-      startRacing(gs);
-      return;
-    }
-  }
-
-  // results phase is handled above via startNextRound()
-
-  if (gs.phase !== 'racing') return;
-
-  // Move each player's minion
-  let allDone = true;
-  for (const [uid, pm] of Object.entries(gs.playerMaps)) {
-    const m = pm.minion;
-    if (!m || m.reached || m.escaped) continue;
-    allDone = false;
-    const path = pm.path;
-    if (!path || m.pathIdx >= path.length) { m.escaped = true; continue; }
-    const [tr, tc] = path[m.pathIdx];
-    const tx = tc*TILE+TILE/2, ty = tr*TILE+TILE/2;
-    const dx = tx-m.px, dy = ty-m.py;
-    const dist = Math.hypot(dx,dy);
-    const step = m.spd * TILE * dt;
-    if (step >= dist) {
-      m.px=tx; m.py=ty; m.pathIdx++;
-      if (m.pathIdx >= path.length) {
-        m.reached = true;
-        m.time = gs.gameTime - pm.startTime;
-        gs.players[uid].lastTime = m.time;
-      }
-    } else { m.px+=dx/dist*step; m.py+=dy/dist*step; }
-  }
-
-  if (allDone) endRound(gs);
-}
-
-function startRacing(gs) {
-  gs.phaseStartTime = null;
-  gs.phase = 'racing';
-  for (const [uid, pm] of Object.entries(gs.playerMaps)) {
-    pm.startTime = gs.gameTime;
-    const _taEntry = gs.taEntryCol !== undefined ? gs.taEntryCol : Math.floor((gs.cols||15)/2);
-    pm.minion = {
-      id:`minion_${uid}`, owner:uid,
-      px: _taEntry*TILE+TILE/2, py: TILE/2,
-      pathIdx: 1, spd: 3.2,
-      reached:false, escaped:false, time:null,
-    };
-  }
-}
-
-function endRound(gs) {
-  gs.round++;
-  gs.phase = 'results';
-  gs._roundJustEnded = true;
-
-  // Score: best time = 10pts, 2nd = 3pts, 3rd = 1pt
-  const times = Object.entries(gs.players)
-    .map(([uid,p]) => ({ uid, time: p.lastTime ?? Infinity }))
-    .sort((a,b) => a.time - b.time);
-
-  const pts = [10,3,1,0,0,0,0,0];
-  times.forEach((t,i) => {
-    gs.players[t.uid].score = (gs.players[t.uid].score||0) + (pts[i]||0);
-  });
-
-  if (gs.round >= gs.totalRounds) { endGame(gs, true); return; }
-  // Schedule auto-transition to placing phase after 5s
-  gs._nextRoundAt = Date.now() + 4000; // 4s results → placing
-}
-
-function actionTaPlaceTower(gs, userId, data) {
-  const { row, col } = data;
-  const type = data.type;
-
-  // Accept wall_block and any effect block type
-  const isWall   = type === 'wall_block' || type === 'wall' || type === 'wall_tower';
-  const isEffect = !isWall && type && type !== 'remove';
-  if (!isWall && !isEffect) return { ok:false, err:'unknown_type' };
-
-  const pm = gs.playerMaps[userId];
-  const p  = gs.players[userId];
-  if (!pm || !p || gs.phase !== 'placing') return { ok:false, err:'not_placing' };
-
-  // Validate the effect block is available for this player's race
-  if (isEffect) {
-    const { TA_BLOCKS_BY_RACE } = require('./towers');
-    const raceBlocks = TA_BLOCKS_BY_RACE[p.race || 'standard'] || [];
-    if (!raceBlocks.includes(type)) return { ok:false, err:'unknown_type' };
-  }
-
-  // Cost: wall_block = 1 gold, effect blocks = 1 wood
-  const cost = isWall ? { gold:1, wood:0 } : { gold:0, wood:1 };
-  if ((p.gold||0) < cost.gold) return { ok:false, err:'no_resources' };
-  if ((p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
-
-  // TA-specific boundary check
-  const taCols = gs.cols || 15, taRows = gs.rows || 20;
-  const taEntry = gs.taEntryCol !== undefined ? gs.taEntryCol : Math.floor(taCols/2);
-  if (row < 0 || row+1 >= taRows || col < 0 || col+1 >= taCols) return { ok:false, err:'blocked' };
-  const footprint = [[row,col],[row,col+1],[row+1,col],[row+1,col+1]];
-  for (const [rr,cc] of footprint) {
-    if ((rr === 0 || rr === taRows-1) && cc === taEntry) return { ok:false, err:'blocked' };
-  }
-  for (const t of pm.towers) {
-    const tr = [[t.row,t.col],[t.row,t.col+1],[t.row+1,t.col],[t.row+1,t.col+1]];
-    for (const [rr,cc] of footprint)
-      for (const [tr2,tc2] of tr)
-        if (rr===tr2 && cc===tc2) return { ok:false, err:'blocked' };
-  }
-
-  const newPath = gs.findTaPath([...pm.towers, {row,col,type}]);
-  if (!newPath) return { ok:false, err:'blocks_path' };
-
-  p.gold -= cost.gold;
-  p.wood  -= cost.wood;
-
-  const tower = { id:`ta_${Date.now()}_${userId}`, type, row, col,
-    paths:[0,0,0], lastFire:0, owner:userId, invested:0, _prebuilt:false };
-  pm.towers.push(tower);
-  pm.path = newPath;
-  return { ok:true, tower, player:p };
-}
-
-
-function actionTaRemoveTower(gs, userId, data) {
-  const { towerId } = data;
-  const pm = gs.playerMaps[userId];
-  const p  = gs.players[userId];
-  if (!pm || !p || gs.phase !== 'placing') return { ok:false, err:'not_placing' };
-  const tower = pm.towers.find(t => t.id === towerId && t.owner === userId && !t._prebuilt);
-  if (!tower) return { ok:false, err:'not_found' };
-  // wall_block costs 1 gold → refund; effect blocks cost 1 wood → refund
-  const isWallType = tower.type === 'wall_block' || tower.type === 'wall' || tower.type === 'wall_tower';
-  if (isWallType) p.gold = (p.gold||0) + 1;
-  else p.wood = (p.wood||0) + 1;
-  pm.towers = pm.towers.filter(t => t.id !== towerId);
-  pm.path = gs.findTaPath(pm.towers);
-  return { ok:true, player: p };
-}
-
-function actionTaReady(gs, userId) {
-  const p = gs.players[userId];
-  if (p) p.ready = true;
-  const all = Object.values(gs.players);
-  // Start when ALL ready OR only 1 player (solo)
-  if (all.length === 1 || all.every(p => p.ready || p.status === 'eliminated')) {
-    all.forEach(p => p.ready = false);
-    startRacing(gs);
-    return { ok:true, started:true };
-  }
-  return { ok:true, started:false };
-}
-
-function getTaSnapshot(gs, forUserId) {
-  const pm = gs.playerMaps[forUserId];
-  const countdown = gs.workshopConfig?.ta_countdown || 0;
-  const elapsed = gs.phaseStartTime ? (Date.now() - gs.phaseStartTime) / 1000 : 0;
-  const remaining = countdown > 0 ? Math.max(0, Math.ceil(countdown - elapsed)) : null;
-  return {
-    gameTime: gs.gameTime, phase: gs.phase, round: gs.round,
-    totalRounds: gs.totalRounds, gameOver: gs.gameOver,
-    cols: gs.cols, rows: gs.rows,
-    entryCol: gs.taEntryCol,
-    countdown: remaining, // null = no auto-start
-    players: gs.players,
-    availableTaBlocks: getTaBlocksForRace(gs.players[forUserId]?.race||'standard'),
-    myTowers: pm?.towers || [],
-    myPath:   pm?.path || [],
-    myMinion: pm?.minion || null,
-    // Other players: only show time/score, not towers (fairness)
-    leaderboard: Object.values(gs.players).map(p=>({
-      userId:p.userId, username:p.username, score:p.score||0, lastTime:p.lastTime,
-    })).sort((a,b)=>(b.score||0)-(a.score||0)),
-  };
-}
 

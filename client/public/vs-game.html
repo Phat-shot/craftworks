@@ -95,6 +95,108 @@ canvas#mini{display:block}
 <script src="/game-brand.js"></script>
 <script>
 'use strict';
+// ── Generals Factions ────────────────────────────────────
+const GEN_FACTIONS = {
+  gla: {
+    name:'GLA', icon:'☠️', color:'#c09020', needsPower:false,
+    structures:{
+      command_center:{name:'Kommandozentrale',icon:'🕌',hp:1200,size:3,cost:500},
+      black_market:  {name:'Schwarzmarkt',   icon:'💰',hp:600, size:3,cost:300},
+      barracks:      {name:'Kaserne',        icon:'🏗️',hp:500, size:2,cost:200},
+      arms_dealer:   {name:'Waffenhändler',  icon:'🔫',hp:800, size:3,cost:500},
+      palace:        {name:'Palast',         icon:'🕌',hp:2000,size:4,cost:800},
+      tunnel_network:{name:'Tunnelnetzwerk', icon:'🕳️',hp:800, size:2,cost:600},
+      stinger_site:  {name:'Stinger-Stellung',icon:'🚀',hp:600,size:2,cost:600},
+      scud_storm:    {name:'SCUD Storm',     icon:'🌪️',hp:800, size:4,cost:2500},
+    },
+    units:{
+      worker:    {name:'Worker',     icon:'👷',hp:150,spd:4,dmg:0, range:0, type:'builder',cost:600},
+      rebel:     {name:'Rebell',     icon:'🔫',hp:80, spd:5,dmg:10,range:4, type:'infantry',cost:200},
+      rpg_trooper:{name:'RPG-Kämpfer',icon:'💪',hp:90,spd:4,dmg:60,range:8,type:'infantry',cost:300},
+      terrorist: {name:'Terrorist', icon:'💥',hp:60, spd:6,dmg:400,range:1,type:'infantry',cost:200},
+      technical:  {name:'Technical', icon:'🚙',hp:300,spd:9,dmg:30,range:5, type:'vehicle',cost:400},
+      scorpion:   {name:'Skorpion',  icon:'🦂',hp:450,spd:6,dmg:65,range:5, type:'vehicle',cost:600},
+      marauder:   {name:'Marauder',  icon:'🚀',hp:600,spd:5,dmg:80,range:6, type:'vehicle',cost:800},
+      quad_cannon:{name:'Vierfach-Kanone',icon:'🔫',hp:400,spd:6,dmg:50,range:7,type:'vehicle',cost:700},
+      scud_launcher:{name:'SCUD-Werfer',icon:'☠️',hp:350,spd:3,dmg:200,range:20,type:'vehicle',cost:1200},
+      jarmen_kell:{name:'Jarmen Kell',icon:'🎯',hp:120,spd:6,dmg:200,range:12,type:'infantry',cost:1500},
+    },
+    powers:[
+      {id:'rebel_ambush',name:'Rebell-Hinterhalt',cost:1,icon:'🔫'},
+      {id:'anthrax_bomb',name:'Anthrax-Bombe',    cost:3,icon:'☠️'},
+      {id:'scud_storm',  name:'SCUD-Sturm',       cost:5,icon:'🌪️'},
+    ],
+  },
+  usa: {
+    name:'USA', icon:'🦅', color:'#4090e0', needsPower:true,
+    structures:{
+      command_center:  {name:'Kommandozentrale', icon:'🏛️',hp:1500,size:4,cost:1000,power:0},
+      power_plant:     {name:'Kraftwerk',        icon:'⚡',hp:400, size:2,cost:100, power:+10},
+      supply_depot:    {name:'Versorgungsdepot', icon:'📦',hp:500, size:3,cost:200, power:-2},
+      barracks:        {name:'Kaserne',          icon:'🏗️',hp:600, size:3,cost:300, power:-2},
+      war_factory:     {name:'Waffenfabrik',     icon:'🏭',hp:1000,size:4,cost:800, power:-4},
+      air_force_command:{name:'Luftwaffenkommando',icon:'✈️',hp:700,size:4,cost:800,power:-4},
+      strategy_center: {name:'Strategiezentrum', icon:'🎯',hp:800, size:4,cost:1000,power:-4},
+      patriot_battery: {name:'Patriot-Batterie', icon:'🚀',hp:500, size:2,cost:800, power:-3},
+      particle_cannon: {name:'Partikelkanone',   icon:'🔆',hp:600, size:4,cost:2500,power:-8},
+    },
+    units:{
+      dozer:          {name:'Dozer',        icon:'🚜',hp:200,spd:2,dmg:0,  range:0,  type:'builder', cost:1000},
+      ranger:         {name:'Ranger',       icon:'🪖',hp:100,spd:4,dmg:15, range:4,  type:'infantry',cost:300},
+      missile_defender:{name:'Raketensoldat',icon:'💂',hp:100,spd:3,dmg:40,range:8,type:'infantry',cost:400},
+      pathfinder:     {name:'Pathfinder',   icon:'🎯',hp:80, spd:4,dmg:50, range:10, type:'infantry',cost:600},
+      crusader:       {name:'Crusader',     icon:'🛡️',hp:600,spd:5,dmg:80, range:5,  type:'vehicle', cost:800},
+      paladin:        {name:'Paladin',      icon:'⚔️',hp:800,spd:4,dmg:100,range:6,  type:'vehicle', cost:1200},
+      humvee:         {name:'Humvee',       icon:'🚙',hp:350,spd:8,dmg:25, range:5,  type:'vehicle', cost:500},
+      tomahawk:       {name:'Tomahawk',     icon:'🎯',hp:250,spd:3,dmg:150,range:15, type:'vehicle', cost:1000},
+      raptor:         {name:'Raptor F-22',  icon:'✈️',hp:350,spd:12,dmg:120,range:8, type:'aircraft',cost:1200},
+      comanche:       {name:'Comanche',     icon:'🚁',hp:300,spd:8,dmg:80, range:6,  type:'aircraft',cost:1000},
+    },
+    powers:[
+      {id:'spy_drone',  name:'Spionagedrohne',cost:1,icon:'🔭'},
+      {id:'carpet_bomb',name:'Teppichbombing',cost:3,icon:'💥'},
+      {id:'paradrop',   name:'Fallschirmjäger',cost:3,icon:'🪂'},
+      {id:'particle_uplink',name:'Partikelangriff',cost:5,icon:'🔆'},
+    ],
+  },
+  china: {
+    name:'China', icon:'🐉', color:'#e02010', needsPower:true,
+    structures:{
+      command_center:    {name:'Kommandozentrale',  icon:'🏛️',hp:2000,size:4,cost:1000,power:0},
+      nuclear_reactor:   {name:'Atomreaktor',       icon:'⚛️',hp:500, size:3,cost:600, power:+20},
+      supply_center:     {name:'Versorgungszentrum',icon:'📦',hp:600, size:3,cost:200, power:-2},
+      barracks:          {name:'Kaserne',           icon:'🏗️',hp:700, size:3,cost:300, power:-2},
+      war_factory:       {name:'Waffenfabrik',      icon:'🏭',hp:1200,size:4,cost:800, power:-4},
+      radar:             {name:'Radar',             icon:'📡',hp:500, size:3,cost:600, power:-3},
+      propaganda_center: {name:'Propagandazentrum', icon:'📢',hp:600, size:3,cost:800, power:-3},
+      internet_center:   {name:'Internetzentrum',   icon:'💻',hp:700, size:4,cost:1000,power:-4},
+      nuclear_missile_silo:{name:'Atomraketen-Silo',icon:'☢️',hp:800,size:4,cost:2500,power:-8},
+      gattling_cannon:   {name:'Gatling-Kanone',    icon:'🔫',hp:600, size:2,cost:600, power:-3},
+    },
+    units:{
+      dozer:       {name:'Dozer',            icon:'🚜',hp:200,spd:2,dmg:0,  range:0, type:'builder', cost:1000},
+      red_guard:   {name:'Rote Garde',       icon:'🪖',hp:120,spd:4,dmg:12, range:4, type:'infantry',cost:200},
+      tank_hunter: {name:'Panzerjäger',      icon:'💪',hp:100,spd:3,dmg:50, range:7, type:'infantry',cost:300},
+      hacker:      {name:'Hacker',           icon:'💻',hp:60, spd:3,dmg:0,  range:0, type:'infantry',cost:600,special:'hacking'},
+      battlemaster:{name:'Battlemaster',     icon:'🛡️',hp:500,spd:5,dmg:70, range:5, type:'vehicle', cost:600},
+      overlord:    {name:'Overlord-Panzer',  icon:'⚔️',hp:2000,spd:3,dmg:150,range:6,type:'vehicle', cost:2000},
+      dragon_tank: {name:'Drachenpanzer',    icon:'🐉',hp:450,spd:4,dmg:60, range:4, type:'vehicle', cost:700},
+      gattling_tank:{name:'Gatling-Panzer',  icon:'🔫',hp:400,spd:6,dmg:40, range:8, type:'vehicle', cost:900},
+      troop_crawler:{name:'Truppentransporter',icon:'🚌',hp:600,spd:6,dmg:0,range:0, type:'vehicle', cost:800},
+      mig:         {name:'MiG-Jäger',        icon:'✈️',hp:300,spd:14,dmg:100,range:7,type:'aircraft',cost:1200},
+    },
+    powers:[
+      {id:'artillery_barrage',name:'Artilleriefeuer',cost:2,icon:'💥'},
+      {id:'cluster_mines',    name:'Minenfeld',      cost:2,icon:'💣'},
+      {id:'neutron_bomb',     name:'Neutronenbombe', cost:4,icon:'☢️'},
+      {id:'nuclear_missile',  name:'Atombombe',      cost:5,icon:'☢️'},
+    ],
+  },
+};
+
+function getFaction(uid,gs){ return GEN_FACTIONS[gs?.players?.[uid]?.faction||'gla']||GEN_FACTIONS.gla; }
+function getMyFaction(){ return getFaction(myUserId,GS); }
+
 // ── Config ──────────────────────────────────────────────────
 const VS_COLS=40, VS_ROWS=40, TILE=20, SRV=20;
 let CW=VS_COLS*TILE, CH=VS_ROWS*TILE;
@@ -226,24 +328,46 @@ const UNIT_DEFS={
   knight: {icon:'🛡️',name:'Ritter',  costG:120,costW:20,desc:'Tank'},
   siege:  {icon:'💣',name:'Belagerung',costG:200,costW:50,desc:'Gebäudekiller'},
 };
+// Faction-aware struct/unit lookups (replaced by GEN_FACTIONS)
+function getStructDefs(){
+  const f=getMyFaction();
+  const defs={};
+  Object.entries(f.structures||{}).forEach(([k,s])=>{
+    defs[k]={icon:s.icon,name:s.name,costG:s.cost||0,costW:0,desc:s.name,power:s.power||0};
+  });
+  return defs;
+}
+function getUnitDefs(structType){
+  const f=getMyFaction();
+  const defs={};
+  Object.entries(f.units||{}).forEach(([k,u])=>{
+    if(!u.producedBy || u.producedBy.includes(structType)||!structType) {
+      defs[k]={icon:u.icon,name:u.name,costG:u.cost||0,costW:0,type:u.type,desc:u.name};
+    }
+  });
+  return defs;
+}
+// Legacy fallback
 const STRUCT_DEFS={
   barracks:{icon:'🏗️',name:'Kaserne',costG:150,costW:50,desc:'Einheiten ausbilden'},
-  wall:    {icon:'🧱',name:'Mauer',   costG:20,costW:30, desc:'Verteidigung'},
-  tower:   {icon:'🗼',name:'Turm',    costG:100,costW:0,  desc:'Fernkampf'},
-  altar:   {icon:'🌙',name:'Altar',   costG:200,costW:100,desc:'Boni'},
 };
 
 function buildPanel(){
   const pt=document.getElementById('panel-top');
   const si=document.getElementById('sel-info');
+  const STRUCT_DEFS_NOW = getStructDefs();
+  const f = getMyFaction();
+  const myP = GS?.players?.[myUserId]||{};
+  const myGold = myP.gold||0;
+  const myPower = (myP.power||0) - (myP.powerUsed||0);
 
   if(placeMode){
-    si.innerHTML=`<span style="color:#d0a0ff">📍 Klicke auf die Karte um <b>${STRUCT_DEFS[placeMode]?.name||placeMode}</b> zu platzieren — ESC abbrechen</span>`;
-    pt.innerHTML=Object.entries(STRUCT_DEFS).map(([k,d])=>`
-      <button class="cmd-btn${k===placeMode?' sel':''}" onclick="selectPlace('${k}')">
+    si.innerHTML=`<span style="color:#d0a0ff">📍 Klicke auf Karte um <b>${STRUCT_DEFS_NOW[placeMode]?.name||placeMode}</b> zu bauen — ESC abbrechen</span>`;
+    pt.innerHTML=Object.entries(STRUCT_DEFS_NOW).map(([k,d])=>`
+      <button class="cmd-btn${k===placeMode?' sel':''}" onclick="selectPlace('${k}')" ${d.costG>myGold?'disabled':''}>
         <span class="cmd-ic">${d.icon}</span>
         <span class="cmd-nm">${d.name}</span>
-        <span class="cmd-co">${d.costG}g ${d.costW?d.costW+'🪵':''}</span>
+        <span class="cmd-co" style="${d.costG>myGold?'color:#a04040':''}">${d.costG}g${d.power?'  '+d.power+'⚡':''}</span>
       </button>`).join('');
     return;
   }
@@ -255,12 +379,14 @@ function buildPanel(){
         <div class="hp-bar-bg" style="flex:1"><div class="hp-bar-fill" style="width:${Math.round(s.hp/s.maxHp*100)}%;background:#40c040"></div></div>
         <span style="font-size:9px;color:#608040">${s.hp}/${s.maxHp}</span>
       </div>`;
-    if(s.type==='barracks'||s.type==='main_building'){
-      pt.innerHTML=Object.entries(UNIT_DEFS).map(([k,d])=>`
-        <button class="cmd-btn" onclick="trainUnit('${k}')">
+    // Show units trainable from this structure
+    const trainableUnits=getUnitDefs(s.type);
+    if(Object.keys(trainableUnits).length>0){
+      pt.innerHTML=Object.entries(trainableUnits).map(([k,d])=>`
+        <button class="cmd-btn" onclick="trainUnit('${k}','${s.id}')" ${d.costG>myGold?'disabled':''}>
           <span class="cmd-ic">${d.icon}</span>
           <span class="cmd-nm">${d.name}</span>
-          <span class="cmd-co">${d.costG}g ${d.costW?d.costW+'🪵':''}</span>
+          <span class="cmd-co" style="${d.costG>myGold?'color:#a04040':''}">${d.costG}g</span>
         </button>`).join('');
     } else {
       pt.innerHTML=`<div style="padding:8px;color:#6050a0;font-size:10px">Keine Aktionen für ${s.type}</div>`;
@@ -284,13 +410,14 @@ function buildPanel(){
     return;
   }
 
-  // Default: build panel
-  si.innerHTML='<span style="color:#5a4070;font-size:10px">Klicke Einheiten oder Gebäude — Rechtsklick = Bewegen/Angreifen</span>';
-  pt.innerHTML=Object.entries(STRUCT_DEFS).map(([k,d])=>`
-    <button class="cmd-btn" onclick="selectPlace('${k}')">
+  // Default: full build panel with power indicator
+  const powerStr = f.needsPower ? ` | ⚡${myPower>=0?'+':''}${myPower}` : '';
+  si.innerHTML=`<span style="color:#5a4070;font-size:10px">🏗️ ${f.name} Bauen${powerStr} | Klicke Einheiten/Gebäude</span>`;
+  pt.innerHTML=Object.entries(STRUCT_DEFS_NOW).map(([k,d])=>`
+    <button class="cmd-btn" onclick="selectPlace('${k}')" ${d.costG>myGold?'disabled':''}>
       <span class="cmd-ic">${d.icon}</span>
       <span class="cmd-nm">${d.name}</span>
-      <span class="cmd-co">${d.costG}g ${d.costW?d.costW+'🪵':''}</span>
+      <span class="cmd-co" style="${d.costG>myGold?'color:#a04040':''}">${d.costG}g${d.power?'  '+d.power+'⚡':''}</span>
     </button>`).join('');
 }
 
@@ -300,9 +427,9 @@ function sendAction(action,data={}){
   socket.emit('game:action',{sessionId,action,data});
 }
 
-function trainUnit(type){
-  const structId=selStructure?.id;
-  sendAction('build_unit',{unitType:type,fromStructureId:structId});
+function trainUnit(type, structId){
+  structId = structId || selStructure?.id;
+  sendAction('vs_train',{unitType:type, structureId:structId});
 }
 
 function selectPlace(type){
@@ -429,7 +556,9 @@ function drawStructure(s,t){
   const sz=Math.min(t*1.2,22);
   ctx.font=`${sz}px serif`;
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(STRUCT_ICONS[s.type]||'🏛️', ox+w/2, oy+h/2);
+  const fac=GEN_FACTIONS[s.faction||'gla']||GEN_FACTIONS.gla;
+  const structIcon=(fac.structures?.[s.type]?.icon)||STRUCT_ICONS[s.type]||'🏛️';
+  ctx.fillText(structIcon, ox+w/2, oy+h/2);
 
   // HP bar
   const hpFrac=Math.max(0,(s.hp||0)/(s.maxHp||1));

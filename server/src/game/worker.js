@@ -55,6 +55,13 @@ function handleAction({ action, userId, data, reqId }) {
     case 'build_structure': result = engine.actionBuildStructure(gs, userId, data); break;
     // Time Attack actions
     case 'ta_place_tower':  result = engine.actionTaPlaceTower(gs, userId, data); break;
+    // Generals VS actions
+    case 'vs_build':
+    case 'vs_train':
+    case 'vs_power':
+    case 'vs_move':
+    case 'vs_attack':
+      result = engine.actionVs(gs, userId, action, data); break;
     case 'ta_ready':        result = engine.actionTaReady(gs, userId); break;
     case 'ta_remove_tower': result = engine.actionTaRemoveTower(gs, userId, data); break;
     default: result = { ok:false, err:'unknown_action' };
