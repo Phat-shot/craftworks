@@ -1010,6 +1010,88 @@ function getPveSnapshot(gs, forUserId) {
   return { ...getSnapshot(gs), pveConfig: gs.pveConfig };
 }
 
+// ── VS Generals action dispatcher ────────────────────────
+function actionVs(gs, userId, action, data) {
+  const p = gs.players[userId];
+  if (!p || p.status !== 'alive') return { ok:false, err:'not_alive' };
+
+  if (action === 'vs_build') {
+    const { structureType, row, col } = data;
+    const { GENERALS_FACTIONS } = require('./generals-factions');
+    const fDef = GENERALS_FACTIONS[p.faction] || GENERALS_FACTIONS.gla;
+    const sDef = fDef.structures[structureType];
+    if (!sDef) return { ok:false, err:'unknown_structure' };
+    if ((p.gold||0) < sDef.cost) return { ok:false, err:'no_gold' };
+
+    // Check prereqs
+    const built = new Set((gs.structures[userId]||[]).map(s=>s.type));
+    for (const pre of (sDef.prereq||[])) {
+      if (!built.has(pre)) return { ok:false, err:'missing_prereq' };
+    }
+
+    p.gold -= sDef.cost;
+    const newS = {
+      id:`s_${++gs._uid}_${userId}`, type:structureType, owner:userId, faction:p.faction,
+      row, col, hp:sDef.hp, maxHp:sDef.hp,
+      size:sDef.size||3, power:sDef.power||0,
+      buildProgress:0, buildTotal:sDef.buildTime||20,
+      building:true, buildQueue:[],
+    };
+    if (!gs.structures[userId]) gs.structures[userId]=[];
+    gs.structures[userId].push(newS);
+
+    // Move builder
+    const builder=(gs.playerUnits[userId]||[]).find(u=>u.unitType==='builder'&&!u.buildTarget);
+    if (builder) { builder.buildTarget=newS.id; builder.target={row,col}; builder.action='move_to_build'; }
+    return { ok:true, structure:newS, player:p };
+  }
+
+  if (action === 'vs_train') {
+    const { unitType, structureId } = data;
+    const { GENERALS_FACTIONS } = require('./generals-factions');
+    const fDef = GENERALS_FACTIONS[p.faction] || GENERALS_FACTIONS.gla;
+    const uDef = fDef.units[unitType];
+    if (!uDef) return { ok:false, err:'unknown_unit' };
+    if ((p.gold||0) < uDef.cost) return { ok:false, err:'no_gold' };
+    const struct=(gs.structures[userId]||[]).find(s=>s.id===structureId);
+    if (!struct||struct.building) return { ok:false, err:'no_structure' };
+    p.gold -= uDef.cost;
+    if (!struct.buildQueue) struct.buildQueue=[];
+    struct.buildQueue.push({unitType, progress:0, total:uDef.buildTime||10});
+    return { ok:true, player:p };
+  }
+
+  if (action === 'vs_power') {
+    const { powerId, row, col } = data;
+    const { GENERALS_FACTIONS } = require('./generals-factions');
+    const fDef = GENERALS_FACTIONS[p.faction] || GENERALS_FACTIONS.gla;
+    const power = (fDef.powers||fDef.generalPowers||[]).find(pw=>pw.id===powerId);
+    if (!power) return { ok:false, err:'unknown_power' };
+    if ((p.generalPoints||0) < power.cost) return { ok:false, err:'no_points' };
+    p.generalPoints -= power.cost;
+    return { ok:true, player:p };
+  }
+
+  if (action === 'vs_move') {
+    const unit=(gs.playerUnits[userId]||[]).find(u=>u.id===data.unitId);
+    if (!unit) return { ok:false, err:'no_unit' };
+    unit.target={row:data.row, col:data.col};
+    unit.action='move';
+    return { ok:true };
+  }
+
+  if (action === 'vs_attack') {
+    const unit=(gs.playerUnits[userId]||[]).find(u=>u.id===data.unitId);
+    if (!unit) return { ok:false, err:'no_unit' };
+    unit.target={type:'entity', id:data.targetId};
+    unit.action='attack';
+    return { ok:true };
+  }
+
+  return { ok:false, err:'unknown_vs_action' };
+}
+
+
 module.exports = {
   EBASE, EBASE_HP, getWaveConfig,
   COLS, ROWS, ENTRY_COL, TILE, TDB, EBASE, EBASE_HP,
