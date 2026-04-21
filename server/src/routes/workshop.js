@@ -20,7 +20,8 @@ const optionalAuth = async (req, res, next) => {
 const { getWaveConfig } = require('../game/engine');
 
 
-const { BUILTIN_MAPS, TA_SEQUENCES } = require('../game/builtin-maps');
+const { BUILTIN_MAPS } = require('../game/data/maps');
+const { TA_SEQUENCES } = require('../game/builtin-maps');
 
 const router = express.Router();
 
@@ -180,5 +181,141 @@ router.post('/maps/:id/rate', requireAuth,
     } catch (e) { res.status(500).json({ error: 'db_error' }); }
   }
 );
+
+// GET /api/workshop/maps/:id/export — download map as .craftworks.json
+router.get('/maps/:id/export', requireAuth, async (req, res) => {
+  try {
+    let map;
+    // Check builtins first
+    const builtin = BUILTIN_MAPS.find(m => m.id === req.params.id);
+    if (builtin) {
+      map = builtin;
+    } else {
+      const { rows } = await req.db.query(
+        `SELECT m.*, u.username AS creator_name
+         FROM workshop_maps m JOIN users u ON u.id=m.creator_id
+         WHERE m.id=$1 AND (m.is_public=true OR m.creator_id=$2)`,
+        [req.params.id, req.user.id]
+      );
+      if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+      map = rows[0];
+    }
+
+    // Build complete export bundle
+    const bundle = {
+      _format: 'craftworks_map_v1',
+      _exported_at: new Date().toISOString(),
+      _exported_by: req.user?.username || 'unknown',
+      // Identity
+      id:          map.id,
+      title:       map.title,
+      icon:        map.icon || '🗺️',
+      description: map.description || '',
+      game_mode:   map.game_mode,
+      difficulty:  map.difficulty || 'normal',
+      // Visual assets
+      bg_style:         map.bg_style || null,
+      path_style:       map.path_style || null,
+      bg_texture_url:   map.bg_texture_url || null,
+      path_texture_url: map.path_texture_url || null,
+      logo_overlay_url: map.logo_overlay_url || null,
+      // Skin overrides
+      building_skins: map.building_skins || {},
+      unit_skins:     map.unit_skins || {},
+      // Label overrides
+      label_gold:  map.label_gold  || null,
+      label_score: map.label_score || null,
+      label_lives: map.label_lives || null,
+      icon_gold:   map.icon_gold   || null,
+      icon_score:  map.icon_score  || null,
+      icon_lives:  map.icon_lives  || null,
+      // Gameplay
+      cols:            map.cols || null,
+      rows:            map.rows || null,
+      available_races: map.available_races || null,
+      renderer:        map.renderer || null,
+      // Layout
+      layout_items:       map.layout_items       || map.config?.layout_items       || [],
+      prebuilt_sequences: map.prebuilt_sequences || map.config?.ta_layout?.prebuilt_sequences || [],
+      // Full config blob (for TA layout, round counts etc.)
+      config: map.config || null,
+    };
+
+    const filename = `${(map.title||'map').replace(/[^a-z0-9]/gi,'_')}.craftworks.json`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(bundle);
+  } catch (e) {
+    console.error('[map/export]', e.message);
+    res.status(500).json({ error: 'export_failed' });
+  }
+});
+
+// POST /api/workshop/maps/import — upload .craftworks.json and create map
+router.post('/maps/import', requireAuth, async (req, res) => {
+  try {
+    const bundle = req.body;
+    if (!bundle || bundle._format !== 'craftworks_map_v1') {
+      return res.status(400).json({ error: 'invalid_format', hint: 'Expected craftworks_map_v1' });
+    }
+
+    const {
+      title, icon, description, game_mode, difficulty,
+      bg_style, path_style, bg_texture_url, path_texture_url, logo_overlay_url,
+      building_skins, unit_skins,
+      label_gold, label_score, label_lives, icon_gold, icon_score, icon_lives,
+      cols, rows, available_races, renderer,
+      layout_items, prebuilt_sequences, config,
+    } = bundle;
+
+    if (!title || !game_mode) {
+      return res.status(400).json({ error: 'missing_fields', required: ['title','game_mode'] });
+    }
+
+    // Build merged config (preserve ta_layout, merge sequences back in)
+    const mergedConfig = {
+      ...(config || {}),
+      difficulty: difficulty || 'normal',
+      available_races: available_races || config?.available_races || [],
+    };
+    if (game_mode === 'time_attack' && prebuilt_sequences?.length) {
+      mergedConfig.ta_layout = {
+        ...(mergedConfig.ta_layout || {}),
+        ...(config?.ta_layout || {}),
+        prebuilt_sequences,
+      };
+    }
+
+    const { rows: created } = await req.db.query(`
+      INSERT INTO workshop_maps
+        (creator_id, title, icon, description, game_mode, difficulty,
+         bg_style, path_style, bg_texture_url, path_texture_url, logo_overlay_url,
+         building_skins, unit_skins,
+         label_gold, label_score, label_lives, icon_gold, icon_score, icon_lives,
+         cols, rows, available_races, game_type,
+         layout_items, prebuilt_sequences, config, is_public)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,false)
+      RETURNING id, title
+    `, [
+      req.user.id, title, icon||'🗺️', description||'', game_mode, difficulty||'normal',
+      bg_style||null, path_style||null, bg_texture_url||null, path_texture_url||null, logo_overlay_url||null,
+      JSON.stringify(building_skins||{}), JSON.stringify(unit_skins||{}),
+      label_gold||null, label_score||null, label_lives||null,
+      icon_gold||null, icon_score||null, icon_lives||null,
+      cols||null, rows||null,
+      available_races ? JSON.stringify(available_races) : null,
+      game_mode,
+      JSON.stringify(layout_items||[]),
+      JSON.stringify(prebuilt_sequences||[]),
+      JSON.stringify(mergedConfig),
+    ]);
+
+    res.json({ ok: true, map: created[0] });
+  } catch (e) {
+    console.error('[map/import]', e.message);
+    res.status(500).json({ error: 'import_failed', detail: e.message });
+  }
+});
+
 
 module.exports = router;

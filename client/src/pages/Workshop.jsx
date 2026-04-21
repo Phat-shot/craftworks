@@ -50,7 +50,7 @@ function StarRating({ value, onChange, readonly }) {
   );
 }
 
-function MapCard({ map, onPlay, onEdit, onLayoutEdit, onDelete, isOwn }) {
+function MapCard({ map, onPlay, onEdit, onLayoutEdit, onDelete, onExport, isOwn }) {
   const [rating, setRating] = useState(map.my_rating || 0);
 
   const handleRate = async (r) => {
@@ -93,6 +93,7 @@ function MapCard({ map, onPlay, onEdit, onLayoutEdit, onDelete, isOwn }) {
         <button className="btn btn-primary btn-sm" style={{ flex:1 }} onClick={() => onPlay(map)}>
           ▶ Spielen
         </button>
+        <button className="btn btn-ghost btn-sm" title="Export" onClick={() => onExport(map)}>⬇️</button>
         {!isOwn && <StarRating value={rating} onChange={handleRate} />}
         {isOwn && <>
           <button className="btn btn-ghost btn-sm" onClick={() => onEdit(map)}>✏️</button>
@@ -404,6 +405,47 @@ export default function Workshop() {
 
   useEffect(() => { load(); }, [load]);
 
+  const handleExport = async (map) => {
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`/api/workshop/maps/${map.id}/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      const cd   = res.headers.get('content-disposition') || '';
+      const fn   = cd.match(/filename="([^"]+)"/)?.[1] || `${map.title}.craftworks.json`;
+      a.href = url; a.download = fn; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Export fehlgeschlagen: ' + e.message);
+    }
+  };
+
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const token = localStorage.getItem('access_token');
+      const res = await fetch('/api/workshop/maps/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(json),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Import failed');
+      alert(`✓ Map importiert: "${data.map.title}"`);
+      loadMaps();
+    } catch (e) {
+      alert('Import fehlgeschlagen: ' + e.message);
+    }
+  };
+
   const handlePlay = (map) => {
     // Navigate to MapSelect (/play) with this map pre-selected via sessionStorage
     sessionStorage.setItem('preselect_map', JSON.stringify(map));
@@ -437,6 +479,10 @@ export default function Workshop() {
         <span className="page-title">🔧 Workshop</span>
         <div style={{ display:'flex', gap:8 }}>
           <Link to="/workshop/content" className="btn btn-ghost btn-sm">🔨 Gebäude &amp; Rassen</Link>
+          <label className="btn btn-ghost btn-sm" style={{ cursor:'pointer' }} title="Map aus .craftworks.json importieren">
+            📂 Import
+            <input type="file" accept=".json,.craftworks.json" style={{ display:'none' }} onChange={handleImport} />
+          </label>
           <button className="btn btn-primary btn-sm" onClick={()=>navigate('/workshop/editor')}>+ Neue Map</button>
         </div>
       </div>
@@ -511,6 +557,7 @@ export default function Workshop() {
                 onLayoutEdit={(map) => navigate(`/workshop/editor/${map.id}`)}
                 onEdit={(map) => setEditor(map)}
                 onDelete={handleDelete}
+                onExport={handleExport}
               />
             ))}
             {(tab === 'gallery' ? maps : mine).length === 0 && (

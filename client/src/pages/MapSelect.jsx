@@ -8,6 +8,7 @@ const BUILTIN_MAPS = [
   { id:'builtin_td_desert',  title:'Wüstenpfad',   icon:'🏜️', game_mode:'td',          difficulty:'hard',   description:'Schnelle Gegner, Gruppen-Spawn',    bg_style:'desert', available_races:['standard','techies'] },
   { id:'builtin_vs_arena',   title:'Zentralarena', icon:'⚔️', game_mode:'vs',          difficulty:'normal', description:'VS: Kommandozentrale zerstören'    },
   { id:'builtin_ta_spiral',  title:'Spirale',      icon:'🌀', game_mode:'time_attack', difficulty:'normal', description:'Time Attack: Maze bauen',           rounds:10 },
+  { id:'builtin_ta_spiral_3d', title:'Spirale 3D', icon:'🌐', game_mode:'time_attack', difficulty:'normal', description:'Time Attack: 3D Low-Poly', rounds:10, available_races:['standard'] },
 ];
 
 const RACES = {
@@ -111,12 +112,16 @@ export default function MapSelect() {
       available_races: selMap.available_races || Object.keys(isVS ? GEN_FACTIONS : RACES),
       td_towers: RACES[selRace]?.td_towers || ['dart','poison','splash','frost','lightning'],
       ta_blocks: RACES[selRace]?.ta_blocks || ['wall_block','slow_block'],
+      renderer: selMap?.config?.renderer || undefined,
     };
     sessionStorage.setItem('mp_session', JSON.stringify({
       solo: true, userId: user.id, username: user.username,
       mode: mode2, difficulty: selDiff, race: selRace, workshopConfig,
     }));
-    const gameUrl = rawMode === 'vs' ? '/vs-game.html' : rawMode === 'time_attack' ? '/ta-game.html' : '/td-game.html';
+    const is3D = workshopConfig?.renderer === 'threejs' || selMap?.id?.endsWith('_3d');
+    const gameUrl = rawMode === 'vs' ? '/vs-game.html'
+      : rawMode === 'time_attack' ? (is3D ? '/ta-game-3d.html' : '/ta-game.html')
+      : '/td-game.html';
     window.location.href = gameUrl;
   };
 
