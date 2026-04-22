@@ -72,10 +72,10 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
   <div id="sel-info">Wähle Block-Typ dann auf Grid klicken</div>
   <div id="panel-top">
     <button class="cmd-btn sel" id="btn-wall" onclick="setTool('wall_block')">
-      <span class="cmd-ic">🧱</span><span class="cmd-nm">Mauer</span><span class="cmd-co">1💰</span>
+      <span class="cmd-ic">🧱</span><span class="cmd-nm">Mauer</span><span class="cmd-co">1🪵</span>
     </button>
     <button class="cmd-btn" id="btn-slow" onclick="setTool('slow_block')">
-      <span class="cmd-ic">❄️</span><span class="cmd-nm">Frost</span><span class="cmd-co">1🪵</span>
+      <span class="cmd-ic">❄️</span><span class="cmd-nm">Frost</span><span class="cmd-co">1💰</span>
     </button>
     <button class="cmd-btn" id="btn-clear" onclick="clearMyTowers()">
       <span class="cmd-ic">🗑️</span><span class="cmd-nm">Löschen</span><span class="cmd-co">Alle</span>
@@ -864,13 +864,20 @@ function connect(){
     const minion=snap.myMinion;
     if(minion&&!minion.reached&&!minion.escaped){
       ensureDragon();
-      dragonMesh.position.set(minion.px*TILE, 0.9, minion.py*TILE);
+      // Server sends minion.px/py in pixel coords (TILE_SERVER=32), convert to 3D world units
+      const SRV_TILE = 32;
+      dragonMesh.position.set(minion.px / SRV_TILE, 0.9, minion.py / SRV_TILE);
       if(snap.myPath && snap.myPath.length > 1){
-        const currIdx = Math.min(Math.floor(minion.progress||0), snap.myPath.length-2);
-        const curr = snap.myPath[currIdx];
-        const next = snap.myPath[currIdx+1];
-        if(curr && next){
-          dragonMesh.rotation.y = Math.atan2(next[1]-curr[1], next[0]-curr[0]);
+        // Use pathIdx from minion, not progress
+        const nextIdx = Math.min(minion.pathIdx || 1, snap.myPath.length-1);
+        const prevIdx = Math.max(0, nextIdx-1);
+        const curr = snap.myPath[prevIdx];
+        const next = snap.myPath[nextIdx];
+        if(curr && next && (next[0] !== curr[0] || next[1] !== curr[1])){
+          // path[i] = [row, col]. World: x=col, z=row
+          const dx = next[1]-curr[1], dz = next[0]-curr[0];
+          // Dragon body faces +X axis. For THREE rotation.y: atan2 returns angle from +X
+          dragonMesh.rotation.y = -Math.atan2(dz, dx);
         }
       }
       updateDragonHP(dragonMesh, minion.hp/minion.maxHp);

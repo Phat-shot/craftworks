@@ -1306,17 +1306,16 @@ function tickTimeAttack(gs) {
           ...t, id:`pt_${uid}_r${gs.round}_${i}`, owner:uid,
           paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
         }));
-        const raceKey = p.race || 'standard';
-        const racePB = (RACE_TA_PREBUILTS[raceKey]||[]).map((t,i)=>({
-          ...t, id:`race_${uid}_${gs.round}_${i}`, owner:uid,
-          paths:[0,0,0], lastFire:0, invested:0, _prebuilt:true,
-        }));
+        // Race-specific prebuilts removed — only use sequence items
+        const racePB = [];
         const allPB = [...sharedItems, ...racePB];
         pm.towers = gs.findTaPath(allPB) ? allPB : sharedItems;
         pm.path   = gs.findTaPath(pm.towers) || gs.findTaPath([]);
       }
       gs.phase = 'placing';
       gs.phaseStartTime = Date.now();
+      // Reset ready flags so players can ready up for next round
+      for (const p of Object.values(gs.players)) { p.ready = false; p.lastTime = null; }
     }
     return;
   }
@@ -1352,7 +1351,7 @@ function tickTimeAttack(gs) {
       m.px=tx; m.py=ty; m.pathIdx++;
       if (m.pathIdx >= path.length) {
         m.reached = true;
-        m.time = gs.gameTime - pm.startTime;
+        m.time = (gs.gameTime - pm.startTime) / 1000; // seconds
         gs.players[uid].lastTime = m.time;
       }
     } else { m.px+=dx/dist*step; m.py+=dy/dist*step; }
@@ -1366,11 +1365,20 @@ function startRacing(gs) {
   gs.phase = 'racing';
   for (const [uid, pm] of Object.entries(gs.playerMaps)) {
     pm.startTime = gs.gameTime;
+    // Ensure path is valid before starting
+    if (!pm.path || pm.path.length < 2) {
+      pm.path = gs.findTaPath ? gs.findTaPath(pm.towers || []) : null;
+    }
+    if (!pm.path || pm.path.length < 2) {
+      console.warn('[TA startRacing] No valid path for user', uid);
+      pm.minion = null;
+      continue;
+    }
     const _taEntry = gs.taEntryCol !== undefined ? gs.taEntryCol : Math.floor((gs.cols||15)/2);
     pm.minion = {
       id:`minion_${uid}`, owner:uid,
       px: _taEntry*TILE+TILE/2, py: TILE/2,
-      pathIdx: 1, spd: 1.8,
+      pathIdx: 1, spd: 1.8, hp: 100, maxHp: 100,
       reached:false, escaped:false, time:null,
     };
   }
