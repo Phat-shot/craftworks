@@ -22,8 +22,10 @@ export default function GamePage() {
       solo: false,
       workshopConfig: location.state?.workshopConfig || null,
     }));
+    const wc = location.state?.workshopConfig || null;
+    const is3D = wc?.renderer === 'threejs' || wc?.id?.endsWith('_3d');
     const gameUrl = mode === 'vs' ? '/vs-game.html'
-      : mode === 'time_attack' ? '/ta-game.html'
+      : mode === 'time_attack' ? (is3D ? '/ta-game-3d.html' : '/ta-game.html')
       : '/td-game.html';
     window.location.href = gameUrl;
   }, []);

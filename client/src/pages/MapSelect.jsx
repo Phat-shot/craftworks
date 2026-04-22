@@ -79,14 +79,19 @@ export default function MapSelect() {
   }, []);
 
   // When map changes: reset race
+  // Reset race whenever map changes to ensure correct pool is picked
   useEffect(() => {
     if (!selMap) return;
     const newIsVS = selMap.game_mode === 'vs';
-    const pool = newIsVS ? Object.keys(GEN_FACTIONS) : (selMap.available_races?.filter(r => RACES[r]) || Object.keys(RACES));
-    if (!pool.includes(selRace)) setSelRace(pool[0] || (newIsVS ? 'gla' : 'standard'));
+    const pool = newIsVS
+      ? Object.keys(GEN_FACTIONS)
+      : (selMap.available_races?.filter(r => RACES[r]) || Object.keys(RACES));
+    // Always pick first available race for the new map
+    const defaultRace = pool[0] || (newIsVS ? 'gla' : 'standard');
+    if (!pool.includes(selRace)) setSelRace(defaultRace);
     if (selMap.difficulty) setSelDiff(selMap.difficulty);
-    if (selMap.rounds) setRounds(selMap.rounds);
-  }, [selMap?.id]);
+    if (selMap.rounds)     setRounds(selMap.rounds);
+  }, [selMap?.id, selMap?.game_mode]);
 
   const start = () => {
     if (!selMap) return;

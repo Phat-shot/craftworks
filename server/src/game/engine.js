@@ -1196,7 +1196,7 @@ function getVsSnapshot(gs, forUserId) {
 }
 
 
-function createTimeAttackGame(sessionId, players, workshopConfig) {
+function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = {}) {
   const layout = workshopConfig?.ta_layout || {};
   const cols = layout.cols || 35, rows = layout.rows || 50;
   const taEntryCol = Math.floor(cols / 2);
@@ -1231,32 +1231,53 @@ function createTimeAttackGame(sessionId, players, workshopConfig) {
     return null;
   }
 
+  // Build roundSequence FIRST so round 0 uses correct preset
+  const allSeqs   = layout.prebuilt_sequences || [];
+  const numRounds = layout.rounds || 10;
+  const roundSequence = [];
+  if (allSeqs.length > 0) {
+    if (layout.round_selection === 'random') {
+      const pool = [...allSeqs];
+      for (let i = 0; i < numRounds; i++) {
+        if (pool.length === 0) pool.push(...allSeqs);
+        roundSequence.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+      }
+    } else {
+      for (let i = 0; i < numRounds; i++) roundSequence.push(allSeqs[i % allSeqs.length]);
+    }
+  }
+  const seq0 = roundSequence[0] || {};
+
   const playerState = {};
-  const playerMaps  = {}; // userId -> { towers, path }
+  const playerMaps  = {};
 
   for (const p of players) {
-    const prebuilt = (layout.prebuilt_towers || []).map((t,i) => ({
-      ...t, id:`pt_${p.userId}_${i}`, owner: p.userId,
-      paths:[0,0,0], lastFire:0, invested:0,
+    // Use round 0 sequence items as initial prebuilts
+    const sharedPB = (seq0.items || layout.prebuilt_towers || []);
+    const prebuilt = sharedPB.map((t, i) => ({
+      ...t, id:`pt_${p.userId}_0_${i}`, owner: p.userId,
+      paths:[0,0,0], lastFire:0, invested:0, _prebuilt: true,
     }));
-    const path = findTaPath(prebuilt); // use TD pathfinder on smaller grid
+    const path = findTaPath(prebuilt);
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      gold: layout.gold_per_round || 100,
-      wood: layout.wood_per_round || 50,
+      gold: seq0.gold_per_round ?? layout.gold_per_round ?? 15,
+      wood: seq0.wood_per_round ?? layout.wood_per_round ?? 2,
       score: 0, round: 0, status: 'placing',
+      race: playerRaces?.[p.userId] || p.race || 'standard',
     };
     playerMaps[p.userId] = { towers: prebuilt, path, minion: null, startTime: null };
   }
 
   return {
-    sessionId, mode:'time_attack',
+    sessionId, mode: 'time_attack',
     cols, rows, taEntryCol, findTaPath,
+    roundSequence,
     players: playerState,
     playerMaps, workshopConfig,
-    round: 0, totalRounds: layout.rounds || 5,
-    phase: 'placing', // placing | racing | results
-    phaseStartTime: Date.now(), // for countdown
+    round: 0, totalRounds: numRounds,
+    phase: 'placing',
+    phaseStartTime: Date.now(),
     gameTime: 0, lastTick: Date.now(),
     gameOver: false,
     roundLayouts: layout.round_layouts || [],

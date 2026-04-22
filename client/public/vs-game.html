@@ -534,8 +534,9 @@ function drawFog(sr,er,sc2,ec,t){
 
 const STRUCT_ICONS={'main_building':'🏰','barracks':'🏗️','wall':'🧱','tower':'🗼','altar':'🌙'};
 function drawStructure(s,t){
+  const sz=s.size||(s.type==='main_building'||s.type==='command_center'?3:2);
   const ox=s.col*t-camX, oy=s.row*t-camY;
-  const w=s.type==='main_building'?3*t:2*t, h=s.type==='main_building'?3*t:2*t;
+  const w=sz*t, h=sz*t;
   const col=ownerColor(s.owner);
   const isMine=s.owner===myUserId;
   const isSel=selStructure?.id===s.id;
@@ -553,12 +554,21 @@ function drawStructure(s,t){
   ctx.fill(); ctx.stroke();
 
   // Icon
-  const sz=Math.min(t*1.2,22);
-  ctx.font=`${sz}px serif`;
+  const iconSz=Math.min(t*1.2,22);
+  ctx.font=`${iconSz}px serif`;
   ctx.textAlign='center'; ctx.textBaseline='middle';
   const fac=GEN_FACTIONS[s.faction||'gla']||GEN_FACTIONS.gla;
   const structIcon=(fac.structures?.[s.type]?.icon)||STRUCT_ICONS[s.type]||'🏛️';
   ctx.fillText(structIcon, ox+w/2, oy+h/2);
+
+  // Construction overlay
+  if(s.building){
+    const prog=(s.buildProgress||0)/(s.buildTotal||1);
+    ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(ox,oy,w,h);
+    ctx.fillStyle='rgba(240,200,60,.85)'; ctx.font=`bold ${t*.3}px Cinzel,serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('🔨 '+Math.round(prog*100)+'%', ox+w/2, oy+h/2+sz*t*.3);
+  }
 
   // HP bar
   const hpFrac=Math.max(0,(s.hp||0)/(s.maxHp||1));
@@ -578,43 +588,70 @@ function drawStructure(s,t){
 
 const UNIT_SHAPES={soldier:'circle',archer:'diamond',knight:'square',siege:'square'};
 function drawUnit(u,t){
-  const{sx,sy}=worldToScreen(u.x,u.y);
-  const r=TILE*.28*zoom;
+  const ox=u.col*t-camX, oy=u.row*t-camY;
   const col=ownerColor(u.owner);
   const isMine=u.owner===myUserId;
+  const isSel=selUnitIds.has(u.id);
+  const fac=GEN_FACTIONS[u.faction||'gla']||GEN_FACTIONS.gla;
 
   // Shadow
-  ctx.fillStyle='rgba(0,0,0,.25)';
-  ctx.beginPath(); ctx.ellipse(sx,sy+r*.8,r*.6,r*.18,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(0,0,0,.4)';
+  ctx.beginPath(); ctx.arc(ox+t/2+2, oy+t/2+3, t*.35, 0, Math.PI*2); ctx.fill();
 
-  // Body
-  const shape=UNIT_SHAPES[u.type]||'circle';
-  ctx.fillStyle=col+(isMine?'ee':'aa');
-  ctx.strokeStyle=isMine?'rgba(255,255,200,.5)':'rgba(200,100,80,.4)';
-  ctx.lineWidth=1;
+  // Unit body — shape varies by type
+  const ut=u.unitType||'infantry';
+  ctx.fillStyle=isMine?col:'rgba(220,60,40,.9)';
+  ctx.strokeStyle=isSel?'#fff8c0':(isMine?'#ffffff':'#ff8060');
+  ctx.lineWidth=isSel?2:1;
   ctx.beginPath();
-  if(shape==='diamond'){
-    ctx.moveTo(sx,sy-r); ctx.lineTo(sx+r,sy); ctx.lineTo(sx,sy+r); ctx.lineTo(sx-r,sy); ctx.closePath();
-  } else if(shape==='square'){
-    ctx.rect(sx-r,sy-r,r*2,r*2);
+  if(ut==='aircraft'){
+    // Triangle pointing forward
+    ctx.moveTo(ox+t/2, oy+t*.15);
+    ctx.lineTo(ox+t*.15, oy+t*.85);
+    ctx.lineTo(ox+t*.85, oy+t*.85);
+    ctx.closePath();
+  } else if(ut==='vehicle'){
+    // Square
+    ctx.rect(ox+t*.2, oy+t*.2, t*.6, t*.6);
+  } else if(ut==='builder'){
+    // Pentagon
+    const cx=ox+t/2, cy=oy+t/2, r=t*.35;
+    for(let i=0;i<5;i++){
+      const a=i*Math.PI*2/5-Math.PI/2;
+      const px=cx+Math.cos(a)*r, py=cy+Math.sin(a)*r;
+      i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.closePath();
   } else {
-    ctx.arc(sx,sy,r,0,Math.PI*2);
+    // Circle (infantry)
+    ctx.arc(ox+t/2, oy+t/2, t*.3, 0, Math.PI*2);
   }
   ctx.fill(); ctx.stroke();
 
-  // Unit icon (tiny)
-  const icons={soldier:'⚔',archer:'🏹',knight:'🛡',siege:'💣'};
-  ctx.font=`${r*1.3}px serif`;
+  // Icon
+  const icon=fac.units?.[u.type]?.icon||(ut==='aircraft'?'✈️':ut==='vehicle'?'🚙':ut==='builder'?'🚜':'🪖');
+  ctx.font=`${Math.max(10,t*.5)}px serif`;
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillStyle='rgba(255,255,255,.9)';
-  ctx.fillText(icons[u.type]||'●',sx,sy);
+  ctx.fillText(icon, ox+t/2, oy+t/2);
 
-  // HP bar above unit
+  // HP bar
   const hpFrac=Math.max(0,(u.hp||0)/(u.maxHp||1));
-  const bw=r*2.4, bh=2;
-  ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(sx-r*1.2,sy-r-5,bw,bh);
-  ctx.fillStyle=hpFrac>.5?'#40d040':hpFrac>.25?'#e0c020':'#d03020';
-  ctx.fillRect(sx-r*1.2,sy-r-5,bw*hpFrac,bh);
+  if(hpFrac<1){
+    ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(ox+1,oy-4,t-2,2);
+    ctx.fillStyle=hpFrac>.5?'#40d040':hpFrac>.25?'#e0c020':'#d03020';
+    ctx.fillRect(ox+1,oy-4,(t-2)*hpFrac,2);
+  }
+
+  // Builder action indicator
+  if(u.action==='move_to_build'){
+    ctx.strokeStyle='#f0c040'; ctx.lineWidth=1.5;
+    ctx.setLineDash([2,2]);
+    ctx.beginPath();
+    ctx.moveTo(ox+t/2, oy+t/2);
+    ctx.lineTo((u.target?.col||0)*t+t/2-camX, (u.target?.row||0)*t+t/2-camY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function drawMinimap(){

@@ -28,13 +28,11 @@ function enrichTaConfig(wc) {
     }
 
     const tl = {
-      cols: bTl.cols, rows: bTl.rows,
-      rounds: numRounds,
-      round_selection: 'sequential', // already selected & ordered
-      gold_per_round: bTl.gold_per_round,
-      wood_per_round: bTl.wood_per_round,
-      ...cTl,
-      prebuilt_sequences: selectedSeqs, // only 10 rounds, not 50
+      ...bTl,                                    // start with builtin defaults (cols/rows/gpr/wpr)
+      ...cTl,                                    // client overrides (rounds, countdown)
+      rounds:             numRounds,
+      round_selection:    'sequential',          // already randomized above
+      prebuilt_sequences: selectedSeqs,          // 10 rounds (not 50) — MUST be last
     };
     console.log('[enrichTa]', mapId + ': ' + selectedSeqs.length + ' rounds selected, cols=' + tl.cols);
     return { ...wc, ta_layout: tl };

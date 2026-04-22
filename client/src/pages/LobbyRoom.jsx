@@ -17,19 +17,32 @@ export default function LobbyRoom() {
   const [qr,       setQr]       = useState(null);
   const [error,    setError]    = useState('');
   const [myRace,   setMyRace]   = useState('standard');
+  // Auto-correct race when switching between VS and TD lobbies
+  useEffect(() => {
+    if (!lobby) return;
+    const valid = lobby.game_mode === 'vs' ? ['gla','usa','china'] : ['standard','orcs','techies','elemente','urwald'];
+    if (!valid.includes(myRace)) setMyRace(lobby.game_mode === 'vs' ? 'gla' : 'standard');
+  }, [lobby?.game_mode]);
   const [builtinMaps, setBuiltinMaps] = useState([]);
   const [selectedMap, setSelectedMap] = useState(null);
   const [taCountdown, setTaCountdown] = useState(60);
   const [taRounds, setTaRounds]       = useState(5);
   const socketRef  = useRef(null);
 
-  const RACES = {
+  const TD_RACES = {
     standard: { name:'Standard',   icon:'⚔️',  color:'#c0a060', desc:'Dart · Gift · Kanone' },
     orcs:     { name:'Orcs',       icon:'💀',  color:'#80c020', desc:'Fleischwolf · Wurfspeer · Kriegstrommel' },
     techies:  { name:'Techies',    icon:'⚙️',  color:'#60a8d0', desc:'Mörser · Elektrozaun · Raketenwerfer' },
     elemente: { name:'Elemente',   icon:'🌊',  color:'#40c0e0', desc:'Magmaquelle · Sturmstrudel · Eisspitze' },
     urwald:   { name:'Urwald',     icon:'🌿',  color:'#40a840', desc:'Rankenfalle · Giftpilz · Mondlichtaltar' },
   };
+  const GEN_FACTIONS = {
+    gla:   { name:'GLA',   icon:'☠️', color:'#c09020', desc:'Guerilla · Tunnel · SCUD · Kein Strom' },
+    usa:   { name:'USA',   icon:'🦅', color:'#4090e0', desc:'Technologie · Luftmacht · Partikelkanone' },
+    china: { name:'China', icon:'🐉', color:'#e02010', desc:'Panzermassen · Propaganda · Atombombe' },
+  };
+  // Show appropriate roster for current game mode
+  const RACES = (lobby?.game_mode === 'vs') ? GEN_FACTIONS : TD_RACES;
 
   useEffect(() => {
     // Load lobby
@@ -81,12 +94,21 @@ export default function LobbyRoom() {
   };
 
   const startGame = () => {
-    const wsConfig = selectedMap?.config || selectedMap || {};
+    // Merge top-level map identity INTO the config so server's enrichTaConfig can find builtin
+    const base = selectedMap?.config || selectedMap || {};
+    const wsConfig = {
+      ...base,
+      id:       selectedMap?.id       || base.id,
+      title:    selectedMap?.title    || base.title,
+      game_mode: selectedMap?.game_mode || base.game_mode,
+      renderer: selectedMap?.config?.renderer || selectedMap?.renderer || null,
+    };
     if (lobby.game_mode === 'time_attack') {
       wsConfig.ta_countdown = taCountdown;
       if (wsConfig.ta_layout) wsConfig.ta_layout.rounds = taRounds;
       else wsConfig.ta_layout = { rounds: taRounds };
     }
+    console.log('[LobbyRoom startGame] wsConfig:', { id: wsConfig.id, renderer: wsConfig.renderer, mode: wsConfig.game_mode });
     socketRef.current?.emit('lobby:start', { lobbyId: id, workshopMapConfig: wsConfig });
   };
 

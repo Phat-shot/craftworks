@@ -148,7 +148,7 @@ export default function ChallengePage() {
     const workshopConfig = { game_mode: challenge.parent_map_id?.startsWith('builtin_vs')? 'vs': challenge.parent_map_id?.startsWith('builtin_ta')? 'time_attack':'td', challenge_token: token, ...challenge };
     sessionStorage.setItem('mp_session', JSON.stringify({ solo:true, userId:'guest_'+Date.now(), username:'Gast', difficulty:'normal', mode:'solo', workshopConfig }));
     setGameStarted(true);
-    const gameUrl = workshopConfig.game_mode === 'vs'?'/vs-game.html': workshopConfig.game_mode==='time_attack'?'/ta-game.html':'/td-game.html';
+    const is3D = workshopConfig?.renderer==='threejs' || workshopConfig?.id?.endsWith('_3d'); const gameUrl = workshopConfig.game_mode==='vs'?'/vs-game.html': workshopConfig.game_mode==='time_attack'?(is3D?'/ta-game-3d.html':'/ta-game.html'):'/td-game.html';
     window.location.href = gameUrl;
   };
 

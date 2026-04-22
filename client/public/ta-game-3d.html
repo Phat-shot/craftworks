@@ -49,6 +49,31 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
 <div id="canvaswrap">
   <canvas id="threecanvas"></canvas>
   <div id="toast"></div>
+  <div id="conn-status" style="position:absolute;top:4px;left:4px;padding:4px 8px;background:rgba(0,0,0,.7);border-radius:4px;font-size:10px;color:#909090;z-index:999">⏳ Verbinde…</div>
+  <div id="intro-overlay" style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.95),rgba(20,10,30,.85));display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:400;padding:20px;text-align:center">
+    <div style="font-size:44px;margin-bottom:10px;filter:drop-shadow(0 0 20px rgba(240,200,60,.4))">🐉</div>
+    <div style="font-family:'Cinzel',serif;font-size:22px;color:var(--gold);font-weight:900;margin-bottom:6px;letter-spacing:2px">DIE SPIRALE</div>
+    <div style="font-size:11px;color:#a080c0;margin-bottom:18px;font-style:italic;max-width:400px;line-height:1.6">
+      Jenseits der nebligen Zinnen erwacht der rote Drache. Nur wer ein Labyrinth aus uralten Steinen und verzauberten Ranken errichtet, kann ihn aufhalten — Runde um Runde, bis der Morgen graut.
+    </div>
+    <div style="font-size:10px;color:#706090;margin-bottom:20px;max-width:420px;line-height:1.5">
+      🧱 <b>Mauer</b> lenkt · 🌿 <b>Slow</b> verlangsamt · Der Drache sucht immer den kürzesten Weg.<br>
+      Drehen: <b>Rechtsklick</b> · Bewegen: <b>Linksklick</b> · Zoomen: <b>Scroll</b>
+    </div>
+    <button onclick="document.getElementById('intro-overlay').style.display='none'" style="padding:10px 28px;font-family:'Cinzel',serif;font-size:13px;font-weight:700;background:linear-gradient(180deg,rgba(60,160,20,.5),rgba(30,100,10,.4));border:2px solid #3a8020;color:#80ff40;border-radius:8px;cursor:pointer">
+      ⚔️ Beginnen
+    </button>
+  </div>
+  <div id="lore-overlay" style="position:absolute;inset:0;background:radial-gradient(circle,rgba(0,0,0,.7),rgba(0,0,0,.95));display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:250;padding:20px;cursor:pointer" onclick="this.style.display='none'">
+    <div style="font-size:36px;margin-bottom:16px">🏰 🐉 🏰</div>
+    <h2 style="font-size:22px;color:var(--gold);margin-bottom:14px;text-align:center">Die Belagerung der Spirale</h2>
+    <div style="max-width:440px;text-align:center;font-size:12px;color:#c0a070;line-height:1.6;font-family:Cinzel,serif">
+      Der uralte Feuerdrache Pyraxia nähert sich der Burgfeste.<br>
+      Errichte Mauern und Fallen, um ihn so lange wie möglich aufzuhalten.<br><br>
+      <span style="color:#e0c090">10 Runden. Jede länger. Schnellere Zeit = höhere Punktzahl.</span>
+    </div>
+    <div style="margin-top:20px;font-size:11px;color:#806050">→ Tippen um zu beginnen</div>
+  </div>
   <div id="results-overlay">
     <h2 id="res-title">Runde beendet</h2>
     <div class="time" id="res-time">—</div>
@@ -100,7 +125,43 @@ renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 renderer.setClearColor(0x050308);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x050308, 0.018);
+// Twilight atmospheric fog
+scene.fog = new THREE.FogExp2(0x1a0f28, 0.014);
+
+// Skybox — gradient dome
+const skyGeo = new THREE.SphereGeometry(100, 32, 16);
+const skyMat = new THREE.ShaderMaterial({
+  uniforms:{topColor:{value:new THREE.Color(0x0a0418)},bottomColor:{value:new THREE.Color(0x3a1830)}},
+  vertexShader:'varying vec3 vWorldPos;void main(){vec4 p=modelMatrix*vec4(position,1.);vWorldPos=p.xyz;gl_Position=projectionMatrix*viewMatrix*p;}',
+  fragmentShader:'uniform vec3 topColor;uniform vec3 bottomColor;varying vec3 vWorldPos;void main(){float h=normalize(vWorldPos).y;gl_FragColor=vec4(mix(bottomColor,topColor,max(h,0.)),1.);}',
+  side:THREE.BackSide, depthWrite:false,
+});
+scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+// Stars — distant small points
+const starsGeo = new THREE.BufferGeometry();
+const starCount = 200, starPositions = [];
+for(let i=0;i<starCount;i++){
+  const phi=Math.random()*Math.PI*2, theta=Math.random()*Math.PI*0.4;
+  starPositions.push(
+    Math.cos(phi)*Math.sin(theta)*80,
+    Math.cos(theta)*80,
+    Math.sin(phi)*Math.sin(theta)*80
+  );
+}
+starsGeo.setAttribute('position',new THREE.Float32BufferAttribute(starPositions,3));
+scene.add(new THREE.Points(starsGeo, new THREE.PointsMaterial({color:0xf0e0a0,size:.25,sizeAttenuation:true,transparent:true,opacity:.7})));
+
+// Distant mountain silhouettes (low-poly cones)
+const mountainMat = new THREE.MeshLambertMaterial({color:0x1a1028});
+for(let i=0;i<12;i++){
+  const angle = i/12*Math.PI*2;
+  const dist = 45 + Math.random()*15;
+  const h = 6 + Math.random()*8;
+  const m = new THREE.Mesh(new THREE.ConeGeometry(3+Math.random()*2, h, 5), mountainMat);
+  m.position.set(Math.cos(angle)*dist+COLS/2, h/2-1, Math.sin(angle)*dist+ROWS/2);
+  scene.add(m);
+}
 
 // Camera: isometric-ish perspective, tilted over the grid
 const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
@@ -114,33 +175,48 @@ function updateCamera(){
 }
 updateCamera();
 
-// Lights
-const ambient=new THREE.AmbientLight(0x303048,1.5); scene.add(ambient);
-const sun=new THREE.DirectionalLight(0xfff4e0,2.5);
-sun.position.set(20,40,20); sun.castShadow=true;
-sun.shadow.mapSize.set(2048,2048);
-sun.shadow.camera.near=1; sun.shadow.camera.far=200;
-sun.shadow.camera.left=-40; sun.shadow.camera.right=80;
-sun.shadow.camera.top=60; sun.shadow.camera.bottom=-10;
-scene.add(sun);
-const fill=new THREE.DirectionalLight(0x4060ff,0.4);
-fill.position.set(-10,10,-10); scene.add(fill);
+// Moonlight atmosphere
+const ambient=new THREE.AmbientLight(0x403860,1.0); scene.add(ambient);
+const moon=new THREE.DirectionalLight(0xb8c8ff, 1.6);
+moon.position.set(25, 50, 15); moon.castShadow=true;
+moon.shadow.mapSize.set(2048,2048);
+moon.shadow.camera.near=1; moon.shadow.camera.far=200;
+moon.shadow.camera.left=-20; moon.shadow.camera.right=60;
+moon.shadow.camera.top=60; moon.shadow.camera.bottom=-10;
+moon.shadow.bias=-0.0003;
+scene.add(moon);
+// Warm fire glow from below
+const fireGlow=new THREE.PointLight(0xff6020, 0.8, 30, 2);
+fireGlow.position.set(COLS/2, 1, ROWS-3);
+scene.add(fireGlow);
+// Rim accent
+const rim=new THREE.DirectionalLight(0x8050a0, 0.5);
+rim.position.set(-15, 12, -15); scene.add(rim);
 
 // ── Materials ────────────────────────────────────────────
 const MAT={
-  grass: new THREE.MeshLambertMaterial({color:0x1a3010}),
-  grass2:new THREE.MeshLambertMaterial({color:0x142808}),
-  path:  new THREE.MeshLambertMaterial({color:0x3a2410}),
-  wall:  new THREE.MeshLambertMaterial({color:0x8a7060}),
-  wallTop:new THREE.MeshLambertMaterial({color:0xaa9080}),
-  wallPrebuilt:new THREE.MeshLambertMaterial({color:0x6a5040}),
-  slow:  new THREE.MeshLambertMaterial({color:0x204010,emissive:0x103008,emissiveIntensity:.4}),
-  slowTop:new THREE.MeshLambertMaterial({color:0x50d020,emissive:0x30a010,emissiveIntensity:.6}),
-  dragon:new THREE.MeshLambertMaterial({color:0xe03020,emissive:0x801000,emissiveIntensity:.3}),
-  portal:new THREE.MeshLambertMaterial({color:0x2080ff,emissive:0x1040ff,emissiveIntensity:.8}),
-  portalEnd:new THREE.MeshLambertMaterial({color:0xff4020,emissive:0xff2000,emissiveIntensity:.8}),
-  pathHighlight:new THREE.MeshLambertMaterial({color:0x50c020,transparent:true,opacity:.4}),
-  ghost: new THREE.MeshLambertMaterial({color:0x8080ff,transparent:true,opacity:.4,depthWrite:false}),
+  // Moonlit grass — deeper, more saturated
+  grass:  new THREE.MeshLambertMaterial({color:0x1f3a14}),
+  grass2: new THREE.MeshLambertMaterial({color:0x152806}),
+  // Ancient cobblestone path
+  path:   new THREE.MeshLambertMaterial({color:0x4a3420}),
+  // Weathered stone walls
+  wall:   new THREE.MeshLambertMaterial({color:0x908070}),
+  wallTop:new THREE.MeshLambertMaterial({color:0xb8a088}),
+  wallPrebuilt:new THREE.MeshLambertMaterial({color:0x6e5e50}),
+  wallMoss:new THREE.MeshLambertMaterial({color:0x4a6028}),
+  // Mystical slow blocks with green glow
+  slow:   new THREE.MeshLambertMaterial({color:0x1a3818,emissive:0x0e2010,emissiveIntensity:.3}),
+  slowTop:new THREE.MeshLambertMaterial({color:0x40e030,emissive:0x20a820,emissiveIntensity:.8}),
+  // Dragon: red-orange fire
+  dragon: new THREE.MeshLambertMaterial({color:0xe04020,emissive:0xa02010,emissiveIntensity:.5}),
+  dragonWing:new THREE.MeshLambertMaterial({color:0xa02010,transparent:true,opacity:.85,side:THREE.DoubleSide}),
+  // Portal: arcane blue at start, fiery red at end
+  portal:    new THREE.MeshLambertMaterial({color:0x2080ff,emissive:0x1040ff,emissiveIntensity:1.0}),
+  portalEnd: new THREE.MeshLambertMaterial({color:0xff4020,emissive:0xff2000,emissiveIntensity:1.0}),
+  pathHighlight:new THREE.MeshLambertMaterial({color:0x60e030,emissive:0x30a010,emissiveIntensity:.4,transparent:true,opacity:.5}),
+  ghost:     new THREE.MeshLambertMaterial({color:0x80b0ff,transparent:true,opacity:.35,depthWrite:false}),
+  torchLight:new THREE.MeshBasicMaterial({color:0xff8030}),
 };
 
 // ── Build ground grid ────────────────────────────────────
@@ -173,6 +249,23 @@ function addPortal(r,c,mat,label){
 }
 addPortal(0,ENTRY_COL,MAT.portal,'START');
 addPortal(ROWS-1,ENTRY_COL,MAT.portalEnd,'ZIEL');
+
+// Torches along grid edges — flickering fire
+const torches=[];
+function addTorch(x,z){
+  const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,1.2,6),new THREE.MeshLambertMaterial({color:0x4a2810}));
+  pole.position.set(x,0.6,z); pole.castShadow=true; scene.add(pole);
+  const flame=new THREE.Mesh(new THREE.SphereGeometry(0.22,8,6),MAT.torchLight);
+  flame.position.set(x,1.3,z); scene.add(flame);
+  const light=new THREE.PointLight(0xff8030,0.7,5,1.5);
+  light.position.set(x,1.3,z); scene.add(light);
+  torches.push({flame,light,baseX:x,baseZ:z,offset:Math.random()*10});
+}
+for(let i=0;i<8;i++){
+  const p=(i+0.5)/8;
+  addTorch(-0.8, p*ROWS);
+  addTorch(COLS+0.8, p*ROWS);
+}
 
 // ── Tower 3D meshes ──────────────────────────────────────
 const towerMeshes={};
@@ -370,6 +463,10 @@ function updateHUD(){
   if(GS.phase==='placing') btn.disabled=false;
 }
 
+function setStatus(msg, col){
+  const el=document.getElementById('conn-status');
+  if(el){el.textContent=msg; el.style.color=col||'#909090';}
+}
 function toast(msg){
   const t=document.getElementById('toast');
   t.textContent=msg; t.className='on';
@@ -422,39 +519,61 @@ function showResults(round,players,isLast){
 // ── Socket connection ─────────────────────────────────────
 function connect(){
   const sess=JSON.parse(sessionStorage.getItem('mp_session')||'null');
-  if(!sess)return;
+  if(!sess){setStatus('❌ Keine Session','#e04040');return;}
   myUserId=sess.userId; sessionId=sess.sessionId;
   const token=localStorage.getItem('access_token');
-  socket=io({auth:{token}});
+  setStatus('🔌 Socket verbinden…','#e0a040');
+  socket=io({auth:{token}, reconnectionAttempts:5});
+
+  socket.on('connect_error',e=>{
+    console.error('[TA3D] connect_error:',e.message);
+    setStatus('❌ Verbindung fehlgeschlagen: '+e.message,'#e04040');
+  });
+  socket.on('disconnect',reason=>{
+    console.warn('[TA3D] disconnect:',reason);
+    setStatus('⚠️ Getrennt: '+reason,'#e08040');
+  });
 
   let _started=false;
   socket.on('connect',()=>{
+    setStatus('✅ Socket verbunden','#60d060');
     const s=JSON.parse(sessionStorage.getItem('mp_session')||'null');
     if(!s) return;
     if(s.solo){
-      if(_started){if(sessionId)socket.emit('game:join',{sessionId});return;}
+      if(_started&&sessionId){
+        console.log('[TA3D] reconnect: rejoining session',sessionId);
+        socket.emit('game:join',{sessionId});
+        return;
+      }
       _started=true;
+      console.log('[TA3D] emitting solo_start',{mode:s.mode, wc_id:s.workshopConfig?.id, renderer:s.workshopConfig?.renderer});
+      setStatus('▶️ Spiel wird gestartet…','#e0a040');
       socket.emit('game:solo_start',{
         difficulty:s.difficulty||'normal',
-        race:'standard',
+        race:s.race||'standard',
         workshopConfig:s.workshopConfig,
         mode:s.mode||'time_attack',
       });
-    } else {
+    } else if(sessionId) {
       socket.emit('game:join',{sessionId});
+      setStatus('👥 MP Session','#60d060');
     }
   });
 
   socket.on('game:solo_started',({sessionId:sid,mode:m})=>{
+    console.log('[TA3D] solo_started sid=',sid,'mode=',m);
     sessionId=sid;
     const sess=JSON.parse(sessionStorage.getItem('mp_session')||'{}')||{};
     sess.sessionId=sid;
     sessionStorage.setItem('mp_session',JSON.stringify(sess));
     if(m==='td'||m==='solo'){window.location.href='/td-game.html';return;}
     if(m==='vs'){window.location.href='/vs-game.html';return;}
+    setStatus('🎮 Bereit — Platziere Blöcke','#60d060');
+    setTimeout(()=>{const el=document.getElementById('conn-status');if(el)el.style.display='none';},3000);
   });
 
   socket.on('game:ta_tick',snap=>{
+    if(!window._firstTick){window._firstTick=true;console.log('[TA3D] first tick',snap.phase,snap.cols+'x'+snap.rows,snap.myTowers?.length+' towers');}
     const prevPhase=GS.phase;
     GS=snap;
     if(snap.cols&&snap.cols!==COLS){COLS=snap.cols;}
@@ -505,7 +624,11 @@ function connect(){
     }
   });
 
-  socket.on('game:error',e=>toast('Fehler: '+(e.message||e)));
+  socket.on('game:error',e=>{
+    console.error('[TA3D] game:error',e);
+    toast('Fehler: '+(e.message||e.detail||JSON.stringify(e)));
+    setStatus('❌ '+(e.message||e.code||'Server Fehler'),'#e04040');
+  });
   socket.on('game:over',()=>{
     setTimeout(()=>{window.location.href='/';},5000);
   });
@@ -530,6 +653,13 @@ let animT=0;
 function animate(){
   requestAnimationFrame(animate);
   animT+=0.016;
+  // (torch/ember animation handled below via original torches[])
+  // Torch flicker
+  torches.forEach(t=>{
+    const flick=0.65+Math.sin(animT*15+t.offset)*0.15+Math.sin(animT*7+t.offset*2)*0.1;
+    t.light.intensity=flick;
+    t.flame.scale.setScalar(0.9+flick*0.3);
+  });
   // Wing flap animation
   if(dragonMesh){
     dragonMesh.children.forEach((c,i)=>{
