@@ -1398,12 +1398,14 @@ function endRound(gs) {
 
 function actionTaPlaceTower(gs, userId, data) {
   const { row, col } = data;
-  // Normalize TA type names: wall_tower→'wall', passive_tower→'passive'
+  // Normalize TA type names: accept wall/wall_tower/wall_block AND passive/slow_block/spike/mine/freeze/root
   let type = data.type;
-  const isWall = type === 'wall_tower' || type === 'wall';
-  const isPassive = type === 'passive_tower' || type === 'passive';
-  if (isWall) type = 'wall';
-  if (isPassive) type = 'passive';
+  const isWall = type === 'wall_tower' || type === 'wall' || type === 'wall_block';
+  const isPassive = type === 'passive_tower' || type === 'passive'
+    || type === 'slow_block' || type === 'spike_block' || type === 'mine_block'
+    || type === 'freeze_block' || type === 'root_block';
+  if (isWall) type = 'wall_block';
+  else if (isPassive) type = 'slow_block';
 
   const pm = gs.playerMaps[userId];
   const p  = gs.players[userId];
