@@ -52,7 +52,7 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
   <canvas id="threecanvas"></canvas>
   <div id="toast"></div>
   <div id="conn-status">⏳ Verbinde…</div>
-  <div id="lore-overlay" onclick="this.style.display='none'">
+  <div id="lore-overlay">
     <div style="font-size:36px;margin-bottom:16px">🏰 🐉 🏰</div>
     <h2 style="font-size:22px;color:var(--gold);margin-bottom:14px;text-align:center">Die Belagerung der Spirale</h2>
     <div style="max-width:440px;text-align:center;font-size:12px;color:#c0a070;line-height:1.6">
@@ -60,7 +60,11 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
       Errichte Mauern und Eisfallen, um ihn so lange wie möglich aufzuhalten.<br><br>
       <span style="color:#e0c090">10 Runden. Jede länger. Schnellere Zeit = höhere Punktzahl.</span>
     </div>
-    <div style="margin-top:20px;font-size:11px;color:#806050">→ Tippen um zu beginnen</div>
+    <label style="margin-top:18px;display:flex;align-items:center;gap:8px;font-size:12px;color:#c0a070;cursor:pointer;padding:8px 14px;background:rgba(40,20,60,.5);border:1px solid rgba(240,200,60,.25);border-radius:8px">
+      <input type="checkbox" id="path-toggle" checked style="accent-color:#f0c840;width:16px;height:16px">
+      Pfad-Hervorhebung anzeigen
+    </label>
+    <button onclick="startGame()" style="margin-top:18px;background:linear-gradient(180deg,rgba(60,160,20,.6),rgba(30,100,10,.5));border:2px solid #3a8020;color:#80ff40;border-radius:8px;padding:10px 24px;cursor:pointer;font-family:'Cinzel',serif;font-size:14px;font-weight:700">▶ Spiel starten</button>
   </div>
   <div id="results-overlay">
     <h2 id="res-title">Runde beendet</h2>
@@ -72,10 +76,10 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
   <div id="sel-info">Wähle Block-Typ dann auf Grid klicken</div>
   <div id="panel-top">
     <button class="cmd-btn sel" id="btn-wall" onclick="setTool('wall_block')">
-      <span class="cmd-ic">🧱</span><span class="cmd-nm">Mauer</span><span class="cmd-co">1🪵</span>
+      <span class="cmd-ic">🧱</span><span class="cmd-nm">Mauer</span><span class="cmd-co">1💰</span>
     </button>
     <button class="cmd-btn" id="btn-slow" onclick="setTool('slow_block')">
-      <span class="cmd-ic">❄️</span><span class="cmd-nm">Frost</span><span class="cmd-co">1💰</span>
+      <span class="cmd-ic">❄️</span><span class="cmd-nm">Frost</span><span class="cmd-co">1🪵</span>
     </button>
     <button class="cmd-btn" id="btn-clear" onclick="clearMyTowers()">
       <span class="cmd-ic">🗑️</span><span class="cmd-nm">Löschen</span><span class="cmd-co">Alle</span>
@@ -484,142 +488,780 @@ function clearAllTowerMeshes(){
 // ── HD Dragon ───────────────────────────────────────────
 let dragonMesh=null;
 function makeDragonMesh(){
-  const group=new THREE.Group();
-  const bodyMat=new THREE.MeshStandardMaterial({map:TEX_SCALES,roughness:0.6,metalness:0.1,bumpMap:TEX_SCALES,bumpScale:0.05});
-  const bellyMat=new THREE.MeshStandardMaterial({map:TEX_SCALES_BELLY,roughness:0.7});
-  const body=new THREE.Mesh(new THREE.SphereGeometry(0.55,24,16),bodyMat);
-  body.scale.set(1.4,0.85,1); body.castShadow=true;
-  group.add(body);
-  const belly=new THREE.Mesh(new THREE.SphereGeometry(0.52,16,12),bellyMat);
-  belly.scale.set(1.35,0.55,0.95); belly.position.y=-0.15;
-  group.add(belly);
-  // Neck
-  const neck=new THREE.Group();
-  for(let i=0;i<3;i++){
-    const seg=new THREE.Mesh(new THREE.SphereGeometry(0.28-i*0.04,16,12),bodyMat);
-    seg.scale.set(1,0.9,1);
-    seg.position.y=i*0.22; seg.position.z=i*0.18;
-    seg.castShadow=true;
-    neck.add(seg);
+  const group = new THREE.Group();
+
+  const BODY_COLOR = new THREE.Color(0x7a1810);
+  const BODY_ACCENT = new THREE.Color(0x4a0806);
+  const BELLY_COLOR = new THREE.Color(0xa8601c);
+  const BELLY_ACCENT = new THREE.Color(0x6a3010);
+
+  const bodyMat = new THREE.MeshStandardMaterial({
+    vertexColors:true, roughness:0.5, metalness:0.3
+  });
+  const plainRedMat = new THREE.MeshStandardMaterial({
+    color:0x7a1810, roughness:0.5, metalness:0.3
+  });
+  const plainRedDark = new THREE.MeshStandardMaterial({
+    color:0x5a1008, roughness:0.55, metalness:0.3
+  });
+  const hornMat = new THREE.MeshStandardMaterial({
+    color:0x1a0a04, roughness:0.35, metalness:0.55
+  });
+  const clawMat = new THREE.MeshStandardMaterial({
+    color:0x080302, roughness:0.2, metalness:0.75
+  });
+  const wingMembraneMat = new THREE.MeshStandardMaterial({
+    color:0x6a1810, side:THREE.DoubleSide,
+    roughness:0.85, metalness:0.1
+  });
+  const wingBoneMat = new THREE.MeshStandardMaterial({
+    color:0x3a0e06, roughness:0.5
+  });
+  const gumMat = new THREE.MeshStandardMaterial({color:0x3a0804, roughness:0.7});
+  const toothMat = new THREE.MeshStandardMaterial({color:0xf0e0b8, roughness:0.2});
+  const eyeMat = new THREE.MeshBasicMaterial({color:0xffd040});
+
+  // ═══ SPINE CURVE ═══
+  const spinePts = [];
+  for (let i = 0; i <= 12; i++) {
+    const t = i / 12;
+    spinePts.push(new THREE.Vector3(-1.7 + t * 1.4, 0.15, 0));
   }
-  neck.position.set(0.7,0.15,0);
-  group.add(neck);
-  // Head
-  const head=new THREE.Group();
-  const headBase=new THREE.Mesh(new THREE.SphereGeometry(0.28,20,14),bodyMat);
-  headBase.scale.set(1.2,0.9,1); headBase.castShadow=true;
-  head.add(headBase);
-  const snout=new THREE.Mesh(new THREE.ConeGeometry(0.2,0.35,10),bodyMat);
-  snout.rotation.x=Math.PI/2; snout.rotation.z=-Math.PI/2;
-  snout.position.set(0.3,-0.05,0); snout.castShadow=true;
-  head.add(snout);
-  const hornMat=new THREE.MeshStandardMaterial({color:0x1a0e06,roughness:0.4,metalness:0.3});
-  for(let i=-1;i<=1;i+=2){
-    const horn=new THREE.Mesh(new THREE.ConeGeometry(0.06,0.35,8),hornMat);
-    horn.position.set(-0.05,0.22,i*0.12);
-    horn.rotation.z=-0.4; horn.rotation.x=i*0.2;
-    horn.castShadow=true;
-    head.add(horn);
+  for (let i = 1; i <= 8; i++) {
+    const t = i / 8;
+    spinePts.push(new THREE.Vector3(-0.3 + t * 0.85, 0.2, 0));
   }
-  for(let i=-1;i<=1;i+=2){
-    const eye=new THREE.Mesh(new THREE.SphereGeometry(0.05,10,10),
-      new THREE.MeshBasicMaterial({color:0xffc040}));
-    eye.position.set(0.12,0.08,i*0.17);
-    head.add(eye);
+  for (let i = 1; i <= 14; i++) {
+    const t = i / 14;
+    spinePts.push(new THREE.Vector3(
+      0.55 + t * 1.3,
+      0.22 + t * 0.45 + Math.sin(t * Math.PI * 0.7) * 0.08, 0
+    ));
   }
-  for(let i=-1;i<=1;i+=2){
-    const tooth=new THREE.Mesh(new THREE.ConeGeometry(0.02,0.08,6),
-      new THREE.MeshStandardMaterial({color:0xeae0c0,roughness:0.4}));
-    tooth.position.set(0.42,-0.18,i*0.08);
-    tooth.rotation.x=Math.PI;
-    head.add(tooth);
+  const spineCurve = new THREE.CatmullRomCurve3(spinePts, false, 'catmullrom', 0.5);
+
+  function bodyR(t) {
+    if (t < 0.22) return 0.05 + (t / 0.22) * 0.17;
+    if (t < 0.4)  return 0.22 + ((t - 0.22) / 0.18) * 0.15;
+    if (t < 0.62) return 0.37 + Math.sin((t - 0.4) / 0.22 * Math.PI) * 0.04;
+    if (t < 0.78) return 0.37 - ((t - 0.62) / 0.16) * 0.2;
+    if (t < 0.95) return 0.17 - ((t - 0.78) / 0.17) * 0.05;
+    return 0.13;
   }
-  // Fire breath
-  const fireGroup=new THREE.Group();
-  fireGroup.userData.isFire=true;
-  const flame1=new THREE.Mesh(new THREE.ConeGeometry(0.15,0.5,10),
-    new THREE.MeshBasicMaterial({color:0xffb020,transparent:true,opacity:0.7,depthWrite:false}));
-  flame1.rotation.z=Math.PI/2; flame1.position.x=0.7;
-  fireGroup.add(flame1);
-  const flame2=new THREE.Mesh(new THREE.ConeGeometry(0.25,0.85,10),
-    new THREE.MeshBasicMaterial({color:0xff4000,transparent:true,opacity:0.5,depthWrite:false}));
-  flame2.rotation.z=Math.PI/2; flame2.position.x=0.9;
-  fireGroup.add(flame2);
-  const firePl=new THREE.PointLight(0xff8040,2,3,2);
-  firePl.position.x=0.9;
-  fireGroup.add(firePl);
-  head.add(fireGroup);
-  head.position.set(0.5,0.1,0);
-  neck.add(head);
-  // Wings
-  for(let side=-1;side<=1;side+=2){
-    const wing=new THREE.Group();
-    const membShape=new THREE.Shape();
-    membShape.moveTo(0,0);
-    membShape.quadraticCurveTo(0.8,0.3,1.4,0.1);
-    membShape.quadraticCurveTo(1.2,-0.2,0.9,-0.6);
-    membShape.quadraticCurveTo(0.5,-0.7,0,-0.3);
-    membShape.lineTo(0,0);
-    const membGeo=new THREE.ShapeGeometry(membShape);
-    const wingMat=new THREE.MeshStandardMaterial({color:0x702018,side:THREE.DoubleSide,roughness:0.8,transparent:true,opacity:0.92});
-    const memb=new THREE.Mesh(membGeo,wingMat);
-    memb.castShadow=true;
-    wing.add(memb);
-    const boneMat2=new THREE.MeshStandardMaterial({color:0x1a0e06,roughness:0.6});
-    for(let i=0;i<4;i++){
-      const bone=new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.01,0.8-i*0.1,6),boneMat2);
-      bone.rotation.z=-Math.PI/2+(i-1.5)*0.25;
-      bone.position.set(0.4+i*0.2,0-i*0.1,0);
-      wing.add(bone);
+
+  const tubeSegs = 80, radialSegs = 28;
+  const positions = [], colors = [], uvs = [], indices = [];
+  const frames = [];
+  let prevBinormal = new THREE.Vector3(0, 0, 1);
+  for (let i = 0; i <= tubeSegs; i++) {
+    const t = i / tubeSegs;
+    const pt = spineCurve.getPointAt(t);
+    const tangent = spineCurve.getTangentAt(t).normalize();
+    let binormal = prevBinormal.clone();
+    binormal.sub(tangent.clone().multiplyScalar(tangent.dot(binormal))).normalize();
+    if (binormal.lengthSq() < 0.01) {
+      binormal = new THREE.Vector3().crossVectors(tangent, new THREE.Vector3(0,1,0)).normalize();
     }
-    wing.position.set(-0.1,0.3,side*0.45);
-    wing.rotation.y=side>0?0:Math.PI;
-    wing.scale.y=Math.abs(side);
-    wing.userData.isWing=true;
-    wing.userData.side=side;
+    const normal = new THREE.Vector3().crossVectors(binormal, tangent).normalize();
+    frames.push({ pt, tangent, normal, binormal });
+    prevBinormal = binormal;
+  }
+
+  const FRONT_T = 0.58, REAR_T = 0.38;
+
+  // LARGER shoulder bulge so legs blend naturally
+  function shoulderBulge(t, angle) {
+    let bulge = 0;
+    const sideness = Math.abs(Math.cos(angle));
+    const underness = Math.max(0, -Math.sin(angle) * 0.4);
+    const frontDist = Math.abs(t - FRONT_T);
+    if (frontDist < 0.09) {
+      const falloff = Math.cos(frontDist / 0.09 * Math.PI / 2);
+      bulge += falloff * falloff * (sideness * 0.14 + underness * 0.06);
+    }
+    const rearDist = Math.abs(t - REAR_T);
+    if (rearDist < 0.09) {
+      const falloff = Math.cos(rearDist / 0.09 * Math.PI / 2);
+      bulge += falloff * falloff * (sideness * 0.14 + underness * 0.06);
+    }
+    return bulge;
+  }
+
+  for (let i = 0; i <= tubeSegs; i++) {
+    const t = i / tubeSegs;
+    const f = frames[i];
+    const r = bodyR(t);
+    for (let j = 0; j <= radialSegs; j++) {
+      const angle = (j / radialSegs) * Math.PI * 2;
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      const extraR = shoulderBulge(t, angle);
+      const rx = r + extraR;
+      const ry = r * (sin > 0 ? 0.95 : 0.88) + extraR * 0.3;
+      const pos = new THREE.Vector3(
+        f.pt.x + cos * f.binormal.x * rx + sin * f.normal.x * ry,
+        f.pt.y + cos * f.binormal.y * rx + sin * f.normal.y * ry,
+        f.pt.z + cos * f.binormal.z * rx + sin * f.normal.z * ry
+      );
+      positions.push(pos.x, pos.y, pos.z);
+      const underness = Math.max(0, -sin);
+      const bodyZone = (t > 0.22 && t < 0.82) ? 1.0 : 0.3;
+      const bellyMix = underness * 0.85 * bodyZone;
+      let c;
+      if (bellyMix > 0.1) {
+        c = new THREE.Color().lerpColors(BELLY_ACCENT, BELLY_COLOR, bellyMix);
+      } else {
+        const topness = Math.max(0, sin);
+        c = new THREE.Color().lerpColors(BODY_COLOR, BODY_ACCENT, topness * 0.25);
+      }
+      colors.push(c.r, c.g, c.b);
+      uvs.push(t * 4, j / radialSegs);
+    }
+  }
+  for (let i = 0; i < tubeSegs; i++) {
+    for (let j = 0; j < radialSegs; j++) {
+      const a = i * (radialSegs + 1) + j;
+      const b = a + radialSegs + 1;
+      indices.push(a, b, a + 1);
+      indices.push(b, b + 1, a + 1);
+    }
+  }
+  const bodyGeo = new THREE.BufferGeometry();
+  bodyGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  bodyGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  bodyGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  bodyGeo.setIndex(indices);
+  bodyGeo.computeVertexNormals();
+  const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+  bodyMesh.castShadow = true; bodyMesh.receiveShadow = true;
+  group.add(bodyMesh);
+
+  // === DORSAL SPINES ===
+  const spineCount = 20;
+  for (let i = 0; i < spineCount; i++) {
+    const t = 0.16 + (i / (spineCount - 1)) * 0.74;
+    const f = frames[Math.round(t * tubeSegs)];
+    const r = bodyR(t);
+    let h = 0.15;
+    if (t < 0.3) h = 0.06 + (t - 0.16) * 0.7;
+    else if (t < 0.6) h = 0.18 + Math.sin((t - 0.3) / 0.3 * Math.PI) * 0.12;
+    else h = 0.2 - (t - 0.6) * 0.4;
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.045, h, 8), hornMat);
+    spike.position.set(
+      f.pt.x + f.normal.x * r * 0.98,
+      f.pt.y + f.normal.y * r * 0.98,
+      f.pt.z + f.normal.z * r * 0.98
+    );
+    spike.lookAt(
+      f.pt.x + f.normal.x * (r + 1),
+      f.pt.y + f.normal.y * (r + 1),
+      f.pt.z + f.normal.z * (r + 1)
+    );
+    spike.rotateX(Math.PI / 2);
+    spike.castShadow = true;
+    group.add(spike);
+  }
+
+  // === TAIL TIP ===
+  const tailEnd = frames[0];
+  const tailTip = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.3, 10), hornMat);
+  tailTip.position.set(tailEnd.pt.x - 0.12, tailEnd.pt.y, tailEnd.pt.z);
+  tailTip.rotation.z = Math.PI / 2;
+  tailTip.castShadow = true;
+  group.add(tailTip);
+  for (let side of [-1, 1]) {
+    const fin = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.2, 4), wingMembraneMat);
+    fin.position.set(tailEnd.pt.x + 0.02, tailEnd.pt.y + 0.02, tailEnd.pt.z);
+    fin.rotation.z = Math.PI / 2;
+    fin.rotation.x = side * 0.7;
+    fin.scale.set(0.65, 1, 1);
+    group.add(fin);
+  }
+
+  // ═══ HEAD ═══
+  const headEndFrame = frames[tubeSegs];
+  const head = new THREE.Group();
+  head.position.copy(headEndFrame.pt);
+  const fwd = headEndFrame.tangent.clone().normalize();
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const hRight = new THREE.Vector3().crossVectors(fwd, worldUp).normalize();
+  const hUp = new THREE.Vector3().crossVectors(hRight, fwd).normalize();
+  const hM = new THREE.Matrix4();
+  hM.makeBasis(fwd, hUp, hRight);
+  head.quaternion.setFromRotationMatrix(hM);
+
+  const headLen = 0.6, hSegs = 18, hRad = 18;
+  const hPos = [], hCol = [], hIdx = [];
+  function headProfile(t) {
+    let width, height;
+    if (t < 0.25) {
+      const tt = t / 0.25;
+      width = 0.16 + Math.sin(tt * Math.PI * 0.7) * 0.04;
+      height = 0.14 + Math.sin(tt * Math.PI * 0.5) * 0.04;
+    } else if (t < 0.55) {
+      const tt = (t - 0.25) / 0.3;
+      width = 0.2 - tt * 0.05;
+      height = 0.18 - tt * 0.06;
+    } else {
+      const tt = (t - 0.55) / 0.45;
+      width = 0.15 - tt * 0.09;
+      height = 0.12 - tt * 0.07;
+    }
+    const yOff = -Math.pow(t, 2) * 0.04;
+    return { width, height, yOff };
+  }
+  for (let i = 0; i <= hSegs; i++) {
+    const t = i / hSegs;
+    const { width, height, yOff } = headProfile(t);
+    const xPos = t * headLen;
+    for (let j = 0; j <= hRad; j++) {
+      const angle = (j / hRad) * Math.PI * 2;
+      const y = yOff + Math.sin(angle) * height;
+      const z = Math.cos(angle) * width;
+      hPos.push(xPos, y, z);
+      const under = Math.max(0, -Math.sin(angle));
+      const c = new THREE.Color().lerpColors(BODY_COLOR, BELLY_COLOR, under * 0.4);
+      hCol.push(c.r, c.g, c.b);
+    }
+  }
+  for (let i = 0; i < hSegs; i++) {
+    for (let j = 0; j < hRad; j++) {
+      const a = i * (hRad + 1) + j;
+      const b = a + hRad + 1;
+      hIdx.push(a, b, a + 1); hIdx.push(b, b + 1, a + 1);
+    }
+  }
+  const skullGeo = new THREE.BufferGeometry();
+  skullGeo.setAttribute('position', new THREE.Float32BufferAttribute(hPos, 3));
+  skullGeo.setAttribute('color', new THREE.Float32BufferAttribute(hCol, 3));
+  skullGeo.setIndex(hIdx);
+  skullGeo.computeVertexNormals();
+  const skull = new THREE.Mesh(skullGeo, bodyMat);
+  skull.castShadow = true;
+  head.add(skull);
+
+  // Jaw
+  const jawPivot = new THREE.Group();
+  jawPivot.userData.isJaw = true;
+  jawPivot.position.set(0.13, -0.08, 0);
+  const jPos = [], jIdx = [];
+  const jLen = 0.45, jSegs = 10, jRad = 12;
+  function jawProfile(t) {
+    let width, height;
+    if (t < 0.2) { width = 0.15; height = 0.035; }
+    else if (t < 0.7) {
+      const tt = (t - 0.2) / 0.5;
+      width = 0.15 - tt * 0.06;
+      height = 0.045 + Math.sin(tt * Math.PI) * 0.018;
+    } else {
+      const tt = (t - 0.7) / 0.3;
+      width = 0.09 - tt * 0.06;
+      height = 0.035 - tt * 0.018;
+    }
+    return { width, height };
+  }
+  for (let i = 0; i <= jSegs; i++) {
+    const t = i / jSegs;
+    const { width, height } = jawProfile(t);
+    const xPos = t * jLen;
+    for (let j = 0; j <= jRad; j++) {
+      const angle = (j / jRad) * Math.PI * 2;
+      const y = Math.sin(angle) * height - height * 0.4;
+      const z = Math.cos(angle) * width;
+      jPos.push(xPos, y, z);
+    }
+  }
+  for (let i = 0; i < jSegs; i++) {
+    for (let j = 0; j < jRad; j++) {
+      const a = i * (jRad + 1) + j;
+      const b = a + jRad + 1;
+      jIdx.push(a, b, a + 1); jIdx.push(b, b + 1, a + 1);
+    }
+  }
+  const jawGeo = new THREE.BufferGeometry();
+  jawGeo.setAttribute('position', new THREE.Float32BufferAttribute(jPos, 3));
+  jawGeo.setIndex(jIdx);
+  jawGeo.computeVertexNormals();
+  const jaw = new THREE.Mesh(jawGeo, plainRedMat);
+  jaw.castShadow = true;
+  jawPivot.add(jaw);
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.025, 0.24), gumMat);
+  mouth.position.set(0.18, 0.014, 0);
+  jawPivot.add(mouth);
+  const tongue = new THREE.Mesh(
+    new THREE.BoxGeometry(0.26, 0.018, 0.09),
+    new THREE.MeshStandardMaterial({color:0x9a1818, roughness:0.4})
+  );
+  tongue.position.set(0.18, 0.022, 0);
+  jawPivot.add(tongue);
+  for (let side of [-1, 1]) {
+    for (let i = 0; i < 5; i++) {
+      const len = i < 2 ? 0.08 : i < 4 ? 0.055 : 0.04;
+      const rad = i < 2 ? 0.016 : 0.012;
+      const tooth = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 8), toothMat);
+      tooth.position.set(0.05 + i * 0.068, 0.025, side * (0.085 - i * 0.006));
+      jawPivot.add(tooth);
+    }
+  }
+  head.add(jawPivot);
+  for (let side of [-1, 1]) {
+    for (let i = 0; i < 5; i++) {
+      const len = i < 2 ? 0.085 : i < 4 ? 0.06 : 0.04;
+      const rad = i < 2 ? 0.017 : 0.012;
+      const tooth = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 8), toothMat);
+      const { width, height } = headProfile(0.38 + i * 0.07);
+      tooth.position.set(0.22 + i * 0.068, -height * 0.88 - 0.003, side * (width - 0.017));
+      tooth.rotation.x = Math.PI;
+      head.add(tooth);
+    }
+  }
+  // Nostrils
+  for (let side of [-1, 1]) {
+    const bump = new THREE.Mesh(new THREE.SphereGeometry(0.025, 10, 8), plainRedMat);
+    bump.position.set(0.54, -0.02, side * 0.035);
+    head.add(bump);
+    const hole = new THREE.Mesh(
+      new THREE.SphereGeometry(0.012, 8, 8),
+      new THREE.MeshBasicMaterial({color:0x000000})
+    );
+    hole.position.set(0.555, -0.02, side * 0.035);
+    head.add(hole);
+  }
+  // Brow
+  const brow = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.035, 0.26), hornMat);
+  brow.position.set(0.09, 0.15, 0); brow.rotation.z = -0.15;
+  head.add(brow);
+  // Horns
+  for (let side of [-1, 1]) {
+    const horn = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.005, 0.048, 0.48, 14), hornMat
+    );
+    horn.position.set(0.02, 0.19, side * 0.1);
+    horn.rotation.z = Math.PI * 0.78;
+    horn.rotation.x = side * 0.3;
+    horn.castShadow = true;
+    head.add(horn);
+    const h2 = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.005, 0.03, 0.22, 10), hornMat
+    );
+    h2.position.set(0.045, 0.17, side * 0.16);
+    h2.rotation.z = Math.PI * 0.83;
+    h2.rotation.x = side * 0.55;
+    head.add(h2);
+    const h3 = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.1, 8), hornMat);
+    h3.position.set(-0.02, 0.13, side * 0.17);
+    h3.rotation.z = Math.PI * 0.85;
+    h3.rotation.x = side * 0.7;
+    head.add(h3);
+  }
+  // Cheek spikes
+  for (let side of [-1, 1]) {
+    for (let i = 0; i < 3; i++) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.07, 7), hornMat);
+      const xp = 0.09 + i * 0.07;
+      const { width } = headProfile(0.35 + i * 0.1);
+      spike.position.set(xp, -0.035 - i * 0.008, side * width);
+      spike.rotation.z = Math.PI / 2 - 0.3;
+      spike.rotation.x = side * 0.45;
+      head.add(spike);
+    }
+  }
+  // Eyes
+  for (let side of [-1, 1]) {
+    const socket = new THREE.Mesh(new THREE.SphereGeometry(0.06, 14, 12), plainRedMat);
+    socket.position.set(0.11, 0.08, side * 0.15);
+    head.add(socket);
+    const inner = new THREE.Mesh(
+      new THREE.SphereGeometry(0.048, 12, 10),
+      new THREE.MeshStandardMaterial({color:0x200400, roughness:0.8})
+    );
+    inner.position.set(0.13, 0.08, side * 0.15);
+    head.add(inner);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 16, 14), eyeMat);
+    eye.position.set(0.15, 0.08, side * 0.15);
+    head.add(eye);
+    const iris = new THREE.Mesh(
+      new THREE.RingGeometry(0.016, 0.028, 24),
+      new THREE.MeshBasicMaterial({color:0xff7010, side:THREE.DoubleSide})
+    );
+    iris.position.set(0.19, 0.08, side * 0.15);
+    iris.rotation.y = side * Math.PI / 2;
+    head.add(iris);
+    const pupil = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.009, 0.042),
+      new THREE.MeshBasicMaterial({color:0x000000})
+    );
+    pupil.position.set(0.193, 0.08, side * 0.15);
+    pupil.rotation.y = side * Math.PI / 2;
+    head.add(pupil);
+    const hl = new THREE.Mesh(
+      new THREE.CircleGeometry(0.006, 8),
+      new THREE.MeshBasicMaterial({color:0xffffff})
+    );
+    hl.position.set(0.196, 0.09, side * 0.155);
+    hl.rotation.y = side * Math.PI / 2;
+    head.add(hl);
+    const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.03, 0.05), hornMat);
+    ridge.position.set(0.11, 0.13, side * 0.15);
+    ridge.rotation.z = -0.25;
+    head.add(ridge);
+  }
+  // Fire
+  const fireGroup = new THREE.Group();
+  fireGroup.userData.isFire = true;
+  const flame1 = new THREE.Mesh(
+    new THREE.ConeGeometry(0.07, 0.25, 12),
+    new THREE.MeshBasicMaterial({color:0xffffa0, transparent:true, opacity:0.85, depthWrite:false})
+  );
+  flame1.rotation.z = -Math.PI / 2; flame1.position.x = 0.75;
+  fireGroup.add(flame1);
+  const flame2 = new THREE.Mesh(
+    new THREE.ConeGeometry(0.13, 0.45, 14),
+    new THREE.MeshBasicMaterial({color:0xffa040, transparent:true, opacity:0.7, depthWrite:false})
+  );
+  flame2.rotation.z = -Math.PI / 2; flame2.position.x = 0.9;
+  fireGroup.add(flame2);
+  const flame3 = new THREE.Mesh(
+    new THREE.ConeGeometry(0.24, 0.8, 16),
+    new THREE.MeshBasicMaterial({color:0xff4010, transparent:true, opacity:0.4, depthWrite:false})
+  );
+  flame3.rotation.z = -Math.PI / 2; flame3.position.x = 1.1;
+  fireGroup.add(flame3);
+  fireGroup.add(new THREE.PointLight(0xff6020, 2.5, 4, 2));
+  head.add(fireGroup);
+  group.add(head);
+
+  // ═══════════════════════════════════════════════════════════
+  // WINGS — everything on SAME Y=0 plane. Bones slightly below
+  // membrane to sit inside it (y=-0.005 vs membrane y=0.005).
+  // ═══════════════════════════════════════════════════════════
+  const shoulderT = FRONT_T;
+  const shoulderFrame = frames[Math.round(shoulderT * tubeSegs)];
+  const shoulderR = bodyR(shoulderT) + shoulderBulge(shoulderT, 0);
+
+  for (let side of [-1, 1]) {
+    const wing = new THREE.Group();
+    wing.userData.isWing = true;
+    wing.userData.side = side;
+    // Anchor near top-side of shoulder, INSIDE the bulge so it seamlessly grows out
+    wing.position.set(
+      shoulderFrame.pt.x - 0.05,
+      shoulderFrame.pt.y + shoulderR * 0.5,
+      side * shoulderR * 0.55
+    );
+
+    // Shoulder ball (large, bridges body and wing)
+    const shoulderBall = new THREE.Mesh(
+      new THREE.SphereGeometry(0.13, 16, 12), plainRedDark
+    );
+    shoulderBall.castShadow = true;
+    wing.add(shoulderBall);
+
+    // Constants: bones on y=-0.01 plane, membrane on y=0 plane
+    const BONE_Y = -0.01;
+    const MEMB_Y = 0;
+
+    // Humerus (upper arm bone) — horizontal, extending outward
+    const humerusLen = 0.5;
+    const humerus = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.035, humerusLen, 14), wingBoneMat
+    );
+    humerus.position.set(-0.05, BONE_Y, side * (humerusLen / 2));
+    humerus.rotation.x = -side * Math.PI / 2;
+    humerus.castShadow = true;
+    wing.add(humerus);
+    const elbow = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055, 12, 10), wingBoneMat
+    );
+    elbow.position.set(-0.1, BONE_Y, side * humerusLen);
+    wing.add(elbow);
+
+    // Forearm
+    const forearmLen = 0.55;
+    const forearm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.038, 0.024, forearmLen, 12), wingBoneMat
+    );
+    forearm.position.set(-0.2, BONE_Y, side * (humerusLen + forearmLen / 2));
+    forearm.rotation.x = -side * Math.PI / 2;
+    forearm.rotation.z = side * 0.2;
+    forearm.castShadow = true;
+    wing.add(forearm);
+    const wristX = -0.3, wristZ = humerusLen + forearmLen;
+    const wrist = new THREE.Mesh(
+      new THREE.SphereGeometry(0.04, 12, 10), wingBoneMat
+    );
+    wrist.position.set(wristX, BONE_Y, side * wristZ);
+    wing.add(wrist);
+
+    // Fingers spread in XZ plane from wrist
+    const fingers = [
+      { dx: 0.4,  dz: 0.2  },  // thumb
+      { dx: 0.1,  dz: 0.75 },  // index
+      { dx: -0.15, dz: 0.95 }, // middle (longest)
+      { dx: -0.45, dz: 0.85 }, // ring
+      { dx: -0.7,  dz: 0.5  }, // pinky
+    ];
+    const fingerTips = [];
+    fingers.forEach((f, i) => {
+      const fx = f.dx, fz = f.dz * side;
+      const fLen = Math.hypot(fx, fz);
+      const dirAngle = Math.atan2(fz, fx);
+      const phalanxLen = fLen * 0.55;
+      const phalanx1 = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.023, 0.016, phalanxLen, 10), wingBoneMat
+      );
+      phalanx1.position.set(
+        wristX + Math.cos(dirAngle) * phalanxLen / 2,
+        BONE_Y,
+        side * wristZ + Math.sin(dirAngle) * phalanxLen / 2
+      );
+      phalanx1.rotation.z = Math.PI / 2 - dirAngle;
+      phalanx1.castShadow = true;
+      wing.add(phalanx1);
+      const knuckle = new THREE.Mesh(
+        new THREE.SphereGeometry(0.02, 10, 8), wingBoneMat
+      );
+      knuckle.position.set(
+        wristX + Math.cos(dirAngle) * phalanxLen,
+        BONE_Y,
+        side * wristZ + Math.sin(dirAngle) * phalanxLen
+      );
+      wing.add(knuckle);
+      const phalanx2Len = fLen * 0.45;
+      const phalanx2 = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.016, 0.007, phalanx2Len, 10), wingBoneMat
+      );
+      const tipX = wristX + Math.cos(dirAngle) * (phalanxLen + phalanx2Len);
+      const tipZ = side * wristZ + Math.sin(dirAngle) * (phalanxLen + phalanx2Len);
+      phalanx2.position.set(
+        wristX + Math.cos(dirAngle) * (phalanxLen + phalanx2Len / 2),
+        BONE_Y,
+        side * wristZ + Math.sin(dirAngle) * (phalanxLen + phalanx2Len / 2)
+      );
+      phalanx2.rotation.z = Math.PI / 2 - dirAngle;
+      phalanx2.castShadow = true;
+      wing.add(phalanx2);
+      // Thumb claw
+      if (i === 0) {
+        const claw = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.07, 8), clawMat);
+        claw.position.set(tipX + 0.025, BONE_Y, tipZ + 0.025 * side);
+        claw.rotation.z = Math.PI / 2 - dirAngle;
+        wing.add(claw);
+      }
+      fingerTips.push({ x: tipX, z: tipZ });
+    });
+
+    // Membrane — same XZ plane as bones, slight offset in Y for no z-fight
+    const mv = [], mi = [];
+    mv.push(0, MEMB_Y, 0);                           // 0: shoulder
+    mv.push(-0.1, MEMB_Y, side * humerusLen);        // 1: elbow
+    mv.push(wristX, MEMB_Y, side * wristZ);          // 2: wrist
+    fingerTips.forEach(ft => mv.push(ft.x, MEMB_Y, ft.z)); // 3-7
+    for (let i = 0; i < fingerTips.length - 1; i++) {
+      const a = fingerTips[i], b = fingerTips[i + 1];
+      const midX = (a.x + b.x) / 2, midZ = (a.z + b.z) / 2;
+      const dirLen = Math.hypot(midX, midZ);
+      const sagFactor = 1.05;
+      mv.push(midX / dirLen * dirLen * sagFactor, MEMB_Y - 0.04, midZ / dirLen * dirLen * sagFactor);
+    }
+    mv.push(-0.75, MEMB_Y, side * 0.12);            // 12: body attach
+
+    const fO = 3, mO = 8, bA = 12;
+    // Leading edge panels
+    mi.push(0, 1, fO + 0);
+    mi.push(1, 2, fO + 0);
+    // Radial panels from wrist to finger tips with sag points
+    for (let i = 0; i < fingerTips.length - 1; i++) {
+      const tA = fO + i, tB = fO + i + 1, sg = mO + i;
+      mi.push(2, tA, sg);
+      mi.push(2, sg, tB);
+    }
+    // Trailing edge back to body
+    const lastF = fO + fingerTips.length - 1;
+    mi.push(2, lastF, bA);
+    mi.push(0, 2, bA);
+
+    if (side === -1) {
+      for (let i = 0; i < mi.length; i += 3) {
+        [mi[i+1], mi[i+2]] = [mi[i+2], mi[i+1]];
+      }
+    }
+    const mGeo = new THREE.BufferGeometry();
+    mGeo.setAttribute('position', new THREE.Float32BufferAttribute(mv, 3));
+    mGeo.setIndex(mi);
+    mGeo.computeVertexNormals();
+    const membrane = new THREE.Mesh(mGeo, wingMembraneMat);
+    membrane.castShadow = true;
+    wing.add(membrane);
     group.add(wing);
   }
-  // Tail
-  const tail=new THREE.Group();
-  let prev=tail;
-  for(let i=0;i<5;i++){
-    const seg=new THREE.Mesh(new THREE.SphereGeometry(0.2-i*0.03,12,10),bodyMat);
-    seg.castShadow=true;
-    seg.position.x=-0.25;
-    prev.add(seg);
-    prev=seg;
-  }
-  const tailTip=new THREE.Mesh(new THREE.ConeGeometry(0.08,0.25,8),bodyMat);
-  tailTip.rotation.z=Math.PI/2; tailTip.position.x=-0.2;
-  prev.add(tailTip);
-  tail.position.set(-0.7,-0.05,0);
-  tail.userData.isTail=true;
-  group.add(tail);
-  // Legs
-  for(let fx=-0.4;fx<=0.4;fx+=0.8){
-    for(let fz=-1;fz<=1;fz+=2){
-      const leg=new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.08,0.4,8),bodyMat);
-      leg.position.set(fx,-0.35,fz*0.35); leg.castShadow=true;
-      group.add(leg);
-      const foot=new THREE.Mesh(new THREE.BoxGeometry(0.22,0.1,0.22),bodyMat);
-      foot.position.set(fx,-0.55,fz*0.35);
-      group.add(foot);
+
+  // ═══════════════════════════════════════════════════════════
+  // LEGS — DEEPER INTEGRATION into body
+  // ═══════════════════════════════════════════════════════════
+  const legAttachments = [
+    { t: FRONT_T, side: 1, front: true },
+    { t: FRONT_T, side: -1, front: true },
+    { t: REAR_T, side: 1, front: false },
+    { t: REAR_T, side: -1, front: false },
+  ];
+  legAttachments.forEach(la => {
+    const f = frames[Math.round(la.t * tubeSegs)];
+    const r = bodyR(la.t);
+    const legGroup = new THREE.Group();
+    // Push leg INTO body — position Z at only r*0.55 (was 0.85)
+    legGroup.position.set(
+      f.pt.x,
+      f.pt.y - r * 0.25,
+      la.side * (r * 0.55)
+    );
+    // HIP — enlarged, stretched to bridge body gap
+    const hipMerge = new THREE.Mesh(
+      new THREE.SphereGeometry(0.24, 22, 16), plainRedMat
+    );
+    hipMerge.scale.set(0.9, 1.0, 0.95);
+    hipMerge.castShadow = true;
+    legGroup.add(hipMerge);
+    // Thigh
+    const thighProfile = [];
+    for (let i = 0; i <= 20; i++) {
+      const ty = i / 20;
+      let rad;
+      if (ty < 0.15) {
+        rad = 0.05 + ty / 0.15 * 0.08;
+      } else if (ty < 0.5) {
+        const bt = (ty - 0.15) / 0.35;
+        rad = 0.13 + Math.sin(bt * Math.PI) * 0.035;
+      } else {
+        const bt = (ty - 0.5) / 0.5;
+        rad = 0.13 - bt * 0.04;
+      }
+      thighProfile.push(new THREE.Vector2(Math.max(0.01, rad), ty * 0.5));
     }
-  }
+    const thighGeo = new THREE.LatheGeometry(thighProfile, 22);
+    const thigh = new THREE.Mesh(thighGeo, plainRedMat);
+    const thighAngle = la.side * 0.1;
+    thigh.position.set(Math.sin(thighAngle) * 0.12, -0.2, 0);
+    thigh.rotation.z = Math.PI + thighAngle;
+    thigh.castShadow = true;
+    legGroup.add(thigh);
+    const kneeX = Math.sin(thighAngle) * 0.28;
+    const kneeY = -0.48;
+    const knee = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 16, 12), plainRedMat
+    );
+    knee.position.set(kneeX, kneeY, 0);
+    legGroup.add(knee);
+    // Shin
+    const shinProfile = [];
+    for (let i = 0; i <= 18; i++) {
+      const ty = i / 18;
+      let rad;
+      if (ty < 0.2) rad = 0.075 + ty / 0.2 * 0.02;
+      else if (ty < 0.6) {
+        const bt = (ty - 0.2) / 0.4;
+        rad = 0.095 + Math.sin(bt * Math.PI) * 0.012;
+      } else {
+        const bt = (ty - 0.6) / 0.4;
+        rad = 0.095 - bt * 0.05;
+      }
+      shinProfile.push(new THREE.Vector2(Math.max(0.01, rad), ty * 0.4));
+    }
+    const shinGeo = new THREE.LatheGeometry(shinProfile, 20);
+    const shin = new THREE.Mesh(shinGeo, plainRedMat);
+    const shinFwd = la.front ? 0.14 : -0.06;
+    shin.position.set(kneeX + shinFwd / 2, kneeY - 0.2, 0);
+    shin.rotation.z = Math.PI + (la.front ? -0.32 : 0.18);
+    shin.castShadow = true;
+    legGroup.add(shin);
+    const ankleX = kneeX + shinFwd;
+    const ankleY = kneeY - 0.4;
+    const ankle = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, 14, 10), plainRedMat
+    );
+    ankle.position.set(ankleX, ankleY, 0);
+    legGroup.add(ankle);
+    // Foot
+    const heelPad = new THREE.Mesh(
+      new THREE.SphereGeometry(0.075, 16, 12), plainRedMat
+    );
+    heelPad.scale.set(1.4, 0.5, 1.2);
+    heelPad.position.set(ankleX + 0.06, ankleY - 0.04, 0);
+    heelPad.castShadow = true;
+    legGroup.add(heelPad);
+    const toeAngles = [-0.32, 0, 0.32];
+    toeAngles.forEach(ta => {
+      const baseX = ankleX + 0.09;
+      const baseY = ankleY - 0.05;
+      const baseZ = Math.sin(ta) * 0.1;
+      const toe1Prof = [];
+      for (let i = 0; i <= 12; i++) {
+        const ty = i / 12;
+        toe1Prof.push(new THREE.Vector2(Math.max(0.005, 0.032 * (1 - ty * 0.25)), ty * 0.09));
+      }
+      const toe1Geo = new THREE.LatheGeometry(toe1Prof, 14);
+      const toe1 = new THREE.Mesh(toe1Geo, plainRedMat);
+      toe1.position.set(baseX + Math.cos(ta) * 0.045, baseY, baseZ + Math.sin(ta) * 0.045);
+      toe1.rotation.z = Math.PI / 2;
+      toe1.rotation.y = -ta;
+      toe1.castShadow = true;
+      legGroup.add(toe1);
+      const joint = new THREE.Mesh(
+        new THREE.SphereGeometry(0.028, 12, 10), plainRedMat
+      );
+      joint.position.set(
+        baseX + Math.cos(ta) * 0.09, baseY, baseZ + Math.sin(ta) * 0.09
+      );
+      legGroup.add(joint);
+      const toe2Prof = [];
+      for (let i = 0; i <= 10; i++) {
+        const ty = i / 10;
+        toe2Prof.push(new THREE.Vector2(Math.max(0.005, 0.023 * (1 - ty * 0.3)), ty * 0.055));
+      }
+      const toe2Geo = new THREE.LatheGeometry(toe2Prof, 12);
+      const toe2 = new THREE.Mesh(toe2Geo, plainRedMat);
+      toe2.position.set(
+        baseX + Math.cos(ta) * 0.12, baseY - 0.013, baseZ + Math.sin(ta) * 0.12
+      );
+      toe2.rotation.z = Math.PI / 2 - 0.3;
+      toe2.rotation.y = -ta;
+      toe2.castShadow = true;
+      legGroup.add(toe2);
+      const claw = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.08, 10), clawMat);
+      claw.position.set(
+        baseX + Math.cos(ta) * 0.17,
+        baseY - 0.045,
+        baseZ + Math.sin(ta) * 0.17
+      );
+      claw.rotation.z = -Math.PI / 2 + 0.5;
+      claw.rotation.y = -ta;
+      claw.castShadow = true;
+      legGroup.add(claw);
+    });
+    const dewclaw = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.055, 8), clawMat);
+    dewclaw.position.set(ankleX - 0.08, ankleY - 0.045, 0);
+    dewclaw.rotation.z = Math.PI / 2 + 0.4;
+    legGroup.add(dewclaw);
+    group.add(legGroup);
+  });
+
   // HP Bar
-  const hpCanvas=document.createElement('canvas');
-  hpCanvas.width=200; hpCanvas.height=24;
-  const hpCtx=hpCanvas.getContext('2d');
-  const hpTex=new THREE.CanvasTexture(hpCanvas);
-  const hpMesh=new THREE.Mesh(
-    new THREE.PlaneGeometry(1.5,0.18),
-    new THREE.MeshBasicMaterial({map:hpTex,transparent:true,depthTest:false}));
-  hpMesh.position.set(0,1.6,0);
-  hpMesh.renderOrder=999;
-  hpMesh.userData.isHPBar=true;
-  hpMesh.userData.hpCtx=hpCtx;
-  hpMesh.userData.hpTex=hpTex;
+  const hpCanvas = document.createElement('canvas');
+  hpCanvas.width = 200; hpCanvas.height = 24;
+  const hpCtx = hpCanvas.getContext('2d');
+  const hpTex = new THREE.CanvasTexture(hpCanvas);
+  const hpMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.8, 0.2),
+    new THREE.MeshBasicMaterial({map:hpTex, transparent:true, depthTest:false})
+  );
+  hpMesh.position.set(0, 1.5, 0);
+  hpMesh.renderOrder = 999;
+  hpMesh.userData.isHPBar = true;
+  hpMesh.userData.hpCtx = hpCtx;
+  hpMesh.userData.hpTex = hpTex;
   group.add(hpMesh);
+
+  // Scale whole dragon to fit tile world (target: ~3 tiles long)
+  group.scale.set(1.2, 1.2, 1.2);
   return group;
 }
 
@@ -649,12 +1291,13 @@ function removeDragon(){
   if(dragonMesh){scene.remove(dragonMesh);dragonMesh=null;}
 }
 
-// Path visualization
+// Path visualization — toggleable
+let showPathHighlight = true;
 const pathTiles=[];
 function showPath(path){
   pathTiles.forEach(m=>scene.remove(m));
   pathTiles.length=0;
-  if(!path||!path.length) return;
+  if(!path||!path.length||!showPathHighlight) return;
   const geo=new THREE.BoxGeometry(TILE*0.3,0.02,TILE*0.3);
   for(let i=1;i<path.length-1;i++){
     const [r,c]=path[i];
@@ -662,6 +1305,13 @@ function showPath(path){
     m.position.set(c*TILE+TILE/2,0.07,r*TILE+TILE/2);
     scene.add(m); pathTiles.push(m);
   }
+}
+function startGame(){
+  const tgl = document.getElementById('path-toggle');
+  showPathHighlight = tgl ? tgl.checked : true;
+  document.getElementById('lore-overlay').style.display='none';
+  // Re-render existing path with new visibility
+  if(GS.myPath) showPath(GS.myPath);
 }
 
 let ghostMesh=null;
@@ -961,12 +1611,14 @@ function animate(){
     });
   });
   if(dragonMesh){
+    // Wings: flap around X-axis since they spread horizontally (XZ plane)
     dragonMesh.children.forEach(c=>{
       if(c.userData?.isWing){
-        c.rotation.x=Math.sin(animT*6)*0.4*(c.userData.side===1?1:-1);
+        const flap = Math.sin(animT*4) * 0.3;
+        c.rotation.x = flap * (c.userData.side===1 ? 1 : -1);
       }
-      if(c.userData?.isTail){
-        c.rotation.y=Math.sin(animT*1.2)*0.3;
+      if(c.userData?.isJaw){
+        c.rotation.z = Math.sin(animT*3) * 0.05;
       }
       if(c.userData?.isHPBar){
         c.lookAt(cam.position);

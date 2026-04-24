@@ -1203,29 +1203,83 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
 
   // TA-specific BFS pathfinder using the actual TA grid size
   function findTaPath(towers) {
-    const blocked = new Set(towers.flatMap(t => [
+    // Only WALL towers block. Slow towers are traversable.
+    const wallTowers = towers.filter(t => {
+      const ty = t.type || 'wall_block';
+      return ty === 'wall_block' || ty === 'wall' || ty === 'wall_tower';
+    });
+    const blocked = new Set(wallTowers.flatMap(t => [
       `${t.row},${t.col}`, `${t.row},${t.col+1}`,
       `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
     ]));
-    const queue = [[0, taEntryCol]];
-    const par   = new Map([[`0,${taEntryCol}`, null]]);
-    const dirs  = [[1,0],[0,1],[0,-1],[-1,0]];
-    while (queue.length) {
-      const [r, c] = queue.shift();
-      if (r === rows - 1) {
-        const path = []; let k = `${r},${c}`;
-        while (k !== null) {
-          const [pr, pc] = k.split(',').map(Number);
-          path.unshift([pr, pc]); k = par.get(k);
+    // Dijkstra with 8 directions for natural diagonal paths.
+    // Cardinal step cost = 10, diagonal = 14 (~sqrt(2)*10).
+    const dirs = [
+      [-1,-1,14],[-1,0,10],[-1,1,14],
+      [0,-1,10],         [0,1,10],
+      [1,-1,14], [1,0,10],[1,1,14],
+    ];
+    const dist = new Map();
+    const par  = new Map();
+    const startK = `0,${taEntryCol}`;
+    dist.set(startK, 0); par.set(startK, null);
+    // Simple priority queue by distance (binary heap impl):
+    const heap = [[0, 0, taEntryCol]];
+    function hpush(item){
+      heap.push(item);
+      let i = heap.length - 1;
+      while(i > 0){
+        const p = (i-1) >> 1;
+        if(heap[p][0] <= heap[i][0]) break;
+        [heap[p], heap[i]] = [heap[i], heap[p]];
+        i = p;
+      }
+    }
+    function hpop(){
+      const top = heap[0];
+      const last = heap.pop();
+      if(heap.length){
+        heap[0] = last;
+        let i = 0;
+        while(true){
+          const l = i*2+1, r = i*2+2; let s = i;
+          if(l < heap.length && heap[l][0] < heap[s][0]) s = l;
+          if(r < heap.length && heap[r][0] < heap[s][0]) s = r;
+          if(s === i) break;
+          [heap[s], heap[i]] = [heap[i], heap[s]];
+          i = s;
+        }
+      }
+      return top;
+    }
+    while(heap.length){
+      const [d, r, c] = hpop();
+      const k = `${r},${c}`;
+      if(d > (dist.get(k) ?? Infinity)) continue;
+      if(r === rows - 1){
+        const path = []; let kk = k;
+        while(kk !== null){
+          const [pr, pc] = kk.split(',').map(Number);
+          path.unshift([pr, pc]); kk = par.get(kk);
         }
         return path;
       }
-      for (const [dr, dc] of dirs) {
+      for(const [dr, dc, cost] of dirs){
         const nr = r+dr, nc = c+dc;
-        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        const k = `${nr},${nc}`;
-        if (blocked.has(k) || par.has(k)) continue;
-        par.set(k, `${r},${c}`); queue.push([nr, nc]);
+        if(nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const nk = `${nr},${nc}`;
+        if(blocked.has(nk)) continue;
+        // For diagonal: require that at least one of the adjacent cardinal cells is free
+        // (prevents squeezing through 1x1 gaps between 2 walls that touch only corner).
+        if(dr !== 0 && dc !== 0){
+          if(blocked.has(`${r+dr},${c}`) && blocked.has(`${r},${c+dc}`)) continue;
+        }
+        const nd = d + cost;
+        if(nd < (dist.get(nk) ?? Infinity)){
+          dist.set(nk, nd);
+          par.set(nk, k);
+          hpush([nd, nr, nc]);
+        }
       }
     }
     return null;
@@ -1346,6 +1400,23 @@ function tickTimeAttack(gs) {
     const tx = tc*TILE+TILE/2, ty = tr*TILE+TILE/2;
     const dx = tx-m.px, dy = ty-m.py;
     const dist = Math.hypot(dx,dy);
+    // Check if minion is inside or adjacent to any slow tower (2x2 footprint)
+    const SLOW_FACTOR = 0.45;  // 55% speed reduction
+    let inSlow = false;
+    // Current grid pos of minion
+    const mcol = Math.floor(m.px / TILE);
+    const mrow = Math.floor(m.py / TILE);
+    for (const t of pm.towers) {
+      if (t.type === 'slow_block' || t.type === 'passive' || t.type === 'passive_tower') {
+        // 2x2 footprint covers [row..row+1] × [col..col+1]
+        // Check minion in the 4x4 area around the footprint (1-cell aura)
+        if (mrow >= t.row-1 && mrow <= t.row+2 && mcol >= t.col-1 && mcol <= t.col+2) {
+          inSlow = true; break;
+        }
+      }
+    }
+    m.slowFactor = inSlow ? SLOW_FACTOR : 1;
+    m.spd = (m.baseSpd || 3.5) * m.slowFactor;
     const step = m.spd * TILE * dt;
     if (step >= dist) {
       m.px=tx; m.py=ty; m.pathIdx++;
@@ -1378,7 +1449,8 @@ function startRacing(gs) {
     pm.minion = {
       id:`minion_${uid}`, owner:uid,
       px: _taEntry*TILE+TILE/2, py: TILE/2,
-      pathIdx: 1, spd: 1.8, hp: 100, maxHp: 100,
+      pathIdx: 1, baseSpd: 3.5, spd: 3.5, hp: 100, maxHp: 100,
+      slowedUntil: 0, slowFactor: 1,
       reached:false, escaped:false, time:null,
     };
   }
@@ -1422,7 +1494,7 @@ function actionTaPlaceTower(gs, userId, data) {
   // TA uses virtual types 'wall' and 'passive' — no TDB entry needed
   if (!isWall && !isPassive) return { ok:false, err:'unknown_type' };
 
-  const cost = isWall ? { gold:0, wood:1 } : { gold:1, wood:0 };
+  const cost = isWall ? { gold:1, wood:0 } : { gold:0, wood:1 };
   if ((p.gold||0) < cost.gold || (p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
   // TA boundary check uses actual TA grid dimensions (not global ROWS/COLS)
   const taCols = gs.cols || 15, taRows = gs.rows || 20;
@@ -1432,12 +1504,32 @@ function actionTaPlaceTower(gs, userId, data) {
   for (const [rr,cc] of footprint) {
     if ((rr === 0 || rr === taRows-1) && cc === taEntry) return { ok:false, err:'blocked' };
   }
-  // Check collision with existing towers
+  // Check collision with existing towers + slow tower aura (2-tile radius)
   for (const t of pm.towers) {
+    const isSlow = t.type === 'slow_block' || t.type === 'passive' || t.type === 'passive_tower';
+    const isNewSlow = isPassive;
+    // Direct footprint collision (always)
     const tr = [[t.row,t.col],[t.row,t.col+1],[t.row+1,t.col],[t.row+1,t.col+1]];
     for (const [rr,cc] of footprint)
       for (const [tr2,tc2] of tr)
         if (rr===tr2 && cc===tc2) return { ok:false, err:'blocked' };
+    // Slow tower aura: prevents placement within 2 tiles
+    if (isSlow || isNewSlow) {
+      const minR = Math.min(t.row, row) - 2;
+      const maxR = Math.max(t.row+1, row+1) + 2;
+      const minC = Math.min(t.col, col) - 2;
+      const maxC = Math.max(t.col+1, col+1) + 2;
+      // If any footprint cell is within aura distance of either tower
+      for (const [rr,cc] of footprint) {
+        // distance to existing tower's nearest corner
+        const dr = Math.max(0, t.row - rr, rr - (t.row+1));
+        const dc = Math.max(0, t.col - cc, cc - (t.col+1));
+        const dist = Math.max(dr, dc); // Chebyshev distance in tiles
+        if (dist <= 2 && (isSlow || isNewSlow)) {
+          return { ok:false, err:'slow_aura' };
+        }
+      }
+    }
   }
   const newPath = gs.findTaPath([...pm.towers, {row,col}]);
   if (!newPath) return { ok:false, err:'blocks_path' };
