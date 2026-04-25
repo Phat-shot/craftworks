@@ -1256,7 +1256,7 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
       const [d, r, c] = hpop();
       const k = `${r},${c}`;
       if(d > (dist.get(k) ?? Infinity)) continue;
-      if(r === rows - 1){
+      if(r === rows - 1 && c === taEntryCol){
         const path = []; let kk = k;
         while(kk !== null){
           const [pr, pc] = kk.split(',').map(Number);
@@ -1317,6 +1317,7 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
       gold: seq0.gold_per_round ?? layout.gold_per_round ?? 15,
       wood: seq0.wood_per_round ?? layout.wood_per_round ?? 2,
+      stone: seq0.stone_per_round ?? layout.stone_per_round ?? 1,
       score: 0, round: 0, status: 'placing',
       race: playerRaces?.[p.userId] || p.race || 'standard',
     };
@@ -1354,6 +1355,7 @@ function tickTimeAttack(gs) {
         const p = gs.players[uid];
         p.gold = nextSeq.gold_per_round ?? gs.workshopConfig?.ta_layout?.gold_per_round ?? 15;
         p.wood = nextSeq.wood_per_round ?? gs.workshopConfig?.ta_layout?.wood_per_round ?? 2;
+        p.stone = nextSeq.stone_per_round ?? gs.workshopConfig?.ta_layout?.stone_per_round ?? 1;
         p.lastTime = null;
         pm.minion = null;
         const sharedItems = (nextSeq.items||[]).map((t,i)=>({
@@ -1400,22 +1402,34 @@ function tickTimeAttack(gs) {
     const tx = tc*TILE+TILE/2, ty = tr*TILE+TILE/2;
     const dx = tx-m.px, dy = ty-m.py;
     const dist = Math.hypot(dx,dy);
-    // Check if minion is inside or adjacent to any slow tower (2x2 footprint)
-    const SLOW_FACTOR = 0.45;  // 55% speed reduction
+    // Check slow & stun towers (2x2 footprint with auras)
+    const SLOW_FACTOR = 0.45;        // 55% speed reduction in slow aura
+    const STUN_DURATION = 1.0;       // seconds
+    const STUN_COOLDOWN = 5.0;       // seconds between triggers per tower
     let inSlow = false;
-    // Current grid pos of minion
     const mcol = Math.floor(m.px / TILE);
     const mrow = Math.floor(m.py / TILE);
+    const nowSec = gs.gameTime / 1000;
+    if (!m.stunUntil) m.stunUntil = 0;
     for (const t of pm.towers) {
-      if (t.type === 'slow_block' || t.type === 'passive' || t.type === 'passive_tower') {
-        // 2x2 footprint covers [row..row+1] × [col..col+1]
-        // Check minion in the 4x4 area around the footprint (1-cell aura)
-        if (mrow >= t.row-1 && mrow <= t.row+2 && mcol >= t.col-1 && mcol <= t.col+2) {
-          inSlow = true; break;
+      const ty = t.type;
+      // Aura cells: [row-1..row+2] × [col-1..col+2] (2-tile radius)
+      const inAura2 = mrow >= t.row-1 && mrow <= t.row+2 && mcol >= t.col-1 && mcol <= t.col+2;
+      if (ty === 'slow_block' || ty === 'passive' || ty === 'passive_tower') {
+        if (inAura2) inSlow = true;
+      } else if (ty === 'stun_block' || ty === 'stun_tower' || ty === 'freeze_block') {
+        // Stun: trigger when minion enters aura, then cooldown before re-trigger
+        if (inAura2) {
+          if (!t._lastStun || (nowSec - t._lastStun) > STUN_COOLDOWN) {
+            t._lastStun = nowSec;
+            m.stunUntil = nowSec + STUN_DURATION;
+          }
         }
       }
     }
-    m.slowFactor = inSlow ? SLOW_FACTOR : 1;
+    const stunned = nowSec < m.stunUntil;
+    m.stunned = stunned;
+    m.slowFactor = stunned ? 0 : (inSlow ? SLOW_FACTOR : 1);
     m.spd = (m.baseSpd || 3.5) * m.slowFactor;
     const step = m.spd * TILE * dt;
     if (step >= dist) {
@@ -1478,25 +1492,32 @@ function endRound(gs) {
 
 function actionTaPlaceTower(gs, userId, data) {
   const { row, col } = data;
-  // Normalize TA type names: accept wall/wall_tower/wall_block AND passive/slow_block/spike/mine/freeze/root
+  // Normalize TA type names
   let type = data.type;
   const isWall = type === 'wall_tower' || type === 'wall' || type === 'wall_block';
-  const isPassive = type === 'passive_tower' || type === 'passive'
+  const isStun = type === 'stun_block' || type === 'stun_tower' || type === 'freeze_block';
+  const isSlow = type === 'passive_tower' || type === 'passive'
     || type === 'slow_block' || type === 'spike_block' || type === 'mine_block'
-    || type === 'freeze_block' || type === 'root_block';
+    || type === 'root_block';
   if (isWall) type = 'wall_block';
-  else if (isPassive) type = 'slow_block';
+  else if (isStun) type = 'stun_block';
+  else if (isSlow) type = 'slow_block';
 
   const pm = gs.playerMaps[userId];
   const p  = gs.players[userId];
   if (!pm || !p || gs.phase !== 'placing') return { ok:false, err:'not_placing' };
 
-  // TA uses virtual types 'wall' and 'passive' — no TDB entry needed
-  if (!isWall && !isPassive) return { ok:false, err:'unknown_type' };
+  if (!isWall && !isSlow && !isStun) return { ok:false, err:'unknown_type' };
 
-  const cost = isWall ? { gold:1, wood:0 } : { gold:0, wood:1 };
-  if ((p.gold||0) < cost.gold || (p.wood||0) < cost.wood) return { ok:false, err:'no_resources' };
-  // TA boundary check uses actual TA grid dimensions (not global ROWS/COLS)
+  // Costs: wall=gold, slow=wood, stun=stone
+  let cost;
+  if (isWall) cost = { gold:1, wood:0, stone:0 };
+  else if (isSlow) cost = { gold:0, wood:1, stone:0 };
+  else cost = { gold:0, wood:0, stone:1 }; // stun
+  if ((p.gold||0) < cost.gold || (p.wood||0) < cost.wood || (p.stone||0) < cost.stone) {
+    return { ok:false, err:'no_resources' };
+  }
+  // TA boundary check
   const taCols = gs.cols || 15, taRows = gs.rows || 20;
   const taEntry = gs.taEntryCol || Math.floor(taCols/2);
   if (row < 0 || row+1 >= taRows || col < 0 || col+1 >= taCols) return { ok:false, err:'blocked' };
@@ -1504,38 +1525,19 @@ function actionTaPlaceTower(gs, userId, data) {
   for (const [rr,cc] of footprint) {
     if ((rr === 0 || rr === taRows-1) && cc === taEntry) return { ok:false, err:'blocked' };
   }
-  // Check collision with existing towers + slow tower aura (2-tile radius)
+  // Collision: only direct footprint overlap (NO slow-aura placement block)
   for (const t of pm.towers) {
-    const isSlow = t.type === 'slow_block' || t.type === 'passive' || t.type === 'passive_tower';
-    const isNewSlow = isPassive;
-    // Direct footprint collision (always)
     const tr = [[t.row,t.col],[t.row,t.col+1],[t.row+1,t.col],[t.row+1,t.col+1]];
     for (const [rr,cc] of footprint)
       for (const [tr2,tc2] of tr)
         if (rr===tr2 && cc===tc2) return { ok:false, err:'blocked' };
-    // Slow tower aura: prevents placement within 2 tiles
-    if (isSlow || isNewSlow) {
-      const minR = Math.min(t.row, row) - 2;
-      const maxR = Math.max(t.row+1, row+1) + 2;
-      const minC = Math.min(t.col, col) - 2;
-      const maxC = Math.max(t.col+1, col+1) + 2;
-      // If any footprint cell is within aura distance of either tower
-      for (const [rr,cc] of footprint) {
-        // distance to existing tower's nearest corner
-        const dr = Math.max(0, t.row - rr, rr - (t.row+1));
-        const dc = Math.max(0, t.col - cc, cc - (t.col+1));
-        const dist = Math.max(dr, dc); // Chebyshev distance in tiles
-        if (dist <= 2 && (isSlow || isNewSlow)) {
-          return { ok:false, err:'slow_aura' };
-        }
-      }
-    }
   }
   const newPath = gs.findTaPath([...pm.towers, {row,col}]);
   if (!newPath) return { ok:false, err:'blocks_path' };
 
-  p.gold -= cost.gold;
+  p.gold  -= cost.gold;
   p.wood  -= cost.wood;
+  p.stone -= cost.stone;
 
   const tower = { id:`ta_${Date.now()}_${userId}`, type, row, col,
     paths:[0,0,0], lastFire:0, owner:userId, invested:0 };

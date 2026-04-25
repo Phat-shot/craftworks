@@ -46,7 +46,7 @@ const BUILTIN_MAPS = [
       available_races: ['standard','orcs','techies','elemente','urwald'],
       ta_layout: {
         cols: 35, rows: 50, rounds: 10,
-        gold_per_round: 15, wood_per_round: 2,
+        gold_per_round: 12, wood_per_round: 3, stone_per_round: 1,
         prebuilt_towers: [], prebuilt_sequences: TA_SEQUENCES,
         round_selection: 'random',
       },
@@ -64,7 +64,7 @@ const BUILTIN_MAPS = [
       available_races: ['standard'],
       ta_layout: {
         cols: 35, rows: 50, rounds: 10,
-        gold_per_round: 15, wood_per_round: 2,
+        gold_per_round: 12, wood_per_round: 3, stone_per_round: 1,
         prebuilt_towers: [], prebuilt_sequences: TA_SEQUENCES,
         round_selection: 'random',
       },
