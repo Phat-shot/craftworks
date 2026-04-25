@@ -1203,12 +1203,8 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
 
   // TA-specific BFS pathfinder using the actual TA grid size
   function findTaPath(towers) {
-    // Only WALL towers block. Slow towers are traversable.
-    const wallTowers = towers.filter(t => {
-      const ty = t.type || 'wall_block';
-      return ty === 'wall_block' || ty === 'wall' || ty === 'wall_tower';
-    });
-    const blocked = new Set(wallTowers.flatMap(t => [
+    // ALL towers block path with uniform 2x2 footprint (wall, slow, stun)
+    const blocked = new Set((towers || []).flatMap(t => [
       `${t.row},${t.col}`, `${t.row},${t.col+1}`,
       `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
     ]));
@@ -1404,6 +1400,7 @@ function tickTimeAttack(gs) {
     const dist = Math.hypot(dx,dy);
     // Check slow & stun towers (2x2 footprint with auras)
     const SLOW_FACTOR = 0.45;        // 55% speed reduction in slow aura
+    const SLOW_COOLDOWN = 1.5;       // seconds between slow particle bursts (visual)
     const STUN_DURATION = 1.0;       // seconds
     const STUN_COOLDOWN = 5.0;       // seconds between triggers per tower
     let inSlow = false;
@@ -1413,10 +1410,16 @@ function tickTimeAttack(gs) {
     if (!m.stunUntil) m.stunUntil = 0;
     for (const t of pm.towers) {
       const ty = t.type;
-      // Aura cells: [row-1..row+2] × [col-1..col+2] (2-tile radius)
+      // Aura cells: [row-1..row+2] × [col-1..col+2] (2-tile radius around 2x2 footprint)
       const inAura2 = mrow >= t.row-1 && mrow <= t.row+2 && mcol >= t.col-1 && mcol <= t.col+2;
       if (ty === 'slow_block' || ty === 'passive' || ty === 'passive_tower') {
-        if (inAura2) inSlow = true;
+        if (inAura2) {
+          inSlow = true;
+          // Track last "fire" for animation cooldown
+          if (!t._lastSlow || (nowSec - t._lastSlow) > SLOW_COOLDOWN) {
+            t._lastSlow = nowSec;
+          }
+        }
       } else if (ty === 'stun_block' || ty === 'stun_tower' || ty === 'freeze_block') {
         // Stun: trigger when minion enters aura, then cooldown before re-trigger
         if (inAura2) {
@@ -1430,7 +1433,7 @@ function tickTimeAttack(gs) {
     const stunned = nowSec < m.stunUntil;
     m.stunned = stunned;
     m.slowFactor = stunned ? 0 : (inSlow ? SLOW_FACTOR : 1);
-    m.spd = (m.baseSpd || 3.5) * m.slowFactor;
+    m.spd = (m.baseSpd || 5.25) * m.slowFactor;
     const step = m.spd * TILE * dt;
     if (step >= dist) {
       m.px=tx; m.py=ty; m.pathIdx++;
@@ -1463,7 +1466,7 @@ function startRacing(gs) {
     pm.minion = {
       id:`minion_${uid}`, owner:uid,
       px: _taEntry*TILE+TILE/2, py: TILE/2,
-      pathIdx: 1, baseSpd: 3.5, spd: 3.5, hp: 100, maxHp: 100,
+      pathIdx: 1, baseSpd: 5.25, spd: 5.25, hp: 100, maxHp: 100,
       slowedUntil: 0, slowFactor: 1,
       reached:false, escaped:false, time:null,
     };

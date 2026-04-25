@@ -146,13 +146,62 @@ scene.add(new THREE.AmbientLight(0x303048,1.5));
 const sun=new THREE.DirectionalLight(0xffa060,1.8);
 sun.position.set(COLS+10,25,-10); sun.castShadow=true;
 sun.shadow.mapSize.set(1024,1024);
-sun.shadow.camera.left=-40; sun.shadow.camera.right=80;
-sun.shadow.camera.top=60; sun.shadow.camera.bottom=-10;
+sun.shadow.camera.left=-15; sun.shadow.camera.right=50;
+sun.shadow.camera.top=70; sun.shadow.camera.bottom=-10;
+sun.shadow.camera.near=0.1; sun.shadow.camera.far=200;
+sun.shadow.bias=-0.0005;
 scene.add(sun);
 const fill=new THREE.DirectionalLight(0x4060ff,0.4);
 fill.position.set(-10,10,-10); scene.add(fill);
 
 // ── Procedural Textures ──────────────────────────────────
+function texGrass(size, baseHsl, darkHsl, lightHsl, flowerColor){
+  // Realistic grass: dense blade strokes + ground variance + occasional flowers
+  const c=document.createElement('canvas'); c.width=c.height=size;
+  const x=c.getContext('2d');
+  // Base gradient - varied earth tones
+  x.fillStyle = baseHsl; x.fillRect(0,0,size,size);
+  // Soil patches (sparse, irregular)
+  for(let i=0;i<40;i++){
+    const r=8+Math.random()*22, px=Math.random()*size, py=Math.random()*size;
+    const grd=x.createRadialGradient(px,py,0,px,py,r);
+    grd.addColorStop(0,'rgba(60,42,24,'+(0.15+Math.random()*0.2)+')');
+    grd.addColorStop(1,'rgba(60,42,24,0)');
+    x.fillStyle=grd;
+    x.beginPath(); x.arc(px,py,r,0,Math.PI*2); x.fill();
+  }
+  // Dense grass blades - many short strokes at random angles
+  for(let i=0;i<2400;i++){
+    const px = Math.random()*size, py = Math.random()*size;
+    const len = 3 + Math.random()*7;
+    const ang = -Math.PI/2 + (Math.random()-0.5)*0.6;  // mostly upward, slight tilt
+    const lightness = Math.random();
+    const color = lightness > 0.7 ? lightHsl : (lightness < 0.3 ? darkHsl : baseHsl);
+    x.strokeStyle = color;
+    x.lineWidth = 0.7 + Math.random()*0.8;
+    x.beginPath();
+    x.moveTo(px, py);
+    x.lineTo(px + Math.cos(ang)*len, py + Math.sin(ang)*len);
+    x.stroke();
+  }
+  // Occasional flowers/highlights
+  if(flowerColor){
+    for(let i=0;i<25;i++){
+      x.fillStyle = flowerColor;
+      const px = Math.random()*size, py = Math.random()*size;
+      x.beginPath(); x.arc(px, py, 1.2+Math.random(), 0, Math.PI*2); x.fill();
+    }
+  }
+  // Subtle highlight specks (dew/sun)
+  for(let i=0;i<200;i++){
+    x.fillStyle='rgba(255,255,200,'+(0.05+Math.random()*0.1)+')';
+    x.fillRect(Math.random()*size,Math.random()*size,1,1);
+  }
+  const tex=new THREE.CanvasTexture(c);
+  tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
+  return tex;
+}
+
 function texStone(size, baseColor, darkColor, lightColor){
   const c=document.createElement('canvas'); c.width=c.height=size;
   const x=c.getContext('2d');
@@ -241,8 +290,8 @@ function texPortalRune(size, baseHue, glowHue){
   return new THREE.CanvasTexture(c);
 }
 
-const TEX_GRASS1 = texStone(256,'#2a4018','40,60,20','80,120,40');
-const TEX_GRASS2 = texStone(256,'#1a300c','30,50,15','60,100,30');
+const TEX_GRASS1 = texGrass(256, '#3a5a20', '#1a3008', '#7ab038', '#f0e060');
+const TEX_GRASS2 = texGrass(256, '#2e4a18', '#142808', '#5e9028', '#e8b020');
 const TEX_PATH = texStone(256,'#4a3020','60,40,25','120,90,60');
 const TEX_STONE_ORC = texStone(256,'#4a3428','40,25,15','120,90,60');
 const TEX_STONE_BLUE = texStone(256,'#4a5568','80,80,90','160,170,180');
@@ -297,6 +346,153 @@ const tileGeo=new THREE.BoxGeometry(TILE,0.12,TILE);
   inst2.instanceMatrix.needsUpdate = true;
   scene.add(inst1);
   scene.add(inst2);
+}
+
+// ─────────────────────────────────────────────────────────
+// FOREST BORDER — dense 3D mixed forest surrounding the map
+// Uses InstancedMesh for trunks + leaf-clusters (5 species, ~600 trees)
+// ─────────────────────────────────────────────────────────
+{
+  const FOREST_DEPTH = 12;       // tiles outward from map edge
+  const FOREST_INNER_PADDING = 1; // skip 1 tile next to map edge
+  const TREES_PER_TILE = 0.85;    // ~ tree density
+  const MAP_W = COLS * TILE;
+  const MAP_H = ROWS * TILE;
+  
+  // === Tree species materials (shared) ===
+  const trunkMat = new THREE.MeshLambertMaterial({color:0x4a2c14});
+  const trunkMatDark = new THREE.MeshLambertMaterial({color:0x382010});
+  const trunkMatBirch = new THREE.MeshLambertMaterial({color:0xd0c8b0});
+  
+  // 5 leaf colors for variety (oak, beech, pine-dark, pine-blue, autumn)
+  const leafMats = [
+    new THREE.MeshLambertMaterial({color:0x2a5018}),  // dark green
+    new THREE.MeshLambertMaterial({color:0x3a6820}),  // medium green
+    new THREE.MeshLambertMaterial({color:0x1a3810}),  // pine dark
+    new THREE.MeshLambertMaterial({color:0x4a7028}),  // bright green
+    new THREE.MeshLambertMaterial({color:0x806020}),  // autumn brown/yellow
+  ];
+  
+  // === Geometries ===
+  const trunkGeo = new THREE.CylinderGeometry(0.18, 0.28, 1.6, 7);  // tapered trunk
+  const trunkBirchGeo = new THREE.CylinderGeometry(0.13, 0.16, 1.8, 7);
+  // Three leaf shapes for diversity
+  const leafSphereGeo = new THREE.IcosahedronGeometry(0.85, 0);     // fluffy round
+  const leafConeGeo = new THREE.ConeGeometry(0.7, 1.6, 7);          // pine
+  const leafCloudGeo = new THREE.IcosahedronGeometry(1.0, 0);       // big oak crown
+  
+  // Build trees as instanced meshes
+  // Determine if a position is in the forest border (outside the map but within the forest ring)
+  function inForest(x, z){
+    const inMapX = x >= -FOREST_INNER_PADDING*TILE && x <= MAP_W + FOREST_INNER_PADDING*TILE;
+    const inMapZ = z >= -FOREST_INNER_PADDING*TILE && z <= MAP_H + FOREST_INNER_PADDING*TILE;
+    if (inMapX && inMapZ) return false;  // inside the map area
+    const inForestX = x >= -FOREST_DEPTH*TILE && x <= MAP_W + FOREST_DEPTH*TILE;
+    const inForestZ = z >= -FOREST_DEPTH*TILE && z <= MAP_H + FOREST_DEPTH*TILE;
+    return inForestX && inForestZ;
+  }
+  
+  // Generate tree positions (deterministic via seeded RNG)
+  let seed = 12345;
+  const rng = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  
+  const trees = [];
+  // Sample positions on a grid
+  const gridStep = 1.0;  // ~1 tree per 1.0×1.0 area
+  for(let z = -FOREST_DEPTH*TILE; z <= MAP_H + FOREST_DEPTH*TILE; z += gridStep){
+    for(let x = -FOREST_DEPTH*TILE; x <= MAP_W + FOREST_DEPTH*TILE; x += gridStep){
+      if (!inForest(x, z)) continue;
+      if (rng() > TREES_PER_TILE) continue;
+      // Jitter position
+      const jx = x + (rng()-0.5)*0.7;
+      const jz = z + (rng()-0.5)*0.7;
+      const species = Math.floor(rng() * 5);  // 0=oak, 1=beech, 2=pine, 3=birch, 4=autumn
+      const scale = 0.7 + rng() * 0.7;        // 0.7-1.4
+      const rot = rng() * Math.PI * 2;
+      trees.push({x: jx, z: jz, species, scale, rot});
+    }
+  }
+  
+  // Group by species for batched rendering
+  const speciesGroups = [[],[],[],[],[]];
+  trees.forEach(t => speciesGroups[t.species].push(t));
+  
+  function setTreeInstance(inst, idx, t, yOffset){
+    const dummy = new THREE.Object3D();
+    dummy.position.set(t.x, yOffset, t.z);
+    dummy.rotation.y = t.rot;
+    dummy.scale.set(t.scale, t.scale, t.scale);
+    dummy.updateMatrix();
+    inst.setMatrixAt(idx, dummy.matrix);
+  }
+  
+  // Each species: 1 trunk InstancedMesh + 1 crown InstancedMesh
+  // Species 0: oak — thick trunk, big round crown (medium green)
+  // Species 1: beech — thick trunk, big cloud (bright green)  
+  // Species 2: pine — dark thin trunk, cone shape (pine dark)
+  // Species 3: birch — light trunk, smaller round (medium green)
+  // Species 4: autumn — thick trunk, round crown (autumn color)
+  
+  const speciesConfigs = [
+    {trunkGeo, trunkMat,           crownGeo: leafCloudGeo,   crownMat: leafMats[1], crownY: 1.6, scaleCrown: [1.0,0.9,1.0]},  // oak
+    {trunkGeo, trunkMat,           crownGeo: leafCloudGeo,   crownMat: leafMats[3], crownY: 1.5, scaleCrown: [0.95,1.05,0.95]}, // beech
+    {trunkGeo, trunkMatDark,       crownGeo: leafConeGeo,    crownMat: leafMats[2], crownY: 1.6, scaleCrown: [1.0,1.2,1.0]},  // pine
+    {trunkGeo: trunkBirchGeo, trunkMat: trunkMatBirch,     crownGeo: leafSphereGeo,  crownMat: leafMats[0], crownY: 1.7, scaleCrown: [0.85,0.85,0.85]}, // birch
+    {trunkGeo, trunkMat,           crownGeo: leafCloudGeo,   crownMat: leafMats[4], crownY: 1.5, scaleCrown: [1.0,0.9,1.0]},  // autumn
+  ];
+  
+  for(let s=0; s<5; s++){
+    const grp = speciesGroups[s];
+    if(grp.length === 0) continue;
+    const cfg = speciesConfigs[s];
+    
+    // Trunks
+    const trunkInst = new THREE.InstancedMesh(cfg.trunkGeo, cfg.trunkMat, grp.length);
+    trunkInst.castShadow = false;  // disable for perf — trees are dense, shadows would tank
+    trunkInst.receiveShadow = true;
+    grp.forEach((t, i) => {
+      const dummy = new THREE.Object3D();
+      dummy.position.set(t.x, 0.8, t.z);  // trunk centered at y=0.8
+      dummy.rotation.y = t.rot;
+      dummy.scale.set(t.scale, t.scale, t.scale);
+      dummy.updateMatrix();
+      trunkInst.setMatrixAt(i, dummy.matrix);
+    });
+    trunkInst.instanceMatrix.needsUpdate = true;
+    scene.add(trunkInst);
+    
+    // Crowns
+    const crownInst = new THREE.InstancedMesh(cfg.crownGeo, cfg.crownMat, grp.length);
+    crownInst.castShadow = false;
+    crownInst.receiveShadow = false;
+    grp.forEach((t, i) => {
+      const dummy = new THREE.Object3D();
+      dummy.position.set(t.x, cfg.crownY * t.scale + 0.5, t.z);
+      dummy.rotation.y = t.rot * 1.7;  // crown rotated independently for variety
+      dummy.scale.set(
+        t.scale * cfg.scaleCrown[0],
+        t.scale * cfg.scaleCrown[1],
+        t.scale * cfg.scaleCrown[2]
+      );
+      dummy.updateMatrix();
+      crownInst.setMatrixAt(i, dummy.matrix);
+    });
+    crownInst.instanceMatrix.needsUpdate = true;
+    scene.add(crownInst);
+  }
+  
+  // Forest floor: a large extended ground plane (so we don't see void)
+  const floorGeo = new THREE.PlaneGeometry((COLS+FOREST_DEPTH*2+4)*TILE, (ROWS+FOREST_DEPTH*2+4)*TILE);
+  const floorTex = texGrass(256, '#2a3812', '#0e1804', '#3a5818', null);
+  const floorMat = new THREE.MeshLambertMaterial({map: floorTex});
+  floorTex.repeat.set(20, 20);
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI/2;
+  floor.position.set(MAP_W/2, -0.15, MAP_H/2);
+  floor.receiveShadow = true;
+  scene.add(floor);
+  
+  console.log('[TA3D] Forest:', trees.length, 'trees in', speciesGroups.length, 'species groups');
 }
 
 // ── HD Portals ───────────────────────────────────────────
@@ -597,6 +793,14 @@ function placeTowerMesh(id,type,row,col,prebuilt){
   const p=tilePos(row,col);
   g.position.set(p.x+TILE/2,0,p.z+TILE/2);
   scene.add(g);
+  // Track meta for animation/projectile spawning
+  g.userData.towerType = type;
+  g.userData.towerRow = row;
+  g.userData.towerCol = col;
+  g.userData.serverId = id;
+  g.userData.lastSlowFire = -999;  // tracks last server _lastSlow value
+  g.userData.lastStunFire = -999;  // tracks last server _lastStun value
+  g.userData.activeProjectiles = []; // array of {mesh, t0, dur, target}
   towerMeshes[id]=g;
   // Cache animated child refs once
   const refs = { ice:[], crystals:[], runes:[], lightnings:[], mists:[], auras:[], rings:[] };
@@ -613,6 +817,10 @@ function placeTowerMesh(id,type,row,col,prebuilt){
     if(c.userData?.isAura){ refs.auras.push(c); needsAnim = true; }
     if(c.userData?.isAuraRing){ refs.rings.push(c); needsAnim = true; }
   });
+  // Slow/stun towers always need animation for projectile checks
+  const isSlow = type==='slow_block' || type==='passive' || type==='passive_tower';
+  const isStun = type==='stun_block' || type==='stun_tower' || type==='freeze_block';
+  if(isSlow || isStun) needsAnim = true;
   if(needsAnim){
     g.userData.animRefs = refs;
     animatedTowers.add(g);
@@ -630,6 +838,205 @@ function clearAllTowerMeshes(){
 
 // ── HD Dragon ───────────────────────────────────────────
 let dragonMesh=null;
+// Global active projectiles (slow particles, stun beams) — flat list updated each frame
+const activeProjectiles = [];
+
+// Spawn slow ice particle: starts at tower, spirals to dragon
+function spawnSlowParticle(towerMesh){
+  if(!dragonMesh || !dragonMesh.visible) return;
+  const startPos = new THREE.Vector3();
+  towerMesh.getWorldPosition(startPos);
+  startPos.y += 1.5;
+  // Three small ice shards spiral out
+  for(let k=0;k<3;k++){
+    const shard = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.12, 0),
+      new THREE.MeshStandardMaterial({
+        color:0xa0e8ff, emissive:0x4080ff, emissiveIntensity:0.7,
+        transparent:true, opacity:0.95, roughness:0.1, metalness:0.4
+      })
+    );
+    shard.position.copy(startPos);
+    scene.add(shard);
+    activeProjectiles.push({
+      mesh: shard,
+      type: 'slowShard',
+      t0: performance.now(),
+      dur: 700,  // ms
+      startPos: startPos.clone(),
+      angleOffset: k * Math.PI * 2 / 3,
+      spiralRadius: 0.4 + k * 0.15,
+    });
+  }
+}
+
+// Spawn stun lightning beam from tower to dragon
+function spawnStunBeam(towerMesh){
+  if(!dragonMesh || !dragonMesh.visible) return;
+  const startPos = new THREE.Vector3();
+  towerMesh.getWorldPosition(startPos);
+  startPos.y += 2.4; // crystal top
+  const endPos = new THREE.Vector3();
+  dragonMesh.getWorldPosition(endPos);
+  endPos.y += 0.8;
+  const dist = startPos.distanceTo(endPos);
+  // Beam (cylinder pointing from tower to dragon)
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.04, dist, 8),
+    new THREE.MeshBasicMaterial({
+      color:0xc0e0ff, transparent:true, opacity:0.9, depthWrite:false
+    })
+  );
+  beam.position.copy(startPos).lerp(endPos, 0.5);
+  beam.lookAt(endPos);
+  beam.rotateX(Math.PI/2);
+  scene.add(beam);
+  // Outer glow beam
+  const glow = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.25, 0.1, dist, 8),
+    new THREE.MeshBasicMaterial({
+      color:0x60a0ff, transparent:true, opacity:0.4, depthWrite:false
+    })
+  );
+  glow.position.copy(beam.position);
+  glow.rotation.copy(beam.rotation);
+  scene.add(glow);
+  activeProjectiles.push({
+    mesh: beam, glowMesh: glow,
+    type: 'stunBeam',
+    t0: performance.now(),
+    dur: 350,
+  });
+}
+
+// Update / cleanup projectiles
+function updateProjectiles(){
+  if(!activeProjectiles.length) return;
+  const now = performance.now();
+  for(let i = activeProjectiles.length - 1; i >= 0; i--){
+    const p = activeProjectiles[i];
+    const t = (now - p.t0) / p.dur;
+    if(t >= 1){
+      scene.remove(p.mesh);
+      if(p.glowMesh) scene.remove(p.glowMesh);
+      // Dispose materials/geometries
+      if(p.mesh.material) p.mesh.material.dispose();
+      if(p.mesh.geometry) p.mesh.geometry.dispose();
+      if(p.glowMesh){
+        if(p.glowMesh.material) p.glowMesh.material.dispose();
+        if(p.glowMesh.geometry) p.glowMesh.geometry.dispose();
+      }
+      activeProjectiles.splice(i, 1);
+      continue;
+    }
+    if(p.type === 'slowShard'){
+      // Spiral around the dragon's path while flying to it
+      if(!dragonMesh || !dragonMesh.visible){
+        // dragon gone — fade out
+        p.mesh.material.opacity = Math.max(0, 1 - t);
+        continue;
+      }
+      const dragonPos = new THREE.Vector3();
+      dragonMesh.getWorldPosition(dragonPos);
+      dragonPos.y += 0.6;
+      // Spiral around the line from start to dragon
+      const angle = p.angleOffset + t * Math.PI * 4;
+      const radius = p.spiralRadius * (1 - t);  // tighten as approach
+      const linePos = p.startPos.clone().lerp(dragonPos, t);
+      const offset = new THREE.Vector3(
+        Math.cos(angle) * radius,
+        Math.sin(t * Math.PI) * 0.4,
+        Math.sin(angle) * radius
+      );
+      p.mesh.position.copy(linePos).add(offset);
+      p.mesh.rotation.x += 0.2;
+      p.mesh.rotation.y += 0.15;
+      p.mesh.material.opacity = 0.95 * (1 - t * 0.3);
+    } else if(p.type === 'stunBeam'){
+      // Fade out beam quickly with flicker
+      const flicker = 0.6 + Math.random() * 0.4;
+      p.mesh.material.opacity = (1 - t) * flicker;
+      if(p.glowMesh) p.glowMesh.material.opacity = (1 - t) * 0.4 * flicker;
+    }
+  }
+}
+
+// Freeze halo & stun swirl for the dragon (created once, toggled visible)
+let freezeHalo = null, stunSwirl = null;
+function ensureDragonEffects(){
+  if(!dragonMesh) return;
+  if(!freezeHalo){
+    // Freeze halo: cyan glow sphere around dragon, ice crystal ring around feet
+    freezeHalo = new THREE.Group();
+    // Body tint sphere (large semi-transparent)
+    const tint = new THREE.Mesh(
+      new THREE.SphereGeometry(2.2, 20, 14),
+      new THREE.MeshBasicMaterial({
+        color:0x60a0ff, transparent:true, opacity:0.18,
+        depthWrite:false, side:THREE.BackSide  // draw from inside outward
+      })
+    );
+    freezeHalo.add(tint);
+    // Ice ring at feet
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(1.2, 0.06, 8, 32),
+      new THREE.MeshStandardMaterial({
+        color:0xa0e8ff, emissive:0x4080ff, emissiveIntensity:0.8,
+        transparent:true, opacity:0.85
+      })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = -0.9;
+    freezeHalo.add(ring);
+    // Floating ice shards orbiting
+    for(let i=0;i<8;i++){
+      const angle = (i/8) * Math.PI * 2;
+      const shard = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.12, 0),
+        new THREE.MeshStandardMaterial({
+          color:0xa0e8ff, emissive:0x4080ff, emissiveIntensity:0.6,
+          transparent:true, opacity:0.85, roughness:0.1, metalness:0.5
+        })
+      );
+      shard.userData.angle = angle;
+      shard.userData.baseY = 0.3 + Math.sin(i) * 0.4;
+      freezeHalo.add(shard);
+    }
+    freezeHalo.visible = false;
+    dragonMesh.add(freezeHalo);
+  }
+  if(!stunSwirl){
+    // Stun swirl above the dragon's head — ring of stars + spiral
+    stunSwirl = new THREE.Group();
+    stunSwirl.position.y = 1.8;
+    // 5 small star/cross shapes orbiting
+    for(let i=0;i<6;i++){
+      const star = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.13, 0),
+        new THREE.MeshBasicMaterial({
+          color:0xffd040, transparent:true, opacity:0.95,
+          depthWrite:false
+        })
+      );
+      star.userData.angle = (i/6) * Math.PI * 2;
+      star.userData.tilt = (Math.random() - 0.5) * 0.4;
+      stunSwirl.add(star);
+    }
+    // Central question mark / spiral (just a torus knot for spinning)
+    const center = new THREE.Mesh(
+      new THREE.TorusGeometry(0.3, 0.06, 8, 14),
+      new THREE.MeshBasicMaterial({color:0xffe070, transparent:true, opacity:0.7})
+    );
+    center.userData.isStunCenter = true;
+    stunSwirl.add(center);
+    // Light
+    const light = new THREE.PointLight(0xffe070, 1.5, 3, 2);
+    stunSwirl.add(light);
+    stunSwirl.visible = false;
+    dragonMesh.add(stunSwirl);
+  }
+}
+
 function makeDragonMesh(){
   const group = new THREE.Group();
 
@@ -1449,6 +1856,7 @@ function ensureDragon(){
     scene.add(dragonMesh);
   }
   dragonMesh.visible = true;
+  ensureDragonEffects();
 }
 function removeDragon(){
   // Hide instead of disposing — saves recreating ~70 meshes every round
@@ -1591,6 +1999,18 @@ function syncTowers(towers){
   for(const id of lastTowerIds) if(!newIds.has(id)) removeTowerMesh(id);
   for(const t of (towers||[])){
     if(!towerMeshes[t.id]) placeTowerMesh(t.id,t.type,t.row,t.col,!!t._prebuilt);
+    // Detect new fire events from server (when _lastSlow / _lastStun changed)
+    const m = towerMeshes[t.id];
+    if(m){
+      if(t._lastSlow !== undefined && t._lastSlow !== m.userData.lastSlowFire){
+        m.userData.lastSlowFire = t._lastSlow;
+        m.userData.shouldSpawnSlow = true;  // animation loop will pick this up
+      }
+      if(t._lastStun !== undefined && t._lastStun !== m.userData.lastStunFire){
+        m.userData.lastStunFire = t._lastStun;
+        m.userData.shouldSpawnStun = true;
+      }
+    }
   }
   lastTowerIds=newIds;
 }
@@ -1697,6 +2117,9 @@ function connect(){
         }
       }
       updateDragonHP(dragonMesh, minion.hp/minion.maxHp);
+      // Track effect state for visual feedback
+      dragonMesh.userData.isSlowed = (minion.slowFactor !== undefined && minion.slowFactor < 1 && minion.slowFactor > 0);
+      dragonMesh.userData.isStunned = !!minion.stunned;
     } else { removeDragon(); }
     if(snap.phase==='racing'&&me?.lastTime){
       document.getElementById('v-time').textContent=me.lastTime.toFixed(2)+'s';
@@ -1762,6 +2185,27 @@ function animate(){
   // Tower animations — only iterate towers that need animation, use cached refs
   animatedTowers.forEach(g=>{
     const r = g.userData.animRefs;
+    // Spawn slow particle if server fired
+    if(g.userData.shouldSpawnSlow){
+      g.userData.shouldSpawnSlow = false;
+      spawnSlowParticle(g);
+    }
+    // Spawn stun beam if server fired
+    if(g.userData.shouldSpawnStun){
+      g.userData.shouldSpawnStun = false;
+      spawnStunBeam(g);
+      // Mark stun cooldown timer for crystal dim
+      g.userData.stunFiredAt = animT;
+    }
+    // Stun crystal cooldown — dim while in cooldown, gradually brighten
+    const ttype = g.userData.towerType;
+    const isStunTower = ttype === 'stun_block' || ttype === 'stun_tower' || ttype === 'freeze_block';
+    let stunCooldown = 1.0;
+    if(isStunTower && g.userData.stunFiredAt){
+      const elapsed = animT - g.userData.stunFiredAt;
+      const STUN_COOLDOWN_S = 5.0;
+      stunCooldown = Math.min(1.0, elapsed / STUN_COOLDOWN_S);
+    }
     // Ice crystals (slow tower)
     for(let i=0; i<r.ice.length; i++){
       const cr = r.ice[i];
@@ -1774,29 +2218,31 @@ function animate(){
       const s = 1+Math.sin(animT*0.8)*0.1;
       m.scale.set(s, 0.25, s);
     }
-    // Stun crystals (pulse + rotate)
+    // Stun crystals (pulse + rotate, dim during cooldown)
     if(r.crystals.length){
       const pulse = 0.5 + Math.sin(animT*3)*0.3;
       for(const c of r.crystals){
         c.rotation.y = animT*0.6;
-        if(c.material) c.material.emissiveIntensity = pulse;
+        if(c.material){
+          c.material.emissiveIntensity = pulse * stunCooldown;
+          c.material.opacity = 0.4 + 0.5 * stunCooldown;
+        }
       }
     }
     // Stun runes
     for(const c of r.runes){
-      if(c.material) c.material.opacity = 0.5 + Math.sin(animT*4 + c.position.x*5)*0.4;
+      if(c.material) c.material.opacity = (0.5 + Math.sin(animT*4 + c.position.x*5)*0.4) * stunCooldown;
     }
-    // Lightning bolts
+    // Lightning bolts (only show when ready)
     for(const c of r.lightnings){
       c.rotation.y = animT*5;
       const kids = c.children;
       for(let i=0; i<kids.length; i++){
         const b = kids[i];
-        if(b.material) b.material.opacity = Math.random() > 0.5 ? 0.9 : 0.1;
+        if(b.material) b.material.opacity = (Math.random() > 0.5 ? 0.9 : 0.1) * stunCooldown;
         b.rotation.z = (i-1)*0.4 + Math.sin(animT*15+i)*0.3;
       }
     }
-    // Aura disc + ring (uses SHARED material, so update once globally below)
   });
   // Aura materials are shared — update opacity once per frame (not per tower)
   if(AURA_SLOW.disc) AURA_SLOW.disc.opacity = 0.08 + Math.sin(animT*1.5)*0.05;
@@ -1817,7 +2263,50 @@ function animate(){
         r.fire.scale.set(flick,flick,flick);
       }
     }
+    // Freeze halo (slowed)
+    const isSlowed = !!dragonMesh.userData.isSlowed;
+    if(freezeHalo){
+      freezeHalo.visible = isSlowed;
+      if(isSlowed){
+        // Rotate ring and orbit shards
+        freezeHalo.rotation.y = animT * 0.5;
+        freezeHalo.children.forEach((c, idx) => {
+          if(idx >= 2 && c.userData.angle !== undefined){  // shards
+            const a = c.userData.angle + animT * 1.2;
+            c.position.x = Math.cos(a) * 1.5;
+            c.position.z = Math.sin(a) * 1.5;
+            c.position.y = c.userData.baseY + Math.sin(animT * 2 + idx) * 0.15;
+            c.rotation.x = animT * 1.5;
+            c.rotation.y = animT * 1.0;
+          }
+        });
+      }
+    }
+    // Stun swirl (stunned)
+    const isStunned = !!dragonMesh.userData.isStunned;
+    if(stunSwirl){
+      stunSwirl.visible = isStunned;
+      if(isStunned){
+        stunSwirl.rotation.y = animT * 4;
+        stunSwirl.children.forEach((c) => {
+          if(c.userData?.angle !== undefined){
+            const a = c.userData.angle + animT * 3;
+            c.position.x = Math.cos(a) * 0.7;
+            c.position.z = Math.sin(a) * 0.7;
+            c.position.y = Math.sin(animT * 5 + a) * 0.15;
+            c.rotation.x = animT * 2 + c.userData.tilt;
+            c.rotation.z = animT * 2.5;
+          }
+          if(c.userData?.isStunCenter){
+            c.rotation.x = animT * 6;
+            c.rotation.z = animT * 4;
+          }
+        });
+      }
+    }
   }
+  // Always update projectiles (they may outlive the dragon visibility)
+  updateProjectiles();
   renderer.render(scene,cam);
 }
 animate();
