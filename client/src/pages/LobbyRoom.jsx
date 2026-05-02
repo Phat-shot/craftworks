@@ -48,6 +48,8 @@ export default function LobbyRoom() {
     // Load lobby
     api.get(`/lobbies/${id}`).then(r => {
       setLobby(r.data); setMembers(r.data.members || []);
+      // Auto-pick map from lobby's stored config (no map selection in lobby anymore)
+      if (r.data.workshop_map_config) setSelectedMap(r.data.workshop_map_config);
     }).catch(() => navigate('/lobby'));
 
     // Socket
@@ -232,33 +234,14 @@ export default function LobbyRoom() {
         {lobby.game_mode === 'chaos'      && '💀 Chaos: Waves starten automatisch – auch wenn die vorherige noch läuft!'}
       </div>
 
-      {/* Map selection (host only) */}
-      {isHost && builtinMaps.length > 0 && (
-        <div style={{ marginBottom:16 }}>
-          <div className="section-title">🗺️ Map wählen</div>
-          <div style={{ display:'flex', gap:7, overflowX:'auto', paddingBottom:6 }}>
-            {builtinMaps.map(m=>(
-              <div key={m.id} onClick={()=>setSelectedMap(m)} style={{
-                flexShrink:0, width:80, background:'var(--bg2)',
-                border:`2px solid ${selectedMap?.id===m.id?'var(--gold)':'var(--border2)'}`,
-                borderRadius:8, padding:'7px 5px', cursor:'pointer', textAlign:'center',
-                background:selectedMap?.id===m.id?'rgba(240,200,60,.08)':'var(--bg2)',
-                transition:'all .15s',
-              }}>
-                <div style={{ fontSize:18 }}>{m.icon||'🗺️'}</div>
-                <div style={{ fontSize:8, fontWeight:700, color:'var(--text2)', lineHeight:1.3, marginTop:2 }}>{(m.title||m.name||'?').slice(0,12)}</div>
-                <div style={{ fontSize:7, color:'var(--text3)', marginTop:1 }}>{m.game_mode||'td'}</div>
-              </div>
-            ))}
+      {/* Map (read-only — already selected before lobby creation) */}
+      {selectedMap && (
+        <div style={{ marginBottom:12, padding:'10px 14px', background:'linear-gradient(135deg,rgba(240,200,60,.08),rgba(240,200,60,.03))', border:'1px solid rgba(240,200,60,.3)', borderRadius:8, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ fontSize:24 }}>{selectedMap.icon||'🗺️'}</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, fontWeight:800, color:'var(--gold)' }}>{selectedMap.title||selectedMap.name}</div>
+            <div style={{ fontSize:10, color:'var(--text3)' }}>{selectedMap.game_mode||'td'} · {selectedMap.description||''}</div>
           </div>
-          {selectedMap && <div style={{ fontSize:10, color:'var(--text3)', marginTop:4 }}>
-            Gewählt: {selectedMap.icon} {selectedMap.title||selectedMap.name} — {selectedMap.game_mode}
-          </div>}
-        </div>
-      )}
-      {!isHost && selectedMap && (
-        <div style={{ marginBottom:12, padding:'8px 12px', background:'rgba(60,60,60,.2)', borderRadius:6, fontSize:11, color:'var(--text3)' }}>
-          🗺️ Map: {selectedMap.icon} {selectedMap.title||selectedMap.name}
         </div>
       )}
 
