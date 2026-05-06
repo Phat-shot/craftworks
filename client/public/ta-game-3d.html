@@ -9,45 +9,74 @@
 :root{--gold:#f0c840;--bg:#040208;--green:#50d040;--red:#e03020}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',serif;background:var(--bg);color:#e0c870;display:flex;flex-direction:column}
-#topbar{background:linear-gradient(180deg,#0a0614,#060310);border-bottom:2px solid #2a1040;padding:5px 12px;display:flex;align-items:center;gap:12px;flex-shrink:0}
-#topbar .res{display:flex;align-items:center;gap:4px;font-size:13px;font-weight:700}
+/* Top bar - scales with viewport, larger on desktop 16:9 */
+#topbar{background:linear-gradient(180deg,#0a0614,#060310);border-bottom:2px solid #2a1040;padding:8px 18px;display:flex;align-items:center;gap:18px;flex-shrink:0}
+#topbar .res{display:flex;align-items:center;gap:6px;font-size:18px;font-weight:700}
+#topbar .res .ic{font-size:22px}
 #topbar .gold-val{color:var(--gold)}
-#topbar .wood-val{color:#a06020}
+#topbar .wood-val{color:#c08040}
 #topbar .stone-val{color:#a0a8c0}
-#round-info{font-size:11px;color:#8070a0;margin-left:auto}
+#round-info{font-size:14px;color:#a090c0;margin-left:auto;display:flex;align-items:center;gap:14px}
+#round-info b{color:var(--gold);font-size:16px}
+#start-timer{font-size:13px;color:#80ff80;background:rgba(60,160,20,.15);padding:4px 10px;border-radius:6px;border:1px solid rgba(80,200,40,.4);font-weight:700}
 #canvaswrap{flex:1;overflow:hidden;position:relative}
 #threecanvas{width:100%;height:100%;display:block}
-#toast{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-size:12px;padding:8px 18px;border-radius:20px;pointer-events:none;display:none;z-index:300;background:rgba(180,40,20,.92);border:1px solid #a02010;color:#ffb0a0}
+#toast{position:absolute;top:14px;left:50%;transform:translateX(-50%);font-size:14px;padding:10px 22px;border-radius:22px;pointer-events:none;display:none;z-index:300;background:rgba(180,40,20,.92);border:1px solid #a02010;color:#ffb0a0}
 #toast.on{display:block;animation:fadeout 3s forwards}
 @keyframes fadeout{0%,65%{opacity:1}100%{opacity:0}}
 #conn-status{position:absolute;top:4px;left:4px;padding:4px 8px;background:rgba(0,0,0,.7);border-radius:4px;font-size:10px;color:#909090;z-index:999}
 #results-overlay{position:absolute;inset:0;background:rgba(0,0,0,.85);display:none;flex-direction:column;align-items:center;justify-content:center;z-index:200}
 #results-overlay.on{display:flex}
-#results-overlay h2{font-size:22px;color:var(--gold);margin-bottom:12px}
-#results-overlay .time{font-size:36px;color:#80ff80;margin-bottom:20px}
-#lore-overlay{position:absolute;inset:0;background:radial-gradient(circle,rgba(0,0,0,.7),rgba(0,0,0,.95));display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:250;padding:20px;cursor:pointer}
-#botbar{background:linear-gradient(0deg,#0a0614,#060310);border-top:2px solid #2a1040;padding:8px 12px;display:flex;align-items:center;gap:8px;flex-shrink:0;min-height:70px}
-#sel-info{flex:1;font-size:11px;color:#6050a0;min-width:0}
-#panel-top{display:flex;gap:5px;flex-wrap:wrap}
-.cmd-btn{background:rgba(40,20,70,.8);border:1.5px solid #3a1860;color:#c0a0f0;border-radius:7px;padding:6px 10px;cursor:pointer;font-family:'Cinzel',serif;font-size:10px;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:52px;transition:border-color .15s,background .15s}
-.cmd-btn:hover{border-color:var(--gold);background:rgba(60,30,90,.9)}
-.cmd-btn:disabled{opacity:.4;cursor:default}
-.cmd-btn .cmd-ic{font-size:18px}
-.cmd-btn .cmd-nm{font-size:8px;font-weight:700;color:#a090d0}
-.cmd-btn .cmd-co{font-size:9px;color:var(--gold)}
-.cmd-btn.sel{border-color:var(--gold);background:rgba(80,50,10,.4)}
-#btn-ready{background:linear-gradient(180deg,rgba(60,160,20,.5),rgba(30,100,10,.4));border:2px solid #3a8020;color:#80ff40;border-radius:8px;padding:8px 16px;cursor:pointer;font-family:'Cinzel',serif;font-size:11px;font-weight:700;white-space:nowrap}
+#results-overlay h2{font-size:26px;color:var(--gold);margin-bottom:14px}
+#results-overlay .time{font-size:44px;color:#80ff80;margin-bottom:22px}
+#lore-overlay{position:absolute;inset:0;background:radial-gradient(circle,rgba(0,0,0,.7),rgba(0,0,0,.95));display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:250;padding:30px}
+#lore-overlay .timer-section{margin-top:20px;display:flex;flex-direction:column;gap:8px;align-items:center;background:rgba(40,30,60,.5);padding:14px 22px;border:1px solid rgba(240,200,60,.3);border-radius:10px}
+#lore-overlay .timer-label{font-size:13px;color:#c0a070}
+#lore-overlay .timer-options{display:flex;gap:6px}
+#lore-overlay .timer-opt{padding:7px 14px;background:rgba(60,40,80,.5);border:2px solid rgba(160,120,200,.3);border-radius:6px;color:#c0a0e0;font-size:13px;font-family:'Cinzel',serif;cursor:pointer;font-weight:700}
+#lore-overlay .timer-opt.sel{border-color:var(--gold);background:rgba(240,200,60,.2);color:var(--gold)}
+/* Bottom command bar - bigger buttons for desktop */
+#botbar{background:linear-gradient(0deg,#0a0614,#060310);border-top:2px solid #2a1040;padding:12px 18px;display:flex;align-items:center;gap:12px;flex-shrink:0;min-height:90px}
+#sel-info{flex:1;font-size:13px;color:#9080c0;min-width:0}
+#panel-top{display:flex;gap:8px;flex-wrap:wrap}
+.cmd-btn{background:rgba(40,20,70,.8);border:2px solid #3a1860;color:#c0a0f0;border-radius:9px;padding:10px 14px;cursor:pointer;font-family:'Cinzel',serif;font-size:12px;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:70px;transition:border-color .15s,background .15s,transform .1s}
+.cmd-btn:hover{border-color:var(--gold);background:rgba(60,30,90,.9);transform:translateY(-1px)}
+.cmd-btn:disabled{opacity:.4;cursor:default;transform:none}
+.cmd-btn .cmd-ic{font-size:24px}
+.cmd-btn .cmd-nm{font-size:11px;font-weight:700;color:#b0a0d8}
+.cmd-btn .cmd-co{font-size:11px;color:var(--gold)}
+.cmd-btn.sel{border-color:var(--gold);background:rgba(80,50,10,.45)}
+#btn-ready{background:linear-gradient(180deg,rgba(60,160,20,.55),rgba(30,100,10,.45));border:2px solid #3a8020;color:#80ff40;border-radius:9px;padding:12px 22px;cursor:pointer;font-family:'Cinzel',serif;font-size:14px;font-weight:800;white-space:nowrap}
 #btn-ready:disabled{opacity:.5;cursor:default}
-#phase-label{font-size:9px;color:var(--green);text-transform:uppercase;letter-spacing:1px}
+#phase-label{font-size:11px;color:var(--green);text-transform:uppercase;letter-spacing:1.5px;font-weight:700}
+/* Mobile/narrow screen: shrink everything */
+@media (max-width: 800px){
+  #topbar{padding:5px 12px;gap:10px}
+  #topbar .res{font-size:13px;gap:4px}
+  #topbar .res .ic{font-size:15px}
+  #round-info{font-size:11px;gap:10px}
+  #round-info b{font-size:13px}
+  #start-timer{font-size:10px;padding:3px 8px}
+  #botbar{padding:8px 10px;gap:6px;min-height:70px}
+  .cmd-btn{padding:6px 10px;min-width:54px;font-size:10px}
+  .cmd-btn .cmd-ic{font-size:18px}
+  .cmd-btn .cmd-nm{font-size:8px}
+  .cmd-btn .cmd-co{font-size:9px}
+  #btn-ready{padding:9px 16px;font-size:11px}
+  #sel-info{font-size:10px}
+}
 </style>
 </head>
 <body>
 <div id="topbar">
-  <div class="res">💰 <span class="gold-val" id="v-gold">0</span></div>
-  <div class="res">🪵 <span class="wood-val" id="v-wood">0</span></div>
-  <div class="res">🪨 <span class="stone-val" id="v-stone">0</span></div>
-  <div id="round-info">Runde <span id="v-round">1</span>/<span id="v-total">10</span></div>
-  <div id="phase-label" style="margin-left:8px">⏳ Platzieren</div>
+  <div class="res"><span class="ic">💰</span><span class="gold-val" id="v-gold">0</span></div>
+  <div class="res"><span class="ic">🪵</span><span class="wood-val" id="v-wood">0</span></div>
+  <div class="res"><span class="ic">🪨</span><span class="stone-val" id="v-stone">0</span></div>
+  <div id="round-info">
+    <span>Runde <b id="v-round">1</b>/<span id="v-total">10</span></span>
+    <span id="phase-label">⏳ Platzieren</span>
+    <span id="start-timer" style="display:none">⏱ <span id="v-start-timer">--</span>s</span>
+  </div>
   <div style="margin-left:8px;font-size:11px;color:#8060a0" id="v-time">—</div>
 </div>
 <div id="canvaswrap">
@@ -66,6 +95,15 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
       <input type="checkbox" id="path-toggle" checked style="accent-color:#f0c840;width:16px;height:16px">
       Pfad-Hervorhebung anzeigen
     </label>
+    <div class="timer-section">
+      <div class="timer-label">⏱ Auto-Start Bauzeit pro Runde</div>
+      <div class="timer-options">
+        <button class="timer-opt" data-timer="30" onclick="selectTimer(30)">30s</button>
+        <button class="timer-opt sel" data-timer="60" onclick="selectTimer(60)">60s</button>
+        <button class="timer-opt" data-timer="90" onclick="selectTimer(90)">90s</button>
+        <button class="timer-opt" data-timer="120" onclick="selectTimer(120)">120s</button>
+      </div>
+    </div>
     <button onclick="startGame()" style="margin-top:18px;background:linear-gradient(180deg,rgba(60,160,20,.6),rgba(30,100,10,.5));border:2px solid #3a8020;color:#80ff40;border-radius:8px;padding:10px 24px;cursor:pointer;font-family:'Cinzel',serif;font-size:14px;font-weight:700">▶ Spiel starten</button>
   </div>
   <div id="results-overlay">
@@ -98,8 +136,8 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
 <script>
 'use strict';
 
-let COLS=35, ROWS=50, TILE=1.0;
-let ENTRY_COL=17;
+let COLS=64, ROWS=36, TILE=1.0;
+let ENTRY_COL=32;
 (function initDims(){
   try{const s=JSON.parse(sessionStorage.getItem('mp_session')||'null');
     const tl=s?.workshopConfig?.ta_layout;
@@ -131,9 +169,9 @@ const skyMat=new THREE.ShaderMaterial({
 });
 scene.add(new THREE.Mesh(new THREE.SphereGeometry(100,32,16),skyMat));
 
-const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 250);
 let camTarget={x:COLS/2, y:0, z:ROWS/2};
-let camAngleH=0, camAngleV=0.7, camDist=30;
+let camAngleH=0, camAngleV=0.7, camDist=Math.max(35, Math.max(COLS, ROWS) * 0.85);
 function updateCamera(){
   cam.position.x=camTarget.x+Math.sin(camAngleH)*Math.cos(camAngleV)*camDist;
   cam.position.y=Math.sin(camAngleV)*camDist;
@@ -146,8 +184,8 @@ scene.add(new THREE.AmbientLight(0x303048,1.5));
 const sun=new THREE.DirectionalLight(0xffa060,1.8);
 sun.position.set(COLS+10,25,-10); sun.castShadow=true;
 sun.shadow.mapSize.set(1024,1024);
-sun.shadow.camera.left=-15; sun.shadow.camera.right=50;
-sun.shadow.camera.top=70; sun.shadow.camera.bottom=-10;
+sun.shadow.camera.left=-15; sun.shadow.camera.right=80;
+sun.shadow.camera.top=55; sun.shadow.camera.bottom=-10;
 sun.shadow.camera.near=0.1; sun.shadow.camera.far=200;
 sun.shadow.bias=-0.0005;
 scene.add(sun);
@@ -2110,12 +2148,54 @@ function showPath(path){
     scene.add(m); pathTiles.push(m);
   }
 }
+// Round build-timer settings (auto-start when expired)
+let buildTimerSeconds = 60;        // user-chosen duration
+let buildTimerRemaining = 0;       // current countdown
+let buildTimerActive = false;
+let buildTimerLastPhase = null;
+
+function selectTimer(seconds){
+  buildTimerSeconds = seconds;
+  document.querySelectorAll('#lore-overlay .timer-opt').forEach(b=>{
+    b.classList.toggle('sel', +b.dataset.timer === seconds);
+  });
+}
+
 function startGame(){
   const tgl = document.getElementById('path-toggle');
   showPathHighlight = tgl ? tgl.checked : true;
   document.getElementById('lore-overlay').style.display='none';
   // Re-render existing path with new visibility
   if(GS.myPath) showPath(GS.myPath);
+}
+
+function tickBuildTimer(){
+  // Show timer only during placing phase; reset on phase change
+  if(GS.phase !== buildTimerLastPhase){
+    if(GS.phase === 'placing'){
+      // entered placing phase — reset countdown
+      buildTimerRemaining = buildTimerSeconds;
+      buildTimerActive = true;
+    } else {
+      buildTimerActive = false;
+    }
+    buildTimerLastPhase = GS.phase;
+  }
+  const el = document.getElementById('start-timer');
+  const valEl = document.getElementById('v-start-timer');
+  if(buildTimerActive && GS.phase === 'placing'){
+    if(el) el.style.display = '';
+    if(valEl) valEl.textContent = Math.max(0, Math.ceil(buildTimerRemaining));
+    // Decrement by frame delta
+    buildTimerRemaining -= 1/60;  // approximate (animate runs at ~60fps)
+    if(buildTimerRemaining <= 0 && buildTimerActive){
+      buildTimerActive = false;
+      // Auto-fire ready
+      sendReady();
+    }
+  } else {
+    if(el) el.style.display = 'none';
+  }
 }
 
 let ghostMesh=null;
@@ -2180,7 +2260,7 @@ canvas3d.addEventListener('click',e=>{
 });
 canvas3d.addEventListener('contextmenu',e=>{e.preventDefault();});
 canvas3d.addEventListener('wheel',e=>{
-  camDist=Math.max(8,Math.min(80,camDist+e.deltaY*0.05));
+  camDist=Math.max(8,Math.min(150,camDist+e.deltaY*0.05));
   updateCamera(); e.preventDefault();
 },{passive:false});
 
@@ -2539,6 +2619,8 @@ function animate(){
   }
   // Always update projectiles (they may outlive the dragon visibility)
   updateProjectiles();
+  // Build-timer countdown (auto-start round when expired)
+  tickBuildTimer();
   renderer.render(scene,cam);
 }
 animate();

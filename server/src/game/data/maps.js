@@ -57,13 +57,13 @@ const BUILTIN_MAPS = [
     id: 'builtin_ta_spiral_3d',
     title: 'Spirale 3D', icon: '🌐', game_mode: 'time_attack', difficulty: 'normal',
     description: 'Time Attack in 3D — Three.js Low-Poly Renderer',
-    cols: 35, rows: 50, renderer: 'threejs',
+    cols: 64, rows: 36, renderer: 'threejs',
     available_races: ['standard'],
     config: {
       difficulty: 'normal', bg_style: 'grass', renderer: 'threejs',
       available_races: ['standard'],
       ta_layout: {
-        cols: 35, rows: 50, rounds: 10,
+        cols: 64, rows: 36, rounds: 10,
         gold_per_round: 12, wood_per_round: 3, stone_per_round: 1,
         prebuilt_towers: [], prebuilt_sequences: TA_SEQUENCES,
         round_selection: 'random',
