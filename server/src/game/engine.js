@@ -1199,17 +1199,29 @@ function getVsSnapshot(gs, forUserId) {
 function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = {}) {
   const layout = workshopConfig?.ta_layout || {};
   const cols = layout.cols || 35, rows = layout.rows || 50;
-  const taEntryCol = Math.floor(cols / 2);
+  // Entry/Exit are NOW horizontal: left edge → right edge, fixed at middle row
+  const taEntryRow = Math.floor(rows / 2);
+  // Backwards compat alias (legacy refs may use taEntryCol)
+  const taEntryCol = taEntryRow;
 
-  // TA-specific BFS pathfinder using the actual TA grid size
+  // TA-specific Dijkstra pathfinder for left→right traversal
   function findTaPath(towers) {
-    // ALL towers block path with uniform 2x2 footprint (wall, slow, stun)
-    const blocked = new Set((towers || []).flatMap(t => [
-      `${t.row},${t.col}`, `${t.row},${t.col+1}`,
-      `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
-    ]));
-    // Dijkstra with 8 directions for natural diagonal paths.
-    // Cardinal step cost = 10, diagonal = 14 (~sqrt(2)*10).
+    // Walls and stun towers block path with their 2x2 footprint.
+    // Slow towers (Eisscholle) are PASSABLE — the dragon walks through them and gets slowed.
+    const blocked = new Set((towers || [])
+      .filter(t => t.type !== 'slow_block' && t.type !== 'passive' && t.type !== 'passive_tower')
+      .flatMap(t => [
+        `${t.row},${t.col}`, `${t.row},${t.col+1}`,
+        `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
+      ]));
+    // Slowed cells: walking these costs more (dragon prefers to go around if cheap)
+    // Cost factor reflects the 0.45 speed factor → 2.2x the time
+    const slowed = new Set((towers || [])
+      .filter(t => t.type === 'slow_block' || t.type === 'passive' || t.type === 'passive_tower')
+      .flatMap(t => [
+        `${t.row},${t.col}`, `${t.row},${t.col+1}`,
+        `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
+      ]));
     const dirs = [
       [-1,-1,14],[-1,0,10],[-1,1,14],
       [0,-1,10],         [0,1,10],
@@ -1217,10 +1229,10 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
     ];
     const dist = new Map();
     const par  = new Map();
-    const startK = `0,${taEntryCol}`;
+    // START: leftmost col (c=0) at taEntryRow
+    const startK = `${taEntryRow},0`;
     dist.set(startK, 0); par.set(startK, null);
-    // Simple priority queue by distance (binary heap impl):
-    const heap = [[0, 0, taEntryCol]];
+    const heap = [[0, taEntryRow, 0]];
     function hpush(item){
       heap.push(item);
       let i = heap.length - 1;
@@ -1252,7 +1264,8 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
       const [d, r, c] = hpop();
       const k = `${r},${c}`;
       if(d > (dist.get(k) ?? Infinity)) continue;
-      if(r === rows - 1 && c === taEntryCol){
+      // GOAL: rightmost col (c=cols-1) at taEntryRow
+      if(c === cols - 1 && r === taEntryRow){
         const path = []; let kk = k;
         while(kk !== null){
           const [pr, pc] = kk.split(',').map(Number);
@@ -1270,7 +1283,9 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
         if(dr !== 0 && dc !== 0){
           if(blocked.has(`${r+dr},${c}`) && blocked.has(`${r},${c+dc}`)) continue;
         }
-        const nd = d + cost;
+        // Slow tiles cost 1.2x — small penalty so dragon walks through unless detour is very cheap
+        const stepCost = slowed.has(nk) ? Math.round(cost * 1.2) : cost;
+        const nd = d + stepCost;
         if(nd < (dist.get(nk) ?? Infinity)){
           dist.set(nk, nd);
           par.set(nk, k);
@@ -1322,7 +1337,7 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
 
   return {
     sessionId, mode: 'time_attack',
-    cols, rows, taEntryCol, findTaPath,
+    cols, rows, taEntryCol, taEntryRow, findTaPath,
     roundSequence,
     players: playerState,
     playerMaps, workshopConfig,
@@ -1410,18 +1425,18 @@ function tickTimeAttack(gs) {
     if (!m.stunUntil) m.stunUntil = 0;
     for (const t of pm.towers) {
       const ty = t.type;
-      // Aura cells: [row-1..row+2] × [col-1..col+2] (2-tile radius around 2x2 footprint)
+      // For slow: aura is ONLY the 2x2 footprint (minion must walk THROUGH the ice floe)
+      const inFootprint = mrow >= t.row && mrow <= t.row+1 && mcol >= t.col && mcol <= t.col+1;
+      // For stun: 2-tile radius around 2x2 footprint
       const inAura2 = mrow >= t.row-1 && mrow <= t.row+2 && mcol >= t.col-1 && mcol <= t.col+2;
       if (ty === 'slow_block' || ty === 'passive' || ty === 'passive_tower') {
-        if (inAura2) {
+        if (inFootprint) {
           inSlow = true;
-          // Track last "fire" for animation cooldown
           if (!t._lastSlow || (nowSec - t._lastSlow) > SLOW_COOLDOWN) {
             t._lastSlow = nowSec;
           }
         }
       } else if (ty === 'stun_block' || ty === 'stun_tower' || ty === 'freeze_block') {
-        // Stun: trigger when minion enters aura, then cooldown before re-trigger
         if (inAura2) {
           if (!t._lastStun || (nowSec - t._lastStun) > STUN_COOLDOWN) {
             t._lastStun = nowSec;
@@ -1433,7 +1448,7 @@ function tickTimeAttack(gs) {
     const stunned = nowSec < m.stunUntil;
     m.stunned = stunned;
     m.slowFactor = stunned ? 0 : (inSlow ? SLOW_FACTOR : 1);
-    m.spd = (m.baseSpd || 5.25) * m.slowFactor;
+    m.spd = (m.baseSpd || 12) * m.slowFactor;
     const step = m.spd * TILE * dt;
     if (step >= dist) {
       m.px=tx; m.py=ty; m.pathIdx++;
@@ -1462,11 +1477,11 @@ function startRacing(gs) {
       pm.minion = null;
       continue;
     }
-    const _taEntry = gs.taEntryCol !== undefined ? gs.taEntryCol : Math.floor((gs.cols||15)/2);
+    const _taEntryRow = gs.taEntryRow !== undefined ? gs.taEntryRow : Math.floor((gs.rows||15)/2);
     pm.minion = {
       id:`minion_${uid}`, owner:uid,
-      px: _taEntry*TILE+TILE/2, py: TILE/2,
-      pathIdx: 1, baseSpd: 5.25, spd: 5.25, hp: 100, maxHp: 100,
+      px: TILE/2, py: _taEntryRow*TILE+TILE/2,  // start at left edge
+      pathIdx: 1, baseSpd: 12, spd: 12, hp: 100, maxHp: 100,
       slowedUntil: 0, slowFactor: 1,
       reached:false, escaped:false, time:null,
     };
@@ -1490,7 +1505,7 @@ function endRound(gs) {
 
   if (gs.round >= gs.totalRounds) { endGame(gs, true); return; }
   // Schedule auto-transition to placing phase after 5s
-  gs._nextRoundAt = Date.now() + 4000;
+  gs._nextRoundAt = Date.now() + 5000;
 }
 
 function actionTaPlaceTower(gs, userId, data) {
@@ -1522,11 +1537,12 @@ function actionTaPlaceTower(gs, userId, data) {
   }
   // TA boundary check
   const taCols = gs.cols || 15, taRows = gs.rows || 20;
-  const taEntry = gs.taEntryCol || Math.floor(taCols/2);
+  const taEntryRow = (gs.taEntryRow !== undefined) ? gs.taEntryRow : (gs.taEntryCol || Math.floor(taRows/2));
   if (row < 0 || row+1 >= taRows || col < 0 || col+1 >= taCols) return { ok:false, err:'blocked' };
   const footprint = [[row,col],[row,col+1],[row+1,col],[row+1,col+1]];
   for (const [rr,cc] of footprint) {
-    if ((rr === 0 || rr === taRows-1) && cc === taEntry) return { ok:false, err:'blocked' };
+    // Block entry (col=0) and exit (col=taCols-1) at entry row to keep portals clear
+    if (rr === taEntryRow && (cc === 0 || cc === taCols-1)) return { ok:false, err:'blocked' };
   }
   // Collision: only direct footprint overlap (NO slow-aura placement block)
   for (const t of pm.towers) {
@@ -1535,7 +1551,7 @@ function actionTaPlaceTower(gs, userId, data) {
       for (const [tr2,tc2] of tr)
         if (rr===tr2 && cc===tc2) return { ok:false, err:'blocked' };
   }
-  const newPath = gs.findTaPath([...pm.towers, {row,col}]);
+  const newPath = gs.findTaPath([...pm.towers, {row,col,type}]);
   if (!newPath) return { ok:false, err:'blocks_path' };
 
   p.gold  -= cost.gold;
@@ -1587,6 +1603,7 @@ function getTaSnapshot(gs, forUserId) {
     totalRounds: gs.totalRounds, gameOver: gs.gameOver,
     cols: gs.cols, rows: gs.rows,
     entryCol: gs.taEntryCol,
+    entryRow: gs.taEntryRow,
     countdown: remaining, // null = no auto-start
     players: gs.players,
     myTowers: pm?.towers || [],

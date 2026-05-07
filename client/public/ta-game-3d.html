@@ -76,8 +76,8 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
     <span>Runde <b id="v-round">1</b>/<span id="v-total">10</span></span>
     <span id="phase-label">⏳ Platzieren</span>
     <span id="start-timer" style="display:none">⏱ <span id="v-start-timer">--</span>s</span>
+    <span id="live-time" style="display:none;color:#80ff80;background:rgba(60,160,20,.15);padding:4px 10px;border-radius:6px;border:1px solid rgba(80,200,40,.4);font-weight:700">🐉 <span id="v-live-time">0.00s</span></span>
   </div>
-  <div style="margin-left:8px;font-size:11px;color:#8060a0" id="v-time">—</div>
 </div>
 <div id="canvaswrap">
   <canvas id="threecanvas"></canvas>
@@ -108,8 +108,11 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:'Cinzel',ser
   </div>
   <div id="results-overlay">
     <h2 id="res-title">Runde beendet</h2>
+    <div id="res-winner" style="font-size:18px;color:#ffd060;margin-bottom:8px;font-weight:700"></div>
     <div class="time" id="res-time">—</div>
+    <div id="res-leaderboard" style="display:flex;flex-direction:column;gap:4px;min-width:280px;max-width:380px;margin-bottom:14px"></div>
     <div style="font-size:12px;color:#8070a0" id="res-rank"></div>
+    <div id="res-countdown" style="font-size:11px;color:#80c0ff;margin-top:14px"></div>
   </div>
 </div>
 <div id="botbar">
@@ -568,8 +571,10 @@ function addPortal(r,c,isEnd){
   scene.add(group);
   portalAnimated.push({portal,beam,pl,group,isEnd});
 }
-addPortal(0,ENTRY_COL,false);
-addPortal(ROWS-1,ENTRY_COL,true);
+// Entry/exit are at LEFT and RIGHT edges (left→right traversal)
+let ENTRY_ROW = Math.floor(ROWS/2);
+addPortal(ENTRY_ROW, 0, false);          // entry: left edge
+addPortal(ENTRY_ROW, COLS-1, true);      // exit: right edge
 
 // Corner towers
 function addCornerTower(x,z){
@@ -611,10 +616,11 @@ function makeTowerMesh(type,prebuilt){
   const isWall = type==='wall_block'||type==='wall'||type==='wall_tower';
   const isStun = type==='stun_block'||type==='stun_tower'||type==='freeze_block';
   const isSlow = !isWall && !isStun;
-  // Aura ring for slow/stun towers (2-tile radius)
-  // Uses CACHED geo+mat (created once globally) to avoid GC pressure
-  if(isSlow || isStun){
-    const matSet = isStun ? AURA_STUN : AURA_SLOW;
+  // Aura ring for STUN towers only (2-tile radius around the 2x2 footprint).
+  // Slow towers (Eisscholle) are their own visual — the ice floe IS the aura,
+  // and only its 2x2 footprint slows the dragon.
+  if(isStun){
+    const matSet = AURA_STUN;
     const aura = new THREE.Mesh(AURA_DISC_GEO, matSet.disc);
     aura.rotation.x = -Math.PI/2;
     aura.position.y = 0.04;
@@ -905,121 +911,117 @@ function makeTowerMesh(type,prebuilt){
       group.add(star);
     }
   } else {
-    // FROST CUBE — large comic-style transparent ice block
+    // EISSCHOLLE — flat 2×2 ice floe sitting on the ground.
+    // The dragon walks THROUGH/ON this and gets slowed only on the footprint cells.
+    // Visually low-profile (~0.2 height) so the dragon doesn't need to detour.
     const iceMainMat = new THREE.MeshPhysicalMaterial({
-      color: 0xb0e0ff,
+      color: 0xc0e8ff,
       transparent: true,
-      opacity: 0.55,
-      roughness: 0.05,
+      opacity: 0.65,
+      roughness: 0.08,
       metalness: 0.0,
-      transmission: 0.6,
-      ior: 1.31,                  // approximation of ice
-      thickness: 0.5,
+      transmission: 0.5,
+      ior: 1.31,
+      thickness: 0.3,
       clearcoat: 1.0,
-      clearcoatRoughness: 0.02,
+      clearcoatRoughness: 0.05,
       emissive: 0x4080ff,
-      emissiveIntensity: 0.15,
+      emissiveIntensity: 0.18,
     });
     
-    // === MAIN ICE CUBE — slightly bevelled with rounded edges ===
-    // Use a slightly chamfered box (bevel via merged geometry simulated by smaller inset)
-    const cube = new THREE.Mesh(
-      new THREE.BoxGeometry(1.5, 1.5, 1.5, 2, 2, 2),
+    // === MAIN FLOE — flat slab covering the full 2×2 footprint (1.95×0.2×1.95) ===
+    const slab = new THREE.Mesh(
+      new THREE.BoxGeometry(1.95, 0.2, 1.95, 3, 1, 3),
       iceMainMat
     );
-    cube.position.y = 0.85;
-    cube.castShadow = true;
-    cube.receiveShadow = true;
-    group.add(cube);
+    slab.position.y = 0.1;
+    slab.castShadow = true;
+    slab.receiveShadow = true;
+    group.add(slab);
     
-    // === INNER CORE (denser cyan glow center, like frozen heart) ===
-    const innerCore = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.7, 0.7),
-      new THREE.MeshBasicMaterial({
-        color: 0x60a0ff, transparent: true, opacity: 0.4, depthWrite: false
-      })
+    // === IRREGULAR EDGE CHUNKS (broken ice look — comic style irregular border) ===
+    const chunkMat = iceMainMat;
+    // Place 8-12 small flat chunks around the edge for an organic broken-ice border
+    for(let i=0;i<10;i++){
+      const ang = (i / 10) * Math.PI * 2;
+      const r = 1.05 + Math.random() * 0.15;
+      const sz = 0.18 + Math.random() * 0.18;
+      const chunk = new THREE.Mesh(
+        new THREE.BoxGeometry(sz, 0.16 + Math.random()*0.1, sz, 1, 1, 1),
+        chunkMat
+      );
+      chunk.position.set(Math.cos(ang) * r, 0.07 + Math.random()*0.05, Math.sin(ang) * r);
+      chunk.rotation.y = Math.random() * Math.PI * 2;
+      chunk.rotation.x = (Math.random() - 0.5) * 0.2;
+      chunk.castShadow = true;
+      chunk.receiveShadow = true;
+      group.add(chunk);
+    }
+    
+    // === SURFACE CRACKS (etched darker lines on the floe surface) ===
+    const crackMat = new THREE.LineBasicMaterial({color: 0x4080a0, transparent: true, opacity: 0.7});
+    for(let i=0;i<6;i++){
+      const points = [];
+      let x = (Math.random() - 0.5) * 1.6;
+      let z = (Math.random() - 0.5) * 1.6;
+      points.push(new THREE.Vector3(x, 0.21, z));
+      for(let j=0;j<3;j++){
+        x += (Math.random() - 0.5) * 0.5;
+        z += (Math.random() - 0.5) * 0.5;
+        x = Math.max(-0.95, Math.min(0.95, x));
+        z = Math.max(-0.95, Math.min(0.95, z));
+        points.push(new THREE.Vector3(x, 0.21, z));
+      }
+      const geo = new THREE.BufferGeometry().setFromPoints(points);
+      const crack = new THREE.Line(geo, crackMat);
+      group.add(crack);
+    }
+    
+    // === EDGE OUTLINE (comic-style border around the slab) ===
+    const edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.95, 0.2, 1.95));
+    const edges = new THREE.LineSegments(edgeGeo,
+      new THREE.LineBasicMaterial({color: 0x103060, transparent: true, opacity: 0.85})
     );
-    innerCore.position.y = 0.85;
-    innerCore.userData.isMist = true; // animate via existing mist hook
-    group.add(innerCore);
-    
-    // === EDGE OUTLINES (comic-book black borders) ===
-    const edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.5, 1.5, 1.5));
-    const edgeMat = new THREE.LineBasicMaterial({color: 0x103060, linewidth: 2});
-    const edges = new THREE.LineSegments(edgeGeo, edgeMat);
-    edges.position.y = 0.85;
+    edges.position.y = 0.1;
     group.add(edges);
     
-    // Slightly larger second edge layer for thickness illusion
-    const edgeGeo2 = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.52, 1.52, 1.52));
-    const edges2 = new THREE.LineSegments(edgeGeo2,
-      new THREE.LineBasicMaterial({color: 0x4080c0, transparent: true, opacity: 0.6})
-    );
-    edges2.position.y = 0.85;
-    group.add(edges2);
-    
-    // === ICE CRYSTAL SPIKES on faces (comic shards growing out) ===
+    // === SMALL ICE SHARDS sticking up from the surface (comic spikes) ===
     const shardMat = new THREE.MeshStandardMaterial({
-      color: 0xc0e8ff, transparent: true, opacity: 0.85,
+      color: 0xe0f0ff, transparent: true, opacity: 0.85,
       roughness: 0.05, metalness: 0.2,
-      emissive: 0x4080ff, emissiveIntensity: 0.3
+      emissive: 0x4080ff, emissiveIntensity: 0.4
     });
-    // 3 shards on top face
-    for(let i=0;i<3;i++){
+    // 4-6 small shards distributed across the slab surface
+    for(let i=0;i<5;i++){
       const shard = new THREE.Mesh(
-        new THREE.ConeGeometry(0.08 + Math.random()*0.04, 0.3 + Math.random()*0.2, 5),
+        new THREE.ConeGeometry(0.06 + Math.random()*0.04, 0.25 + Math.random()*0.2, 5),
         shardMat
       );
-      const a = (i/3) * Math.PI * 2 + Math.random();
-      shard.position.set(Math.cos(a)*0.4, 1.6 + Math.random()*0.1, Math.sin(a)*0.4);
-      shard.rotation.x = (Math.random()-0.5) * 0.4;
-      shard.rotation.z = (Math.random()-0.5) * 0.4;
-      shard.castShadow = true;
-      group.add(shard);
-    }
-    // Side shards (sticking out horizontally)
-    for(let i=0;i<4;i++){
-      const ang = i * Math.PI/2;
-      const shard = new THREE.Mesh(
-        new THREE.ConeGeometry(0.07, 0.32, 5), shardMat
-      );
       shard.position.set(
-        Math.cos(ang)*0.85, 0.7 + Math.random()*0.4, Math.sin(ang)*0.85
+        (Math.random() - 0.5) * 1.5,
+        0.3 + Math.random() * 0.15,
+        (Math.random() - 0.5) * 1.5
       );
-      shard.lookAt(
-        Math.cos(ang)*5, 0.85, Math.sin(ang)*5
-      );
-      shard.rotateX(Math.PI/2);
+      shard.rotation.z = (Math.random() - 0.5) * 0.3;
       shard.castShadow = true;
       group.add(shard);
     }
     
-    // === SNOW BASE PUFF (foggy snowdrift around bottom) ===
-    const snowMat = new THREE.MeshBasicMaterial({
-      color: 0xe0f0ff, transparent: true, opacity: 0.4, depthWrite: false
-    });
-    const snowBase = new THREE.Mesh(
-      new THREE.SphereGeometry(0.95, 16, 8), snowMat
-    );
-    snowBase.scale.y = 0.25;
-    snowBase.position.y = 0.05;
-    group.add(snowBase);
-    
-    // === ORBITING ICE CRYSTALS (existing mechanic — keeps animation hook) ===
+    // === ORBITING ICE CRYSTALS (low profile, hover just above the slab) ===
     const orbitMat = new THREE.MeshStandardMaterial({
       color: 0xa0e0ff, transparent: true, opacity: 0.85,
       roughness: 0.05, metalness: 0.3,
-      emissive: 0x4080ff, emissiveIntensity: 0.5
+      emissive: 0x4080ff, emissiveIntensity: 0.6
     });
     const iceGroup = new THREE.Group();
     iceGroup.userData.isIce = true;
-    for(let i=0; i<8; i++){
+    for(let i=0; i<6; i++){
       const cryst = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.09 + Math.random()*0.04, 0), orbitMat
+        new THREE.OctahedronGeometry(0.07 + Math.random()*0.03, 0), orbitMat
       );
-      const ang = (i/8) * Math.PI * 2;
-      const rad = 1.0 + Math.random() * 0.2;
-      cryst.position.set(Math.cos(ang)*rad, 0.7 + Math.random()*1.2, Math.sin(ang)*rad);
+      const ang = (i/6) * Math.PI * 2;
+      const rad = 0.7 + Math.random() * 0.2;
+      cryst.position.set(Math.cos(ang)*rad, 0.5 + Math.random()*0.3, Math.sin(ang)*rad);
       cryst.userData = {
         baseY: cryst.position.y, ang: ang, rad: rad, rot: Math.random()*2
       };
@@ -1027,27 +1029,27 @@ function makeTowerMesh(type,prebuilt){
     }
     group.add(iceGroup);
     
-    // === MIST GLOW (transparent fog at base) — kept for existing animation ===
+    // === MIST GLOW above the slab (cold breath) ===
     const mistMat = new THREE.MeshBasicMaterial({
       color: 0xa0c8ff, transparent: true, opacity: 0.18, depthWrite: false
     });
-    const mist = new THREE.Mesh(new THREE.SphereGeometry(1.2, 24, 12), mistMat);
-    mist.scale.y = 0.25;
-    mist.position.y = 0.1;
+    const mist = new THREE.Mesh(new THREE.SphereGeometry(1.0, 24, 12), mistMat);
+    mist.scale.y = 0.4;
+    mist.position.y = 0.45;
     mist.userData.isMist = true;
     group.add(mist);
     
-    // Cool blue point light radiating from inside
-    const icePl = new THREE.PointLight(0x60a0ff, 1.3, 4, 2);
-    icePl.position.set(0, 1.0, 0);
+    // === COOL BLUE LIGHT — tinted glow from the floe ===
+    const icePl = new THREE.PointLight(0x60a0ff, 0.9, 4, 2);
+    icePl.position.set(0, 0.5, 0);
     group.add(icePl);
     
     if(prebuilt){
       const star = new THREE.Mesh(
-        new THREE.SphereGeometry(0.15, 8, 8),
+        new THREE.SphereGeometry(0.13, 8, 8),
         new THREE.MeshLambertMaterial({color:0xf0c020, emissive:0xc09000, emissiveIntensity:.5})
       );
-      star.position.set(0.8, 2.2, 0);
+      star.position.set(0.7, 0.6, 0);
       group.add(star);
     }
   }
@@ -2130,7 +2132,17 @@ function ensureDragon(){
 }
 function removeDragon(){
   // Hide instead of disposing — saves recreating ~70 meshes every round
-  if(dragonMesh){ dragonMesh.visible = false; }
+  if(dragonMesh){
+    dragonMesh.visible = false;
+    // Clear interpolation state so the next round starts cleanly (no jump-from-stale-pos)
+    const ud = dragonMesh.userData;
+    ud._lastTargetX = undefined;
+    ud._lastTargetZ = undefined;
+    ud._prevTargetX = undefined;
+    ud._prevTargetZ = undefined;
+    ud._targetRotY = undefined;
+    ud._curRotY = undefined;
+  }
 }
 
 // Path visualization — toggleable
@@ -2153,6 +2165,7 @@ let buildTimerSeconds = 60;        // user-chosen duration
 let buildTimerRemaining = 0;       // current countdown
 let buildTimerActive = false;
 let buildTimerLastPhase = null;
+let racingStartedAt = 0;            // when racing phase began (for live timer)
 
 function selectTimer(seconds){
   buildTimerSeconds = seconds;
@@ -2170,31 +2183,63 @@ function startGame(){
 }
 
 function tickBuildTimer(){
-  // Show timer only during placing phase; reset on phase change
+  // Phase-change handler: clean reset for each phase
   if(GS.phase !== buildTimerLastPhase){
     if(GS.phase === 'placing'){
-      // entered placing phase — reset countdown
+      // Entered placing — restart countdown from full duration
       buildTimerRemaining = buildTimerSeconds;
       buildTimerActive = true;
-    } else {
+      // Hide results overlay if still visible from previous round
+      hideResults();
+    } else if(GS.phase === 'racing'){
+      // Entered racing — stop countdown completely, mark race-start
       buildTimerActive = false;
+      buildTimerRemaining = 0;
+      racingStartedAt = performance.now();
+      // Hide results overlay (though it shouldn't be on between rounds)
+      hideResults();
+    } else {
+      // Entered results or anything else — fully stop
+      buildTimerActive = false;
+      buildTimerRemaining = 0;
     }
     buildTimerLastPhase = GS.phase;
   }
-  const el = document.getElementById('start-timer');
-  const valEl = document.getElementById('v-start-timer');
+  
+  const buildEl = document.getElementById('start-timer');
+  const buildVal = document.getElementById('v-start-timer');
+  const liveEl = document.getElementById('live-time');
+  const liveVal = document.getElementById('v-live-time');
+  
+  // BUILD COUNTDOWN — only during placing
   if(buildTimerActive && GS.phase === 'placing'){
-    if(el) el.style.display = '';
-    if(valEl) valEl.textContent = Math.max(0, Math.ceil(buildTimerRemaining));
-    // Decrement by frame delta
-    buildTimerRemaining -= 1/60;  // approximate (animate runs at ~60fps)
+    if(buildEl) buildEl.style.display = '';
+    if(buildVal) buildVal.textContent = Math.max(0, Math.ceil(buildTimerRemaining));
+    buildTimerRemaining -= 1/60;  // approx 60fps
     if(buildTimerRemaining <= 0 && buildTimerActive){
       buildTimerActive = false;
-      // Auto-fire ready
       sendReady();
     }
   } else {
-    if(el) el.style.display = 'none';
+    if(buildEl) buildEl.style.display = 'none';
+  }
+  
+  // LIVE RACE TIME — only during racing
+  if(GS.phase === 'racing' && racingStartedAt){
+    if(liveEl) liveEl.style.display = '';
+    const me = GS.players?.[myUserId];
+    let displayTime;
+    if(me?.lastTime != null){
+      // Already finished — show fixed final time
+      displayTime = me.lastTime.toFixed(2);
+    } else {
+      // Still running — count up
+      const elapsed = (performance.now() - racingStartedAt) / 1000;
+      displayTime = elapsed.toFixed(2);
+    }
+    if(liveVal) liveVal.textContent = displayTime + 's';
+  } else {
+    if(liveEl) liveEl.style.display = 'none';
   }
 }
 
@@ -2327,15 +2372,84 @@ function syncTowers(towers){
   lastTowerIds=newIds;
 }
 
-function showResults(round,players,isLast){
-  const ov=document.getElementById('results-overlay');
-  const me=players?.[myUserId];
-  const t=me?.lastTime;
-  document.getElementById('res-title').textContent=isLast?'Spiel beendet!':'Runde '+round+' beendet';
-  document.getElementById('res-time').textContent=t?t.toFixed(2)+'s':'—';
-  document.getElementById('res-rank').textContent='Punkte: '+(me?.score||0);
-  ov.className='on';
-  if(!isLast) setTimeout(()=>{ov.className='';},3500);
+function showResults(round, players, isLast){
+  const ov = document.getElementById('results-overlay');
+  const me = players?.[myUserId];
+  
+  // Build sorted list of times (asc, no time at the end)
+  const list = Object.values(players || {})
+    .map(p => ({
+      uid: p.userId,
+      username: p.username || 'Player',
+      lastTime: p.lastTime,
+      score: p.score || 0,
+    }))
+    .sort((a,b) => {
+      if(a.lastTime == null && b.lastTime == null) return 0;
+      if(a.lastTime == null) return 1;
+      if(b.lastTime == null) return -1;
+      return a.lastTime - b.lastTime;
+    });
+  
+  // Title + winner banner
+  document.getElementById('res-title').textContent = isLast ? '🏆 Spiel beendet!' : 'Runde ' + round + ' beendet';
+  const winner = list[0];
+  document.getElementById('res-winner').textContent = winner && winner.lastTime != null
+    ? '🏆 Sieger: ' + winner.username + ' — ' + winner.lastTime.toFixed(2) + 's'
+    : '';
+  
+  // Personal time (the player's own)
+  document.getElementById('res-time').textContent = (me && me.lastTime != null) ? me.lastTime.toFixed(2) + 's' : '—';
+  
+  // Leaderboard table
+  const lbEl = document.getElementById('res-leaderboard');
+  lbEl.innerHTML = '';
+  list.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:rgba(40,30,60,'+(p.uid===myUserId?'.7':'.4')+');border:1px solid '+(p.uid===myUserId?'rgba(240,200,60,.6)':'rgba(120,100,160,.3)')+';border-radius:6px;font-size:13px';
+    const medal = ['🥇','🥈','🥉'][i] || `${i+1}.`;
+    row.innerHTML = `
+      <span style="color:${p.uid===myUserId?'#ffd060':'#c0a0e0'}">${medal} ${p.username}</span>
+      <span style="color:${p.lastTime==null?'#a06060':'#80ff80'};font-family:monospace">${p.lastTime==null ? 'DNF' : p.lastTime.toFixed(2)+'s'}</span>
+    `;
+    lbEl.appendChild(row);
+  });
+  
+  // Personal score
+  document.getElementById('res-rank').textContent = 'Punkte: ' + (me?.score || 0);
+  
+  // Show overlay
+  ov.className = 'on';
+  
+  // 5-second countdown for next round
+  const cdEl = document.getElementById('res-countdown');
+  if(!isLast){
+    let rem = 5;
+    cdEl.textContent = `⏱ Nächste Runde in ${rem}s…`;
+    if(window._resCountdownInterval) clearInterval(window._resCountdownInterval);
+    window._resCountdownInterval = setInterval(() => {
+      rem--;
+      if(rem <= 0){
+        cdEl.textContent = '🐉 Starte…';
+        clearInterval(window._resCountdownInterval);
+        window._resCountdownInterval = null;
+      } else {
+        cdEl.textContent = `⏱ Nächste Runde in ${rem}s…`;
+      }
+    }, 1000);
+  } else {
+    cdEl.textContent = '';
+  }
+}
+
+// Hide results overlay when phase changes back to placing
+function hideResults(){
+  const ov = document.getElementById('results-overlay');
+  if(ov) ov.className = '';
+  if(window._resCountdownInterval){
+    clearInterval(window._resCountdownInterval);
+    window._resCountdownInterval = null;
+  }
 }
 
 function connect(){
@@ -2399,6 +2513,7 @@ function connect(){
     if(snap.cols&&snap.cols!==COLS){COLS=snap.cols;}
     if(snap.rows&&snap.rows!==ROWS){ROWS=snap.rows;}
     if(snap.entryCol!==undefined) ENTRY_COL=snap.entryCol;
+    if(snap.entryRow!==undefined) ENTRY_ROW=snap.entryRow;
     if(prevPhase!==snap.phase&&snap.phase==='placing'){
       clearAllTowerMeshes();
       lastTowerIds=new Set();
@@ -2414,30 +2529,47 @@ function connect(){
       ensureDragon();
       // Server sends minion.px/py in pixel coords (TILE_SERVER=32), convert to 3D world units
       const SRV_TILE = 32;
-      dragonMesh.position.set(minion.px / SRV_TILE, 1.4, minion.py / SRV_TILE);
+      const targetX = minion.px / SRV_TILE;
+      const targetZ = minion.py / SRV_TILE;
+      const now = performance.now();
+      // Track interpolation state: previous and target with timestamps
+      const ud = dragonMesh.userData;
+      if(ud._lastTargetX === undefined){
+        // First snapshot: snap to position immediately, no interpolation
+        dragonMesh.position.set(targetX, 1.4, targetZ);
+        ud._lastTargetX = targetX;
+        ud._lastTargetZ = targetZ;
+        ud._lastTargetTime = now;
+        ud._prevTargetX = targetX;
+        ud._prevTargetZ = targetZ;
+      } else {
+        // New target → previous = old target, target = new
+        ud._prevTargetX = ud._lastTargetX;
+        ud._prevTargetZ = ud._lastTargetZ;
+        ud._lastTargetX = targetX;
+        ud._lastTargetZ = targetZ;
+        // Snapshot interval: server ticks at ~16-20Hz = 50-62ms. Estimate from last gap.
+        const dt = now - ud._lastTargetTime;
+        ud._snapInterval = Math.max(40, Math.min(150, dt));  // clamp to sane range
+        ud._lastTargetTime = now;
+      }
       if(snap.myPath && snap.myPath.length > 1){
-        // Use pathIdx from minion, not progress
         const nextIdx = Math.min(minion.pathIdx || 1, snap.myPath.length-1);
         const prevIdx = Math.max(0, nextIdx-1);
         const curr = snap.myPath[prevIdx];
         const next = snap.myPath[nextIdx];
         if(curr && next && (next[0] !== curr[0] || next[1] !== curr[1])){
-          // path[i] = [row, col]. World: x=col, z=row
           const dx = next[1]-curr[1], dz = next[0]-curr[0];
-          // Dragon body faces +X axis. For THREE rotation.y: atan2 returns angle from +X
-          dragonMesh.rotation.y = -Math.atan2(dz, dx);
+          // Dragon body faces +X. Smooth rotation toward target heading.
+          const targetRotY = -Math.atan2(dz, dx);
+          ud._targetRotY = targetRotY;
+          if(ud._curRotY === undefined) ud._curRotY = targetRotY;
         }
       }
       updateDragonHP(dragonMesh, minion.hp/minion.maxHp);
-      // Track effect state for visual feedback
       dragonMesh.userData.isSlowed = (minion.slowFactor !== undefined && minion.slowFactor < 1 && minion.slowFactor > 0);
       dragonMesh.userData.isStunned = !!minion.stunned;
     } else { removeDragon(); }
-    if(snap.phase==='racing'&&me?.lastTime){
-      document.getElementById('v-time').textContent=me.lastTime.toFixed(2)+'s';
-    } else {
-      document.getElementById('v-time').textContent='—';
-    }
     updateHUD();
   });
 
@@ -2481,6 +2613,33 @@ let animT=0;
 function animate(){
   requestAnimationFrame(animate);
   animT+=0.016;
+
+  // === Smooth minion interpolation (decouples render rate from server tick) ===
+  if(dragonMesh && dragonMesh.userData._lastTargetX !== undefined){
+    const ud = dragonMesh.userData;
+    const now = performance.now();
+    // Slight extrapolation: assume render is ~50ms behind server, smoothly catch up
+    const elapsed = now - ud._lastTargetTime;
+    const interval = ud._snapInterval || 60;
+    // Lerp factor: 0 → 1 over the snapshot interval, but capped at 1.2
+    // (slight overshoot allows smooth motion if a snapshot is delayed)
+    const t = Math.min(1.2, elapsed / interval);
+    const px = ud._prevTargetX + (ud._lastTargetX - ud._prevTargetX) * t;
+    const pz = ud._prevTargetZ + (ud._lastTargetZ - ud._prevTargetZ) * t;
+    // Bobbing breathing motion
+    const bob = Math.sin(animT*1.8) * 0.04;
+    dragonMesh.position.set(px, 1.4 + bob, pz);
+    // Smooth rotation interpolation (shortest-arc lerp)
+    if(ud._targetRotY !== undefined){
+      let diff = ud._targetRotY - (ud._curRotY ?? ud._targetRotY);
+      // Wrap to shortest path
+      while(diff > Math.PI) diff -= Math.PI*2;
+      while(diff < -Math.PI) diff += Math.PI*2;
+      ud._curRotY = (ud._curRotY ?? ud._targetRotY) + diff * 0.18;  // smooth turn
+      dragonMesh.rotation.y = ud._curRotY;
+    }
+  }
+
   for(const t of torches){
     const flick=0.8+Math.sin(animT*8+t.rx)*0.15+Math.random()*0.1;
     t.light.intensity=1.5*flick;
