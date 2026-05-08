@@ -271,6 +271,16 @@ module.exports = function setupSocket(io, db) {
     // ── RACE SELECTION ───────────────────
     socket.on('lobby:set_race', async ({ lobbyId, race }) => {
       if (!RACES[race] && race !== 'standard') return;
+      // Check the lobby's map config - if available_races is restricted, enforce it
+      try {
+        const { rows } = await db.query('SELECT workshop_map_config FROM lobbies WHERE id=$1', [lobbyId]);
+        const cfg = rows?.[0]?.workshop_map_config;
+        const allowed = cfg?.available_races || cfg?.config?.available_races;
+        if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(race)) {
+          // Snap to first allowed race instead of rejecting
+          race = allowed[0];
+        }
+      } catch (e) {}
       await db.query(
         'UPDATE lobby_members SET race=$1 WHERE lobby_id=$2 AND user_id=$3',
         [race, lobbyId, userId]

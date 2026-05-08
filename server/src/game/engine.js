@@ -1214,14 +1214,6 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
         `${t.row},${t.col}`, `${t.row},${t.col+1}`,
         `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
       ]));
-    // Slowed cells: walking these costs more (dragon prefers to go around if cheap)
-    // Cost factor reflects the 0.45 speed factor → 2.2x the time
-    const slowed = new Set((towers || [])
-      .filter(t => t.type === 'slow_block' || t.type === 'passive' || t.type === 'passive_tower')
-      .flatMap(t => [
-        `${t.row},${t.col}`, `${t.row},${t.col+1}`,
-        `${t.row+1},${t.col}`, `${t.row+1},${t.col+1}`,
-      ]));
     const dirs = [
       [-1,-1,14],[-1,0,10],[-1,1,14],
       [0,-1,10],         [0,1,10],
@@ -1283,9 +1275,9 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
         if(dr !== 0 && dc !== 0){
           if(blocked.has(`${r+dr},${c}`) && blocked.has(`${r},${c+dc}`)) continue;
         }
-        // Slow tiles cost 1.2x — small penalty so dragon walks through unless detour is very cheap
-        const stepCost = slowed.has(nk) ? Math.round(cost * 1.2) : cost;
-        const nd = d + stepCost;
+        // Effects (slow towers) do NOT influence pathfinding — minion takes shortest path.
+        // Slowdown is only applied to actual movement speed when traversing those tiles.
+        const nd = d + cost;
         if(nd < (dist.get(nk) ?? Infinity)){
           dist.set(nk, nd);
           par.set(nk, k);
@@ -1324,13 +1316,19 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
       paths:[0,0,0], lastFire:0, invested:0, _prebuilt: true,
     }));
     const path = findTaPath(prebuilt);
+    // Enforce race whitelist from workshop config (if specified, restricts to those races)
+    const allowedRaces = workshopConfig?.available_races;
+    let race = playerRaces?.[p.userId] || p.race || 'standard';
+    if (Array.isArray(allowedRaces) && allowedRaces.length > 0 && !allowedRaces.includes(race)) {
+      race = allowedRaces[0];
+    }
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
       gold: seq0.gold_per_round ?? layout.gold_per_round ?? 15,
       wood: seq0.wood_per_round ?? layout.wood_per_round ?? 2,
       stone: seq0.stone_per_round ?? layout.stone_per_round ?? 1,
       score: 0, round: 0, status: 'placing',
-      race: playerRaces?.[p.userId] || p.race || 'standard',
+      race,
     };
     playerMaps[p.userId] = { towers: prebuilt, path, minion: null, startTime: null };
   }
@@ -1352,7 +1350,10 @@ function createTimeAttackGame(sessionId, players, workshopConfig, playerRaces = 
 
 function tickTimeAttack(gs) {
   const now = Date.now();
-  const dt  = Math.min((now - gs.lastTick) / 1000, 0.05);
+  // Real wall-clock dt. Clamp at 500ms to handle long pauses (GC, suspend) gracefully.
+  // The previous 50ms clamp was wrong: if a tick comes >50ms apart (common at 20Hz under load),
+  // gameTime would accumulate slower than wall-clock, making race times appear 2-3x slower.
+  const dt  = Math.min((now - gs.lastTick) / 1000, 0.5);
   gs.lastTick = now;
   gs.gameTime += dt * 1000;
 
@@ -1409,55 +1410,85 @@ function tickTimeAttack(gs) {
     allDone = false;
     const path = pm.path;
     if (!path || m.pathIdx >= path.length) { m.escaped = true; continue; }
-    const [tr, tc] = path[m.pathIdx];
-    const tx = tc*TILE+TILE/2, ty = tr*TILE+TILE/2;
-    const dx = tx-m.px, dy = ty-m.py;
-    const dist = Math.hypot(dx,dy);
-    // Check slow & stun towers (2x2 footprint with auras)
+
     const SLOW_FACTOR = 0.45;        // 55% speed reduction in slow aura
-    const SLOW_COOLDOWN = 1.5;       // seconds between slow particle bursts (visual)
-    const STUN_DURATION = 1.0;       // seconds
-    const STUN_COOLDOWN = 5.0;       // seconds between triggers per tower
-    let inSlow = false;
-    const mcol = Math.floor(m.px / TILE);
-    const mrow = Math.floor(m.py / TILE);
+    const SLOW_COOLDOWN = 1.5;
+    const STUN_DURATION = 1.0;
+    const STUN_COOLDOWN = 5.0;
     const nowSec = gs.gameTime / 1000;
     if (!m.stunUntil) m.stunUntil = 0;
-    for (const t of pm.towers) {
-      const ty = t.type;
-      // For slow: aura is ONLY the 2x2 footprint (minion must walk THROUGH the ice floe)
-      const inFootprint = mrow >= t.row && mrow <= t.row+1 && mcol >= t.col && mcol <= t.col+1;
-      // For stun: 2-tile radius around 2x2 footprint
-      const inAura2 = mrow >= t.row-1 && mrow <= t.row+2 && mcol >= t.col-1 && mcol <= t.col+2;
-      if (ty === 'slow_block' || ty === 'passive' || ty === 'passive_tower') {
-        if (inFootprint) {
-          inSlow = true;
-          if (!t._lastSlow || (nowSec - t._lastSlow) > SLOW_COOLDOWN) {
-            t._lastSlow = nowSec;
+
+    // Compute slow/stun status based on CURRENT minion position
+    const recomputeEffects = () => {
+      const mcol = Math.floor(m.px / TILE);
+      const mrow = Math.floor(m.py / TILE);
+      let inSlow = false;
+      for (const t of pm.towers) {
+        const tt = t.type;
+        const inFootprint = mrow >= t.row && mrow <= t.row+1 && mcol >= t.col && mcol <= t.col+1;
+        const inAura2 = mrow >= t.row-1 && mrow <= t.row+2 && mcol >= t.col-1 && mcol <= t.col+2;
+        if (tt === 'slow_block' || tt === 'passive' || tt === 'passive_tower') {
+          if (inFootprint) {
+            inSlow = true;
+            if (!t._lastSlow || (nowSec - t._lastSlow) > SLOW_COOLDOWN) t._lastSlow = nowSec;
+          }
+        } else if (tt === 'stun_block' || tt === 'stun_tower' || tt === 'freeze_block') {
+          if (inAura2) {
+            if (!t._lastStun || (nowSec - t._lastStun) > STUN_COOLDOWN) {
+              t._lastStun = nowSec;
+              m.stunUntil = nowSec + STUN_DURATION;
+            }
           }
         }
-      } else if (ty === 'stun_block' || ty === 'stun_tower' || ty === 'freeze_block') {
-        if (inAura2) {
-          if (!t._lastStun || (nowSec - t._lastStun) > STUN_COOLDOWN) {
-            t._lastStun = nowSec;
-            m.stunUntil = nowSec + STUN_DURATION;
-          }
+      }
+      const stunned = nowSec < m.stunUntil;
+      m.stunned = stunned;
+      m.slowFactor = stunned ? 0 : (inSlow ? SLOW_FACTOR : 1);
+      m.spd = (m.baseSpd || 12) * m.slowFactor;
+    };
+
+    // Consume the full dt budget, possibly across multiple waypoints.
+    // This makes simulation accurate even when ticks come at >50ms intervals.
+    let dtRemaining = dt;
+    let safety = 0;
+    while (dtRemaining > 1e-6 && !m.reached && !m.escaped && safety++ < 64) {
+      recomputeEffects();
+      if (m.spd <= 0) break;  // stunned — no movement this frame
+      const [tr, tc] = path[m.pathIdx];
+      const tx = tc*TILE+TILE/2, ty = tr*TILE+TILE/2;
+      const dx = tx-m.px, dy = ty-m.py;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= 1e-6) {
+        // Already at waypoint — advance
+        m.pathIdx++;
+        if (m.pathIdx >= path.length) {
+          m.reached = true;
+          m.time = (gs.gameTime - pm.startTime) / 1000;
+          gs.players[uid].lastTime = m.time;
+          break;
         }
+        continue;
+      }
+      const step = m.spd * TILE * dtRemaining;
+      if (step >= dist) {
+        // Reach this waypoint, consume that fraction of dt, continue with leftover
+        m.px = tx; m.py = ty;
+        const dtUsed = dist / (m.spd * TILE);
+        dtRemaining -= dtUsed;
+        m.pathIdx++;
+        if (m.pathIdx >= path.length) {
+          m.reached = true;
+          m.time = (gs.gameTime - pm.startTime) / 1000;
+          gs.players[uid].lastTime = m.time;
+          break;
+        }
+      } else {
+        // Partial step — fully consumes remaining dt
+        m.px += dx/dist*step;
+        m.py += dy/dist*step;
+        dtRemaining = 0;
       }
     }
-    const stunned = nowSec < m.stunUntil;
-    m.stunned = stunned;
-    m.slowFactor = stunned ? 0 : (inSlow ? SLOW_FACTOR : 1);
-    m.spd = (m.baseSpd || 12) * m.slowFactor;
-    const step = m.spd * TILE * dt;
-    if (step >= dist) {
-      m.px=tx; m.py=ty; m.pathIdx++;
-      if (m.pathIdx >= path.length) {
-        m.reached = true;
-        m.time = (gs.gameTime - pm.startTime) / 1000; // seconds
-        gs.players[uid].lastTime = m.time;
-      }
-    } else { m.px+=dx/dist*step; m.py+=dy/dist*step; }
   }
 
   if (allDone) endRound(gs);

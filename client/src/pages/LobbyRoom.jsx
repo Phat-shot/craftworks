@@ -168,10 +168,15 @@ export default function LobbyRoom() {
         </div>
       )}
 
-      {/* Race selection */}
+      {/* Race selection — filtered by map's available_races */}
       <div className="section-title">⚔️ Deine Rasse</div>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:16 }}>
-        {Object.entries(RACES).map(([key, r]) => (
+        {Object.entries(RACES)
+          .filter(([key]) => {
+            const allowed = selectedMap?.available_races || selectedMap?.config?.available_races;
+            return !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(key);
+          })
+          .map(([key, r]) => (
           <div
             key={key}
             onClick={() => selectRace(key)}

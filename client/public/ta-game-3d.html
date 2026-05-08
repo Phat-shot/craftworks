@@ -161,7 +161,7 @@ renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 renderer.setClearColor(0x1a0810);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x1a0810, 0.015);
+scene.fog = new THREE.FogExp2(0x1a0810, 0.008);
 
 // Skybox
 const skyMat=new THREE.ShaderMaterial({
@@ -172,10 +172,16 @@ const skyMat=new THREE.ShaderMaterial({
 });
 scene.add(new THREE.Mesh(new THREE.SphereGeometry(100,32,16),skyMat));
 
-const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 250);
+const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 300);
 let camTarget={x:COLS/2, y:0, z:ROWS/2};
-let camAngleH=0, camAngleV=0.7, camDist=Math.max(35, Math.max(COLS, ROWS) * 0.85);
+// Initial angle: steeper top-down view (~62° from horizontal) so gaps in pillar walls are visible
+let camAngleH=0, camAngleV=1.08, camDist=Math.max(40, Math.max(COLS, ROWS) * 0.95);
+// Camera pitch limits: prevent seeing past the forest (too high) or too flat (too low)
+const CAM_PITCH_MIN = 0.55;     // ~31° (lowest allowed — anything flatter and you see past the trees)
+const CAM_PITCH_MAX = 1.45;     // ~83° (almost top-down)
 function updateCamera(){
+  // Clamp pitch within bounds
+  camAngleV = Math.max(CAM_PITCH_MIN, Math.min(CAM_PITCH_MAX, camAngleV));
   cam.position.x=camTarget.x+Math.sin(camAngleH)*Math.cos(camAngleV)*camDist;
   cam.position.y=Math.sin(camAngleV)*camDist;
   cam.position.z=camTarget.z+Math.cos(camAngleH)*Math.cos(camAngleV)*camDist;
@@ -384,7 +390,7 @@ const AURA_STUN = {
 // Uses InstancedMesh for trunks + leaf-clusters (5 species, ~600 trees)
 // ─────────────────────────────────────────────────────────
 {
-  const FOREST_DEPTH = 12;       // tiles outward from map edge
+  const FOREST_DEPTH = 22;       // tiles outward from map edge (extended for camera coverage)
   const FOREST_INNER_PADDING = 1; // skip 1 tile next to map edge
   const TREES_PER_TILE = 0.85;    // ~ tree density
   const MAP_W = COLS * TILE;
@@ -512,11 +518,11 @@ const AURA_STUN = {
     scene.add(crownInst);
   }
   
-  // Forest floor: a large extended ground plane (so we don't see void)
-  const floorGeo = new THREE.PlaneGeometry((COLS+FOREST_DEPTH*2+4)*TILE, (ROWS+FOREST_DEPTH*2+4)*TILE);
+  // Forest floor: extended ground plane wider than the tree zone (no visible black edge)
+  const floorGeo = new THREE.PlaneGeometry((COLS+FOREST_DEPTH*2+30)*TILE, (ROWS+FOREST_DEPTH*2+30)*TILE);
   const floorTex = texGrass(256, '#2a3812', '#0e1804', '#3a5818', null);
   const floorMat = new THREE.MeshLambertMaterial({map: floorTex});
-  floorTex.repeat.set(20, 20);
+  floorTex.repeat.set(35, 35);
   const floor = new THREE.Mesh(floorGeo, floorMat);
   floor.rotation.x = -Math.PI/2;
   floor.position.set(MAP_W/2, -0.15, MAP_H/2);
@@ -2162,9 +2168,10 @@ function showPath(path){
 }
 // Round build-timer settings (auto-start when expired)
 let buildTimerSeconds = 60;        // user-chosen duration
-let buildTimerRemaining = 0;       // current countdown
+let buildTimerRemaining = 0;       // current countdown (real seconds)
 let buildTimerActive = false;
 let buildTimerLastPhase = null;
+let buildTimerLastTickAt = 0;       // last performance.now() seen, for accurate dt
 let racingStartedAt = 0;            // when racing phase began (for live timer)
 
 function selectTimer(seconds){
@@ -2183,20 +2190,22 @@ function startGame(){
 }
 
 function tickBuildTimer(){
+  const now = performance.now();
+  
   // Phase-change handler: clean reset for each phase
   if(GS.phase !== buildTimerLastPhase){
     if(GS.phase === 'placing'){
       // Entered placing — restart countdown from full duration
       buildTimerRemaining = buildTimerSeconds;
       buildTimerActive = true;
+      buildTimerLastTickAt = now;
       // Hide results overlay if still visible from previous round
       hideResults();
     } else if(GS.phase === 'racing'){
       // Entered racing — stop countdown completely, mark race-start
       buildTimerActive = false;
       buildTimerRemaining = 0;
-      racingStartedAt = performance.now();
-      // Hide results overlay (though it shouldn't be on between rounds)
+      racingStartedAt = now;
       hideResults();
     } else {
       // Entered results or anything else — fully stop
@@ -2211,17 +2220,21 @@ function tickBuildTimer(){
   const liveEl = document.getElementById('live-time');
   const liveVal = document.getElementById('v-live-time');
   
-  // BUILD COUNTDOWN — only during placing
+  // BUILD COUNTDOWN — only during placing. Use real wall-clock dt.
   if(buildTimerActive && GS.phase === 'placing'){
     if(buildEl) buildEl.style.display = '';
     if(buildVal) buildVal.textContent = Math.max(0, Math.ceil(buildTimerRemaining));
-    buildTimerRemaining -= 1/60;  // approx 60fps
+    // Real-time delta (not frame-rate dependent)
+    const dt = (now - buildTimerLastTickAt) / 1000;
+    buildTimerLastTickAt = now;
+    buildTimerRemaining -= dt;
     if(buildTimerRemaining <= 0 && buildTimerActive){
       buildTimerActive = false;
       sendReady();
     }
   } else {
     if(buildEl) buildEl.style.display = 'none';
+    buildTimerLastTickAt = now;
   }
   
   // LIVE RACE TIME — only during racing
@@ -2233,8 +2246,8 @@ function tickBuildTimer(){
       // Already finished — show fixed final time
       displayTime = me.lastTime.toFixed(2);
     } else {
-      // Still running — count up
-      const elapsed = (performance.now() - racingStartedAt) / 1000;
+      // Still running — count up using wall-clock
+      const elapsed = (now - racingStartedAt) / 1000;
       displayTime = elapsed.toFixed(2);
     }
     if(liveVal) liveVal.textContent = displayTime + 's';
@@ -2286,7 +2299,7 @@ canvas3d.addEventListener('pointermove',e=>{
   const dy=(e.clientY-lastMY)/canvas3d.clientHeight;
   if(e.buttons===2||e.ctrlKey){
     camAngleH-=dx*3;
-    camAngleV=Math.max(0.15,Math.min(1.4,camAngleV-dy*2));
+    camAngleV=Math.max(CAM_PITCH_MIN,Math.min(CAM_PITCH_MAX,camAngleV-dy*2));
   } else {
     // Inverted Y pan — drag down moves camera DOWN (analog to horizontal)
     const panX=dx*camDist*0.8, panZ=-dy*camDist*0.8;
@@ -2305,7 +2318,7 @@ canvas3d.addEventListener('click',e=>{
 });
 canvas3d.addEventListener('contextmenu',e=>{e.preventDefault();});
 canvas3d.addEventListener('wheel',e=>{
-  camDist=Math.max(8,Math.min(150,camDist+e.deltaY*0.05));
+  camDist=Math.max(20,Math.min(95,camDist+e.deltaY*0.05));
   updateCamera(); e.preventDefault();
 },{passive:false});
 

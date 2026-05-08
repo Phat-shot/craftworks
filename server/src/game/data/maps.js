@@ -66,7 +66,7 @@ const BUILTIN_MAPS = [
         cols: 64, rows: 36, rounds: 10,
         gold_per_round: 12, wood_per_round: 3, stone_per_round: 1,
         prebuilt_towers: [], prebuilt_sequences: TA_SEQUENCES,
-        round_selection: 'random',
+        round_selection: 'sequential',
       },
     },
   },
