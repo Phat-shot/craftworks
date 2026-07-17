@@ -7,7 +7,8 @@ import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import CameraLayer from '../components/CameraLayer';
 import Icon, { IconName } from '../components/Icon';
-import { OSM_STYLE } from '../mapStyle';
+import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
+import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
 
 interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
 interface FlagInfo { team: 'a'|'b'; state: string; carrier: string | null; lat?: number; lon?: number; }
@@ -20,6 +21,7 @@ interface Snap {
   phaseEndsAt: number | null;
   serverTime: number;
   polygon: { lat: number; lon: number }[];
+  comicMap?: { features: ComicFeature[] } | null;
   winner: string | null;
   hidersRemaining: number;
   me: {
@@ -69,10 +71,11 @@ const ERR_DE: Record<string, Toast> = {
 
 // View modes: 2D map (default) → heading-rotated map → split cam/map →
 // transparent map over camera → pure camera.
-type ViewMode = 'map' | 'rotated' | 'split' | 'overlay' | 'camera';
+type ViewMode = 'map' | 'rotated' | 'comic' | 'split' | 'overlay' | 'camera';
 const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
   { id: 'map',     icon: 'map',       label: 'Karte' },
   { id: 'rotated', icon: 'compass',   label: 'Gedreht' },
+  { id: 'comic',   icon: 'palette',   label: 'Comic' },
   { id: 'split',   icon: 'splitView', label: 'Split' },
   { id: 'overlay', icon: 'ghost',     label: 'Overlay' },
   { id: 'camera',  icon: 'camera',    label: 'Kamera' },
@@ -364,10 +367,11 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     const c = feature?.geometry?.coordinates;
     if (Array.isArray(c)) setBase(c[1], c[0]);
   };
-  const renderMap = (interactive: boolean) => (
-    <MapView style={{ flex: 1 }} mapStyle={OSM_STYLE as any} onPress={onMapPress}
+  const renderMap = (interactive: boolean, comic = false) => (
+    <MapView style={{ flex: 1 }} mapStyle={(comic ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
       scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={false}>
       <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading} animationDuration={250} />
+      {comic && <ComicMapLayers features={snap?.comicMap?.features ?? []} />}
       {(snap?.polygon?.length ?? 0) >= 3 && (
         <ShapeSource id="field" shape={fieldGeoJSON}>
           <FillLayer id="fieldFill" style={{ fillColor: 'rgba(80,208,64,0.08)' }} />
@@ -503,6 +507,16 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       <View style={{ flex: 1 }}>
         {!hasCam && viewMode === 'map' && renderMap(true)}
         {!hasCam && viewMode === 'rotated' && renderMap(false)}
+        {!hasCam && viewMode === 'comic' && (
+          snap?.comicMap?.features?.length ? renderMap(true, true) : (
+            <View style={st.comicEmpty}>
+              <Icon name="palette" size={32} color="#807050" />
+              <Text style={st.comicEmptyTxt}>
+                Keine Comic-Karte generiert — das geht in der Lobby, sobald das Spielfeld steht.
+              </Text>
+            </View>
+          )
+        )}
         {hasCam && (
           <CameraLayer>
             {viewMode === 'split' && (
@@ -639,6 +653,8 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
 
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810' },
+  comicEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12, backgroundColor: '#f3e9d2' },
+  comicEmptyTxt: { color: '#807050', fontSize: 13, textAlign: 'center' },
   status: {
     flexDirection: 'row', alignItems: 'center', paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
     backgroundColor: '#141020', gap: 14,

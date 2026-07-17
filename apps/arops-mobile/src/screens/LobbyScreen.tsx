@@ -1,10 +1,18 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { getSocket, getUser, fetchLobbyQr } from '../api';
 import Icon, { IconName } from '../components/Icon';
-import { OSM_STYLE } from '../mapStyle';
+import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
+import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
+
+interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
+const COMIC_MAP_ERR_DE: Record<string, string> = {
+  not_host: 'Nur der Host kann das', wrong_mode: 'Falscher Modus',
+  no_polygon: 'Erst das Spielfeld zeichnen', invalid_polygon: 'Spielfeld ungültig',
+  lobby_not_found: 'Lobby nicht gefunden', fetch_failed: 'Abruf fehlgeschlagen — später erneut versuchen',
+};
 
 interface Member { id: string; username: string; ready: boolean; }
 interface Effective { roles: Record<string, 'seeker' | 'hider'>; teams: Record<string, 'a' | 'b'>; captains: { a: string | null; b: string | null }; }
@@ -25,6 +33,7 @@ interface ArSettings {
   foundMode?: 'spectator' | 'seeker';
   bots?: { id: string; username: string }[];
   debugMode?: boolean;
+  comicMap?: ComicMap;
 }
 
 const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
@@ -69,9 +78,12 @@ export default function LobbyScreen({
   const [qrOpen, setQrOpen] = useState(false);
   const [copied, setCopied] = useState<'code' | 'link' | null>(null);
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
+  const [comicMapLoading, setComicMapLoading] = useState(false);
+  const [comicMapErr, setComicMapErr] = useState('');
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
+  const comicMapReqRef = useRef<string | null>(null);
 
   useEffect(() => {
     const socket = getSocket();
@@ -95,6 +107,19 @@ export default function LobbyScreen({
     const onReady = ({ userId, ready: r }: any) => setMembers(m => m.map(x => x.id === userId ? { ...x, ready: r } : x));
     const onStart = ({ sessionId }: any) => onGameStart(sessionId);
     const onError = ({ code }: any) => { if (START_ERR[code]) setStartErr(START_ERR[code]!); };
+    const onComicMapReady = ({ reqId, comicMap }: any) => {
+      if (reqId !== comicMapReqRef.current) return; // superseded by a newer request
+      setComicMapLoading(false);
+      setAr(a => ({ ...a, comicMap }));
+    };
+    const onComicMapError = ({ reqId, err, remainingMs }: any) => {
+      if (reqId !== comicMapReqRef.current) return;
+      setComicMapLoading(false);
+      setComicMapErr(err === 'cooldown'
+        ? `Bitte ${Math.ceil((remainingMs ?? 0) / 1000)}s warten`
+        : (COMIC_MAP_ERR_DE[err] || 'Fehler beim Generieren'));
+      setTimeout(() => setComicMapErr(''), 5000);
+    };
 
     socket.on('lobby:state', onState);
     socket.on('lobby:ar_updated', onArUpdated);
@@ -103,6 +128,8 @@ export default function LobbyScreen({
     socket.on('lobby:player_ready', onReady);
     socket.on('game:start', onStart);
     socket.on('error', onError);
+    socket.on('lobby:comic_map_ready', onComicMapReady);
+    socket.on('lobby:comic_map_error', onComicMapError);
     return () => {
       socket.emit('lobby:leave', { lobbyId });
       socket.off('connect', joinLobby);
@@ -113,6 +140,8 @@ export default function LobbyScreen({
       socket.off('lobby:player_ready', onReady);
       socket.off('game:start', onStart);
       socket.off('error', onError);
+      socket.off('lobby:comic_map_ready', onComicMapReady);
+      socket.off('lobby:comic_map_error', onComicMapError);
     };
   }, [lobbyId, isHost, onGameStart]);
 
@@ -172,6 +201,16 @@ export default function LobbyScreen({
   const toggleDebugMode = () => {
     const next = !debugMode;
     emitUpdate(next ? { debugMode: true, ...DEBUG_COOLDOWNS } : { debugMode: false });
+  };
+
+  const comicMapStale = !!ar.comicMap && ar.comicMap.polygonSnapshot !== JSON.stringify(polygon);
+  const generateComicMap = () => {
+    if (polygon.length < 3 || polyErrs.length > 0 || comicMapLoading) return;
+    const reqId = Math.random().toString(36).slice(2);
+    comicMapReqRef.current = reqId;
+    setComicMapLoading(true);
+    setComicMapErr('');
+    getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId });
   };
 
   const toggleReady = () => {
@@ -273,6 +312,21 @@ export default function LobbyScreen({
         </MapView>
       </View>
 
+      {ar.comicMap && (
+        <View style={st.comicPreviewBox}>
+          <MapView style={{ flex: 1 }} mapStyle={BLANK_STYLE as any} scrollEnabled={false} zoomEnabled={false}>
+            <Camera defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
+            <ComicMapLayers features={ar.comicMap.features} />
+          </MapView>
+          {comicMapStale && (
+            <View style={st.comicStaleBadge}>
+              <Icon name="warning" size={11} color="#100" />
+              <Text style={st.comicStaleTxt}>veraltet</Text>
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Drawing errors: only meaningful for the host while drawing */}
       {isHost && polyErrs.length > 0 && (
         <View style={st.errRow}>
@@ -307,7 +361,22 @@ export default function LobbyScreen({
               <Icon name="bug" size={13} color={debugMode ? '#f0c840' : '#c0a0f0'} />
               <Text style={[st.smallTxt, debugMode && st.smallTxtActive]}>Debug {debugMode ? 'AN' : 'AUS'}</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={st.smallBtnRow} onPress={generateComicMap}
+              disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
+              {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
+                <Icon name={comicMapStale ? 'loop' : 'palette'} size={13} color="#c0a0f0" />
+              )}
+              <Text style={st.smallTxt}>
+                {comicMapLoading ? 'Lädt…' : ar.comicMap ? (comicMapStale ? 'Comic-Karte neu generieren' : 'Comic-Karte aktualisieren') : 'Comic-Karte generieren'}
+              </Text>
+            </TouchableOpacity>
           </View>
+          {!!comicMapErr && (
+            <View style={st.errRow}>
+              <Icon name="warning" size={13} color="#ff6040" />
+              <Text style={st.err}>{comicMapErr}</Text>
+            </View>
+          )}
           {subMode === 'hide_and_seek' && (
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Gefunden:</Text>
@@ -477,6 +546,12 @@ const st = StyleSheet.create({
   codeSub: { color: '#807050', fontSize: 9 },
   hostHint: { color: '#807050', fontSize: 11, marginBottom: 8 },
   mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+  comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+  comicStaleBadge: {
+    position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+  },
+  comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
   rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
   smallBtn: { backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
   smallBtnRow: {

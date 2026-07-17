@@ -580,6 +580,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
   const gs = {
     sessionId, mode: 'ar_ops', subMode,
     polygon, cfg, hitConfig, timings, zones, captains,
+    comicMap: ar.comicMap && Array.isArray(ar.comicMap.features) ? ar.comicMap : null,
     players: playerState,
     phase: mode.initialPhase(),
     phaseStartTime: now(),
@@ -1081,6 +1082,7 @@ function getAropsSnapshot(gs, userId) {
     sessionId: gs.sessionId,
     phase: gs.phase, phaseEndsAt, serverTime: t,
     polygon: gs.polygon,
+    comicMap: gs.comicMap,
     winner: gs.winner,
     debugMode: !!gs.cfg.debugMode,
     timings: {

@@ -45,7 +45,15 @@ function enrichTaConfig(wc) {
 
 
 
+// AR OPS "comic map" — real geodata processing lives in its own dependency-free
+// module (server/src/game/comic_map.js) so it stays trivially unit-testable
+// without pulling in socket.js's full auth/DB dependency tree.
+const { COMIC_MAP_COOLDOWN_MS, fetchComicMapFeatures } = require('./game/comic_map');
+
 module.exports = function setupSocket(io, db) {
+  // Per-lobby cooldown for comic-map regeneration (module-scope Map: one
+  // setupSocket() call per server process, shared across all connections).
+  const comicMapLastTry = new Map();
 
   // ── Auth middleware ──────────────────────
   io.use(async (socket, next) => {
@@ -316,6 +324,42 @@ module.exports = function setupSocket(io, db) {
       } catch (e) {
         console.error('lobby:ar_update error:', e.message);
         socket.emit('error', { code: 'ar_update_failed' });
+      }
+    });
+
+    // ── AR OPS: host generates the "comic map" (real geodata for the field) ──
+    socket.on('lobby:generate_comic_map', async ({ lobbyId, reqId }) => {
+      try {
+        const { rows } = await db.query('SELECT host_id, game_mode, workshop_map_config FROM lobbies WHERE id=$1', [lobbyId]);
+        if (!rows[0]) return socket.emit('lobby:comic_map_error', { reqId, err: 'lobby_not_found' });
+        if (rows[0].host_id !== userId) return socket.emit('lobby:comic_map_error', { reqId, err: 'not_host' });
+        if (rows[0].game_mode !== 'ar_ops') return socket.emit('lobby:comic_map_error', { reqId, err: 'wrong_mode' });
+
+        const ar = rows[0].workshop_map_config?.ar_settings || {};
+        const polygon = ar.polygon;
+        if (!Array.isArray(polygon) || polygon.length < 3) {
+          return socket.emit('lobby:comic_map_error', { reqId, err: 'no_polygon' });
+        }
+        if (!aropsShared.validatePolygon(polygon).ok) {
+          return socket.emit('lobby:comic_map_error', { reqId, err: 'invalid_polygon' });
+        }
+
+        const lastTry = comicMapLastTry.get(lobbyId) || 0;
+        const elapsed = Date.now() - lastTry;
+        if (elapsed < COMIC_MAP_COOLDOWN_MS) {
+          return socket.emit('lobby:comic_map_error', { reqId, err: 'cooldown', remainingMs: COMIC_MAP_COOLDOWN_MS - elapsed });
+        }
+        comicMapLastTry.set(lobbyId, Date.now());
+
+        const features = await fetchComicMapFeatures(polygon);
+        const comicMap = { features, polygonSnapshot: JSON.stringify(polygon), fetchedAt: Date.now() };
+        const next = { ...ar, comicMap };
+        const cfg = { ...(rows[0].workshop_map_config || {}), game_mode: 'ar_ops', ar_settings: next };
+        await db.query('UPDATE lobbies SET workshop_map_config=$1 WHERE id=$2', [JSON.stringify(cfg), lobbyId]);
+        io.to(`lobby:${lobbyId}`).emit('lobby:comic_map_ready', { reqId, comicMap });
+      } catch (e) {
+        console.error('lobby:generate_comic_map error:', e.message);
+        socket.emit('lobby:comic_map_error', { reqId, err: 'fetch_failed' });
       }
     });
 

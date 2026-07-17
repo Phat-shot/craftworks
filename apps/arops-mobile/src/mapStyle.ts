@@ -12,3 +12,13 @@ export const OSM_STYLE = {
   },
   layers: [{ id: 'osm', type: 'raster' as const, source: 'osm' }],
 };
+
+// Solid-color backdrop for the "comic map" view — deliberately no real tiles
+// underneath, so the host-fetched building/path/vegetation shapes (see
+// ComicMapLayers) read as our own generated map, not real photography peeking
+// through a stylized overlay.
+export const BLANK_STYLE = {
+  version: 8 as const,
+  sources: {},
+  layers: [{ id: 'bg', type: 'background' as const, paint: { 'background-color': '#f3e9d2' } }],
+};
