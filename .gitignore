@@ -1,0 +1,7 @@
+node_modules/
+.expo/
+apps/arops-mobile/android/
+apps/arops-mobile/ios/
+client/build/
+*.log
+.env

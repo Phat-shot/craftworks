@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🛰️ AR Ops — Dev Harness</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0a0810;color:#e0c080;height:100vh;display:flex;flex-direction:column}
+#bar{padding:8px 12px;background:#141020;display:flex;gap:14px;align-items:center;font-size:13px;flex-wrap:wrap}
+#bar b{color:#f0c840}
+#map{flex:1}
+#panel{padding:10px 12px;background:#141020;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+button{background:#2a2040;border:1px solid #4a3a70;color:#c0a0f0;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:13px}
+button:disabled{opacity:.4}
+#events{position:absolute;right:10px;top:56px;width:250px;max-height:40vh;overflow:auto;background:rgba(10,8,16,.9);border:1px solid #2a2040;border-radius:8px;padding:8px;font-size:11px;z-index:1000}
+.ev{padding:3px 0;border-bottom:1px solid #1a1428}
+.alert{color:#ff6040;font-weight:700}
+input[type=range]{width:140px}
+#hint{font-size:11px;color:#807050}
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>🛰️ AR Ops Harness</b>
+  <span>Phase: <b id="v-phase">–</b></span>
+  <span>⏱ <b id="v-timer">–</b></span>
+  <span>Rolle: <b id="v-role">–</b></span>
+  <span>Status: <b id="v-status">–</b></span>
+  <span>Hider übrig: <b id="v-hiders">–</b></span>
+  <span>Geofence: <b id="v-geo">–</b></span>
+  <span id="v-prox" style="display:none" class="alert">⚠️ GEGNER NAH</span>
+  <span id="v-score" style="color:#80ff80;font-weight:700"></span>
+  <span id="v-frozen" style="display:none" class="alert">🧊 EINGEFROREN <span id="v-frozen-s"></span>s</span>
+</div>
+<div id="map"></div>
+<div id="events"></div>
+<div id="panel">
+  <span id="hint">Klick auf Karte = Position simulieren (oder 📡 GPS)</span>
+  <button id="btn-gps">📡 Echtes GPS</button>
+  <label>Blickrichtung: <input type="range" id="heading" min="0" max="359" value="0"> <span id="v-heading">0</span>°</label>
+  <button id="btn-shoot">📸 Foto/Schuss</button>
+  <button id="btn-radar">🛰️ Radar</button>
+  <button id="btn-setbase" style="display:none">🚩 Base HIER setzen</button>
+  <span id="v-result" style="font-size:12px"></span>
+</div>
+<script>
+'use strict';
+const sess = JSON.parse(sessionStorage.getItem('mp_session')||'null');
+if(!sess){ document.getElementById('hint').textContent = 'Keine Session — über die Lobby starten.'; }
+const myUserId = sess?.userId;
+let sessionId = sess?.sessionId || null;
+let snap = null;
+let myPos = null;          // {lat, lon} simulated or real
+let useRealGps = false;
+let heading = 0;
+
+const map = L.map('map').setView([48.1374, 11.5755], 16);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM'}).addTo(map);
+let fieldLayer=null, meMarker=null, aimLine=null;
+const otherMarkers = {};
+
+// ── Socket ──────────────────────────────────────────────────
+const token = localStorage.getItem('access_token');
+const socket = io({ auth:{ token }, reconnectionAttempts:5 });
+socket.on('connect', () => { if(sessionId) socket.emit('game:join', { sessionId }); });
+socket.on('game:start', ({ sessionId: sid }) => {
+  sessionId = sid;
+  const sess2 = JSON.parse(sessionStorage.getItem('mp_session')||'{}')||{};
+  sess2.sessionId = sid; sessionStorage.setItem('mp_session', JSON.stringify(sess2));
+  // Neue Session → alte Layer wegwerfen
+  if(fieldLayer){ map.removeLayer(fieldLayer); fieldLayer = null; }
+  window._lastPolyJson = null;
+  for(const k of Object.keys(otherMarkers)){ map.removeLayer(otherMarkers[k]); delete otherMarkers[k]; }
+  for(const k of Object.keys(window._zoneLayers||{})){ map.removeLayer(window._zoneLayers[k]); delete window._zoneLayers[k]; }
+  for(const k of Object.keys(window._flagLayers||{})){ map.removeLayer(window._flagLayers[k]); delete window._flagLayers[k]; }
+  snap = null;
+  socket.emit('game:join', { sessionId: sid });
+});
+
+socket.on('game:ar_tick', (s) => {
+  // Stale-Session-Schutz: nur Ticks der aktuellen Session akzeptieren
+  if(s.sessionId && sessionId && s.sessionId !== sessionId) return;
+  snap = s;
+  render();
+});
+
+// ── Telemetry loop (1 Hz) ───────────────────────────────────
+function currentSample(){
+  if(!myPos) return null;
+  return { lat: myPos.lat, lon: myPos.lon, ts: Date.now(), accuracyM: useRealGps ? (myPos.acc||10) : 5, headingDeg: heading };
+}
+setInterval(() => {
+  const s = currentSample();
+  if(!s || !sessionId) return;
+  socket.emit('game:action', { sessionId, action:'ar_telemetry', data:{ sample: s } });
+}, 1000);
+
+// ── Position: map click or real GPS ─────────────────────────
+map.on('click', (e) => {
+  if(useRealGps) return;
+  myPos = { lat: e.latlng.lat, lon: e.latlng.lng };
+});
+let gpsWatch = null;
+document.getElementById('btn-gps').onclick = () => {
+  useRealGps = !useRealGps;
+  document.getElementById('btn-gps').textContent = useRealGps ? '🖱️ Sim-Modus' : '📡 Echtes GPS';
+  if(useRealGps){
+    gpsWatch = navigator.geolocation.watchPosition(p => {
+      myPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy };
+      map.setView([myPos.lat, myPos.lon]);
+    }, err => alert('GPS: '+err.message), { enableHighAccuracy:true });
+  } else if(gpsWatch !== null){
+    navigator.geolocation.clearWatch(gpsWatch); gpsWatch = null;
+  }
+};
+
+// ── Heading + actions ───────────────────────────────────────
+document.getElementById('heading').oninput = (e) => {
+  heading = +e.target.value;
+  document.getElementById('v-heading').textContent = heading;
+  render();
+};
+document.getElementById('btn-shoot').onclick = () => {
+  const s = currentSample();
+  if(!s || !sessionId) return;
+  socket.emit('game:action', { sessionId, action:'ar_hit_attempt', data:{ sample: s } });
+};
+document.getElementById('btn-radar').onclick = () => {
+  if(!sessionId) return;
+  socket.emit('game:action', { sessionId, action:'ar_use_perk', data:{ perk:'radar' } });
+};
+document.getElementById('btn-setbase').onclick = () => {
+  if(!sessionId || !myPos) return;
+  socket.emit('game:action', { sessionId, action:'ar_set_base', data:{ lat: myPos.lat, lon: myPos.lon } });
+};
+window._zoneLayers = {};
+const ERR_DE = { frozen:'🧊 Eingefroren!', not_captain:'Nur der Captain', bases_too_close:'Zu nah an Gegner-Base', wrong_phase:'⏳ Falsche Phase', cooldown:'⏱ Cooldown', outside_field:'🚧 Außerhalb des Felds', no_heading:'🧭 Kein Kompass', role_cannot_shoot:'🫥 Hider schießen nicht', implausible:'⚠️ Position unplausibel' };
+socket.on('game:action_result', (r) => {
+  const el = document.getElementById('v-result');
+  if(r.action === 'ar_hit_attempt'){
+    el.textContent = r.hit ? `🎯 TREFFER: ${r.targetId} (conf ${(r.confidence*100).toFixed(0)}%)`
+      : r.err ? (ERR_DE[r.err]||'✖ '+r.err)
+      : r.near ? `💨 Knapp! ${r.near.deltaDeg}° daneben (Toleranz ${r.near.toleranceDeg}°, ~${r.near.distanceM}m)`
+      : r.reason === 'no_candidates' ? '✖ Kein gültiges Ziel (Team? Eingefroren? Keine Daten?)'
+      : r.reason === 'target_stale' ? '📵 Gegner-Position veraltet — dessen App aktiv?'
+      : r.reason === 'low_confidence' ? '📡 Im Kegel, aber Datenqualität zu niedrig'
+      : r.reason === 'out_of_range' ? '📏 Außer Reichweite (75m)'
+      : '💨 daneben — kein Ziel im Kegel';
+  } else if(r.action === 'ar_use_perk'){
+    if(r.contacts){
+      el.textContent = `🛰️ ${r.contacts.length} Kontakte`;
+      r.contacts.forEach(c => {
+        L.circleMarker([c.lat, c.lon], { radius:9, color:'#ff4040', fillOpacity:.4 })
+          .addTo(map).bindTooltip('RADAR: '+c.userId);
+      });
+    } else if(r.err){ el.textContent = ERR_DE[r.err] || '✖ '+r.err; }
+  } else if(r.action === 'ar_set_base'){
+    el.textContent = r.ok ? '🚩 Base gesetzt!' : (ERR_DE[r.err] || '✖ '+r.err);
+  }
+});
+
+// ── Render ──────────────────────────────────────────────────
+function render(){
+  if(!snap) return;
+  const phaseNames = { hiding:'🫥 Versteckphase', seeking:'🔦 Suchphase', base_setup:'🚩 Base-Phase', live:'▶ Live', ended:'🏁 Beendet' };
+  document.getElementById('v-phase').textContent = phaseNames[snap.phase] || snap.phase;
+  const canAct = snap.phase === 'seeking' || snap.phase === 'live';
+  const frozen = (snap.me?.frozenRemainingMs || 0) > 0;
+  document.getElementById('btn-shoot').disabled = !canAct || frozen;
+  document.getElementById('btn-radar').disabled = !canAct || frozen;
+  // Freeze banner
+  document.getElementById('v-frozen').style.display = frozen ? '' : 'none';
+  if(frozen) document.getElementById('v-frozen-s').textContent = Math.ceil(snap.me.frozenRemainingMs/1000);
+  // Team score line
+  const sc = document.getElementById('v-score');
+  if(snap.subMode === 'domination') sc.textContent = `🅰 ${snap.teamScore?.a??0} : ${snap.teamScore?.b??0} 🅱 (Ziel ${snap.targetScore})`;
+  else if(snap.subMode === 'ctf') sc.textContent = `🚩 🅰 ${snap.captures?.a??0} : ${snap.captures?.b??0} 🅱 (Ziel ${snap.targetCaptures})`;
+  else if(snap.subMode === 'seek_destroy') sc.textContent = snap.bomb ? `💣 ${Math.max(0,Math.ceil((snap.bomb.explodeAt-snap.serverTime)/1000))}s` + (snap.bomb.defusePct?` · Defuse ${snap.bomb.defusePct}%`:'') : (snap.plantPct?`Plant ${snap.plantPct}%`:'');
+  else sc.textContent = '';
+  if(snap.me?.team) sc.textContent += `  [Du: Team ${snap.me.team.toUpperCase()}${snap.me.isCaptain?' 👑':''}]`;
+  // Set-base button: CTF captains during base_setup
+  document.getElementById('btn-setbase').style.display =
+    (snap.subMode==='ctf' && snap.phase==='base_setup' && snap.me?.isCaptain) ? '' : 'none';
+  // Zones / sites / bases as circles
+  const zoneList = (snap.zones || snap.sites || []).slice();
+  if(snap.bases){
+    if(snap.bases.a) zoneList.push({ id:'base_a', ...snap.bases.a, radiusM: snap.zoneRadiusM||15, owner:'a' });
+    if(snap.bases.b) zoneList.push({ id:'base_b', ...snap.bases.b, radiusM: snap.zoneRadiusM||15, owner:'b' });
+  }
+  const TEAMCOL = { a:'#e08040', b:'#40a0e0' };
+  const seen = {};
+  for(const z of zoneList){
+    if(typeof z.lat !== 'number') continue;
+    seen[z.id] = true;
+    const col = z.owner ? TEAMCOL[z.owner] : '#909090';
+    if(!window._zoneLayers[z.id]){
+      window._zoneLayers[z.id] = L.circle([z.lat,z.lon], { radius: z.radiusM||15 }).addTo(map);
+    }
+    window._zoneLayers[z.id].setLatLng([z.lat,z.lon]).setStyle({ color: col, fillColor: col, fillOpacity:.2 });
+    const cap = z.capture ? ` · ${z.capture.pct}% (${z.capture.team})` : '';
+    window._zoneLayers[z.id].bindTooltip(z.id + (z.owner?' ['+z.owner.toUpperCase()+']':'') + cap);
+  }
+  for(const id of Object.keys(window._zoneLayers)){
+    if(!seen[id]){ map.removeLayer(window._zoneLayers[id]); delete window._zoneLayers[id]; }
+  }
+  // Flags (CTF): drop markers
+  if(snap.flags){
+    if(!window._flagLayers) window._flagLayers = {};
+    for(const f of snap.flags){
+      const key = 'flag_'+f.team;
+      if(typeof f.lat === 'number'){
+        if(!window._flagLayers[key]) window._flagLayers[key] = L.circleMarker([0,0],{radius:6,color:TEAMCOL[f.team],fillOpacity:1}).addTo(map);
+        window._flagLayers[key].setLatLng([f.lat,f.lon]).bindTooltip('Flagge '+f.team.toUpperCase()+' ('+f.state+')');
+      } else if(window._flagLayers[key]){ map.removeLayer(window._flagLayers[key]); delete window._flagLayers[key]; }
+    }
+  }
+  document.getElementById('v-role').textContent = snap.me?.role ?? '–';
+  document.getElementById('v-status').textContent = snap.me?.status ?? '–';
+  document.getElementById('v-hiders').textContent = snap.hidersRemaining;
+  document.getElementById('v-geo').textContent = snap.me?.geofence ?? '–';
+  document.getElementById('v-prox').style.display = snap.me?.proximityAlert ? '' : 'none';
+  const remMs = snap.phaseEndsAt ? snap.phaseEndsAt - snap.serverTime : 0;
+  document.getElementById('v-timer').textContent = snap.phase === 'ended'
+    ? ('🏁 ' + (snap.winner || '')) : Math.max(0, Math.round(remMs/1000)) + 's';
+
+  // Field polygon — redraw when it changes (not cached forever)
+  const polyJson = JSON.stringify(snap.polygon || []);
+  if(snap.polygon?.length >= 3 && polyJson !== window._lastPolyJson){
+    window._lastPolyJson = polyJson;
+    if(fieldLayer) map.removeLayer(fieldLayer);
+    fieldLayer = L.polygon(snap.polygon.map(p=>[p.lat,p.lon]), { color:'#50d040', weight:2, fillOpacity:.06 }).addTo(map);
+    map.fitBounds(fieldLayer.getBounds());
+  }
+
+  // My marker + HONEST hit cone (same tolerance curve the server validates with:
+  // wide at close range where GPS error dominates, narrowing to 15° base at 75m)
+  if(myPos){
+    if(!meMarker) meMarker = L.circleMarker([0,0],{radius:8,color:'#f0c840',fillOpacity:.9}).addTo(map).bindTooltip('ICH');
+    meMarker.setLatLng([myPos.lat, myPos.lon]);
+    const destPt = (lat, lon, brg, dM) => {
+      const rad = brg * Math.PI/180;
+      return [lat + Math.cos(rad) * dM / 111320,
+              lon + Math.sin(rad) * dM / (111320 * Math.cos(lat * Math.PI/180))];
+    };
+    const BASE = 15, MAXTOL = 45, RANGE = 75;
+    const accSum = Math.max(4, (myPos.acc || 5) * 2);
+    const left = [], right = [];
+    for(let d = 6; d <= RANGE; d += 6){
+      const tol = Math.min(MAXTOL, BASE + Math.atan2(accSum, d) * 180/Math.PI);
+      left.push(destPt(myPos.lat, myPos.lon, heading - tol, d));
+      right.push(destPt(myPos.lat, myPos.lon, heading + tol, d));
+    }
+    const ring = [[myPos.lat, myPos.lon], ...left, ...right.reverse(), [myPos.lat, myPos.lon]];
+    if(aimLine) map.removeLayer(aimLine);
+    if(window._coneLayer) map.removeLayer(window._coneLayer);
+    window._coneLayer = L.polygon(ring, { color:'#ff7828', weight:1.5, fillColor:'#ff7828', fillOpacity:.14 }).addTo(map);
+    const tip = destPt(myPos.lat, myPos.lon, heading, RANGE);
+    aimLine = L.polyline([[myPos.lat,myPos.lon], tip], { color:'#f0c840', weight:1.5, dashArray:'4' }).addTo(map);
+  }
+
+  // Other players (only those whose position the server revealed)
+  for(const p of (snap.players||[])){
+    if(p.userId === myUserId) continue;
+    const key = p.userId;
+    if(typeof p.lat === 'number'){
+      if(!otherMarkers[key]) otherMarkers[key] = L.circleMarker([0,0],{radius:8,color:'#ff4040',fillOpacity:.7}).addTo(map);
+      // Fade with position age — a stale dot is a GHOST, not a live target
+      const age = p.positionAgeMs || 0;
+      const op = Math.max(.2, .85 - (age/30000)*.6);
+      otherMarkers[key].setStyle({ fillOpacity: op, opacity: op });
+      otherMarkers[key].setLatLng([p.lat,p.lon]).bindTooltip(p.username + (p.exposed?' (EXPOSED)':'') + (age>3000 ? ` · vor ${Math.round(age/1000)}s` : ''));
+    } else if(otherMarkers[key]){
+      map.removeLayer(otherMarkers[key]); delete otherMarkers[key];
+    }
+  }
+
+  // Events
+  const evEl = document.getElementById('events');
+  evEl.innerHTML = (snap.events||[]).slice().reverse().map(e =>
+    `<div class="ev">[${new Date(e.ts).toLocaleTimeString()}] ${e.type}${e.userId?' → '+e.userId:''}${e.winner?' → '+e.winner:''}</div>`
+  ).join('');
+}
+</script>
+</body>
+</html>

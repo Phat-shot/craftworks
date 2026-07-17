@@ -1,0 +1,39 @@
+import React, { useEffect } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../App';
+import { getSocket } from '../api';
+
+export default function GamePage() {
+  const { sessionId } = useParams();
+  const { user }      = useAuth();
+  const location      = useLocation();
+  const difficulty    = location.state?.difficulty || 'normal';
+  const mode         = location.state?.mode || 'coop';
+  const playerCount   = location.state?.playerCount || 2;
+
+  useEffect(() => {
+    sessionStorage.setItem('mp_session', JSON.stringify({
+      sessionId,
+      userId: user.id,
+      username: user.username,
+      difficulty,
+      mode,
+      playerCount,
+      solo: false,
+      workshopConfig: location.state?.workshopConfig || null,
+    }));
+    const wc = location.state?.workshopConfig || null;
+    const is3D = wc?.renderer === 'threejs' || wc?.id?.endsWith('_3d');
+    const gameUrl = mode === 'vs' ? '/vs-game.html'
+      : mode === 'ar_ops' ? '/ar-game.html'
+      : mode === 'time_attack' ? (is3D ? '/ta-game-3d.html' : '/ta-game.html')
+      : '/td-game.html';
+    window.location.href = gameUrl;
+  }, []);
+
+  return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%' }}>
+      <div style={{ color:'var(--text2)', fontSize:14 }}>Lade Spiel…</div>
+    </div>
+  );
+}

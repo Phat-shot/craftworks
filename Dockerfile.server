@@ -1,0 +1,30 @@
+# ── Stage 1: Build React client (Vite) ───────
+FROM node:20-alpine AS client-build
+WORKDIR /client
+
+COPY client/package.json ./
+RUN npm install --silent
+
+COPY client/ ./
+
+ARG VITE_API_URL=""
+ARG VITE_GAME_URL="/td-game.html"
+ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_GAME_URL=$VITE_GAME_URL
+
+RUN npm run build
+
+# ── Stage 2: Server ───────────────────────────
+FROM node:20-alpine
+WORKDIR /app
+
+COPY server/package.json ./
+RUN npm install --omit=dev --silent
+
+COPY server/ ./
+COPY packages/ /packages/
+COPY --from=client-build /client/build ./client/build
+
+ENV NODE_ENV=production
+EXPOSE 4000
+CMD ["node", "src/index.js"]
