@@ -26,6 +26,10 @@ interface Snap {
     geofence: string; proximityAlert: boolean;
     frozenRemainingMs?: number; freezeViolations?: number;
     radarCooldownRemainingMs: number; hitCooldownRemainingMs: number;
+    droneCooldownRemainingMs?: number;
+    cloakCooldownRemainingMs?: number; cloakActive?: boolean; cloakRemainingMs?: number;
+    fakeMarkerCooldownRemainingMs?: number; fakeMarkerActive?: boolean; fakeMarkerRemainingMs?: number;
+    aufscheuchenCooldownRemainingMs?: number;
   } | null;
   players: { userId: string; username: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; status: string }[];
   // Mode extras
@@ -57,6 +61,7 @@ const ERR_DE: Record<string, string> = {
   not_captain: '🚩 Nur der Captain setzt die Base',
   wrong_mode: '✖ Falscher Modus',
   no_position: '✖ Keine Position bekannt',
+  perk_wrong_role: '✖ Für deine Rolle nicht verfügbar',
 };
 
 // View modes: 2D map (default) → heading-rotated map → split cam/map →
@@ -103,6 +108,9 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       } else if (r.action === 'ar_use_perk' && r.contacts) {
         setRadarContacts(r.contacts);
         setTimeout(() => setRadarContacts([]), 15_000);
+      } else if (r.action === 'ar_use_perk' && typeof r.alert === 'boolean') {
+        setLastResult(r.alert ? '🛸 Gegner in der Nähe!' : '🛸 Nichts entdeckt');
+        setTimeout(() => setLastResult(''), 4000);
       } else if (r.action === 'ar_use_perk' && r.err) {
         setLastResult(ERR_DE[r.err] || `✖ ${r.err}`);
         setTimeout(() => setLastResult(''), 4000);
@@ -126,6 +134,14 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   };
   const useRadar = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'radar' } });
+  const useDrone = () =>
+    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'drone' } });
+  const useCloak = () =>
+    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'cloak' } });
+  const useFakeMarker = () =>
+    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'fake_marker' } });
+  const useAufscheuchen = () =>
+    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'aufscheuchen' } });
 
   const setBase = (lat?: number, lon?: number) =>
     socket.emit('game:action', {
@@ -274,6 +290,15 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     && (isTeamMode || isSeeker);
   const radarCd = snap?.me?.radarCooldownRemainingMs ?? 0;
   const hitCd = snap?.me?.hitCooldownRemainingMs ?? 0;
+  const isHider = snap?.me?.role === 'hider';
+  const droneCd = snap?.me?.droneCooldownRemainingMs ?? 0;
+  const cloakCd = snap?.me?.cloakCooldownRemainingMs ?? 0;
+  const cloakActive = !!snap?.me?.cloakActive;
+  const cloakRemainingS = Math.ceil((snap?.me?.cloakRemainingMs ?? 0) / 1000);
+  const fakeMarkerCd = snap?.me?.fakeMarkerCooldownRemainingMs ?? 0;
+  const fakeMarkerActive = !!snap?.me?.fakeMarkerActive;
+  const fakeMarkerRemainingS = Math.ceil((snap?.me?.fakeMarkerRemainingMs ?? 0) / 1000);
+  const aufscheuchenCd = snap?.me?.aufscheuchenCooldownRemainingMs ?? 0;
   const phaseLabel = snap?.phase === 'hiding' ? '🫥 Versteckphase'
     : snap?.phase === 'seeking' ? '🔦 Suchphase'
     : snap?.phase === 'base_setup' ? '🚩 Base setzen'
@@ -389,6 +414,12 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       {snap?.me?.proximityAlert && (
         <View style={st.proxAlert}><Text style={st.proxTxt}>⚠️ GEGNER IN DER NÄHE</Text></View>
       )}
+      {cloakActive && (
+        <View style={st.cloakBanner}><Text style={st.cloakTxt}>🫥 CLOAK AKTIV — {cloakRemainingS}s</Text></View>
+      )}
+      {fakeMarkerActive && (
+        <View style={st.cloakBanner}><Text style={st.cloakTxt}>🎭 FAKE-MARKER AKTIV — {fakeMarkerRemainingS}s</Text></View>
+      )}
       {snap?.me?.geofence === 'warning' && (
         <View style={st.geoWarn}><Text style={st.geoTxt}>🚧 Spielfeldrand!</Text></View>
       )}
@@ -463,6 +494,30 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
             disabled={radarCd > 0 || snap?.phase !== 'seeking'}>
             <Text style={st.actTxt}>🛰️ {radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
           </TouchableOpacity>
+          {snap?.subMode === 'hide_and_seek' && isHider && (
+            <>
+              <TouchableOpacity style={st.radarBtn} onPress={useDrone}
+                disabled={droneCd > 0 || snap?.phase !== 'seeking'}>
+                <Text style={st.actTxt}>🛸 {droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={st.radarBtn} onPress={useCloak}
+                disabled={cloakCd > 0 || cloakActive || snap?.phase !== 'seeking'}>
+                <Text style={st.actTxt}>
+                  🫥 {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={st.radarBtn} onPress={useFakeMarker}
+                disabled={fakeMarkerCd > 0 || snap?.phase !== 'seeking'}>
+                <Text style={st.actTxt}>🎭 {fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
+              </TouchableOpacity>
+            </>
+          )}
+          {snap?.subMode === 'hide_and_seek' && isSeeker && (
+            <TouchableOpacity style={st.radarBtn} onPress={useAufscheuchen}
+              disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
+              <Text style={st.actTxt}>😱 {aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
+            </TouchableOpacity>
+          )}
           {canShoot && !hasCam && (
             <TouchableOpacity style={st.camBtn} onPress={() => setViewMode('camera')}>
               <Text style={st.camTxt}>📸</Text>
@@ -484,6 +539,8 @@ const st = StyleSheet.create({
   timer: { color: '#80ff80', fontWeight: '800', fontSize: 14 },
   info: { color: '#a090c0', fontSize: 13, marginLeft: 'auto' },
   proxAlert: { backgroundColor: 'rgba(224,48,32,.9)', padding: 8, alignItems: 'center' },
+  cloakBanner: { backgroundColor: 'rgba(120,60,200,.9)', padding: 8, alignItems: 'center' },
+  cloakTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   frozenBanner: { backgroundColor: 'rgba(80,160,255,.92)', padding: 8, alignItems: 'center' },
   frozenTxt: { color: '#04121f', fontWeight: '900', fontSize: 12 },
   scoreBar: { backgroundColor: '#1a1428', paddingVertical: 5, alignItems: 'center' },
@@ -521,10 +578,10 @@ const st = StyleSheet.create({
   },
   modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
   modeIcon: { fontSize: 18 },
-  actionRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 10 },
   radarBtn: {
     backgroundColor: 'rgba(40,32,64,.9)', borderWidth: 2, borderColor: '#4a3a70',
-    borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12,
+    borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
   },
   actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
   camBtn: {

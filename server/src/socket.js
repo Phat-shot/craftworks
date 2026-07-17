@@ -255,6 +255,9 @@ module.exports = function setupSocket(io, db) {
         // Mode selection + mode-specific settings
         const SUB_MODES = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy'];
         if (SUB_MODES.includes(arSettings?.subMode)) next.subMode = arSettings.subMode;
+        if (arSettings?.foundMode === 'seeker' || arSettings?.foundMode === 'spectator') {
+          next.foundMode = arSettings.foundMode;
+        }
         if (Array.isArray(arSettings?.zones)) {
           next.zones = arSettings.zones
             .filter(z => z && Number.isFinite(z.lat) && Number.isFinite(z.lon))

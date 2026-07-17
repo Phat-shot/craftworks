@@ -313,6 +313,183 @@ console.log('\n═══ SEEK & DESTROY ═══');
   });
 }
 
+// ═══ HIDE & SEEK PERKS (Drohne / Cloak / Fake-Marker / Aufscheuchen) ═══
+console.log('\n═══ H&S PERKS ═══');
+{
+  const mkHS = () => {
+    const gs = arops.createAropsGame('hsperk' + Math.random(),
+      [{ userId: 'S1', username: 'S1' }, { userId: 'H1', username: 'H1' }, { userId: 'H2', username: 'H2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { S1: 'seeker', H1: 'hider', H2: 'hider' },
+        hidingDurationMs: 0, gameDurationMs: 600_000, radarCooldownMs: 0 } });
+    tick(gs, 10); // hiding(0ms) → seeking
+    return gs;
+  };
+  const droneRangeM = shared.scaleDroneRangeM(shared.polygonAreaM2(FIELD));
+
+  check('Drohne: seeker within range → alert true', () => {
+    const gs = mkHS();
+    tel(gs, 'H1', MUC);
+    tel(gs, 'S1', shared.destinationPoint(MUC, 0, droneRangeM - 20));
+    const r = arops.actionArUsePerk(gs, 'H1', { perk: 'drone' });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.alert, true);
+  });
+
+  check('Drohne: seeker outside range → alert false', () => {
+    const gs = mkHS();
+    tel(gs, 'H1', MUC);
+    tel(gs, 'S1', shared.destinationPoint(MUC, 0, droneRangeM + 30));
+    const r = arops.actionArUsePerk(gs, 'H1', { perk: 'drone' });
+    assert.equal(r.alert, false);
+  });
+
+  check('Drohne: seeker cannot use it (wrong role)', () => {
+    const gs = mkHS();
+    const r = arops.actionArUsePerk(gs, 'S1', { perk: 'drone' });
+    assert.equal(r.err, 'perk_wrong_role');
+  });
+
+  check('Drohne: cooldown enforced', () => {
+    const gs = mkHS();
+    tel(gs, 'H1', MUC);
+    arops.actionArUsePerk(gs, 'H1', { perk: 'drone' });
+    const r = arops.actionArUsePerk(gs, 'H1', { perk: 'drone' });
+    assert.equal(r.err, 'cooldown');
+  });
+
+  check('Cloak: cloaked hider excluded from radar contacts', () => {
+    const gs = mkHS();
+    tel(gs, 'H1', MUC); tel(gs, 'H2', shared.destinationPoint(MUC, 90, 30));
+    tel(gs, 'S1', MUC);
+    const cr = arops.actionArUsePerk(gs, 'H1', { perk: 'cloak' });
+    assert.equal(cr.ok, true, JSON.stringify(cr));
+    const r = arops.actionArUsePerk(gs, 'S1', { perk: 'radar' });
+    assert.ok(!r.contacts.some(c => c.userId === 'H1'), 'cloaked hider must be hidden');
+    assert.ok(r.contacts.some(c => c.userId === 'H2'), 'uncloaked hider still visible');
+  });
+
+  check('Cloak: cloaked hider does not trigger seeker proximity alert even at 0m', () => {
+    const gs = mkHS();
+    tel(gs, 'H1', MUC); tel(gs, 'S1', MUC);
+    arops.actionArUsePerk(gs, 'H1', { perk: 'cloak' });
+    tick(gs, 100);
+    assert.equal(gs.players.S1.proximityAlert, false, 'cloak must suppress detection at any range');
+    gs.players.H1.cloakUntil = Date.now() - 1; // simulate expiry
+    tick(gs, 100);
+    assert.equal(gs.players.S1.proximityAlert, true, 'detection resumes after cloak expires');
+  });
+
+  check('Fake-Marker: decoys mixed into radar contacts, inside the field, expire', () => {
+    const gs = mkHS();
+    tel(gs, 'H1', MUC); tel(gs, 'S1', MUC);
+    const fr = arops.actionArUsePerk(gs, 'H1', { perk: 'fake_marker' });
+    assert.equal(fr.ok, true, JSON.stringify(fr));
+    const r = arops.actionArUsePerk(gs, 'S1', { perk: 'radar' });
+    const decoys = r.contacts.filter(c => c.userId.startsWith('decoy_H1_'));
+    assert.equal(decoys.length, 2, JSON.stringify(r.contacts));
+    for (const d of decoys) {
+      assert.ok(shared.pointInPolygon({ lat: d.lat, lon: d.lon }, FIELD), 'decoy must be inside the field');
+    }
+    gs.players.H1.fakeMarkerUntil = Date.now() - 1; // simulate expiry
+    const r2 = arops.actionArUsePerk(gs, 'S1', { perk: 'radar' });
+    assert.equal(r2.contacts.filter(c => c.userId.startsWith('decoy_')).length, 0);
+  });
+
+  check('Aufscheuchen: seeker fakes proximity alert on all alive hiders, then it expires', () => {
+    const gs = mkHS();
+    tel(gs, 'H1', shared.destinationPoint(MUC, 0, 500));
+    tel(gs, 'H2', shared.destinationPoint(MUC, 180, 500));
+    tel(gs, 'S1', MUC);
+    tick(gs, 100);
+    assert.equal(gs.players.H1.proximityAlert, false, 'far apart — no real alert yet');
+    const r = arops.actionArUsePerk(gs, 'S1', { perk: 'aufscheuchen' });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    tick(gs, 100);
+    assert.equal(gs.players.H1.proximityAlert, true, 'faked alert');
+    assert.equal(gs.players.H2.proximityAlert, true, 'faked alert reaches every alive hider');
+    gs.players.H1.fakeProximityUntil = Date.now() - 1;
+    gs.players.H2.fakeProximityUntil = Date.now() - 1;
+    tick(gs, 100);
+    assert.equal(gs.players.H1.proximityAlert, false, 'fake alert must expire');
+  });
+
+  check('Aufscheuchen: hider cannot use it (wrong role)', () => {
+    const gs = mkHS();
+    const r = arops.actionArUsePerk(gs, 'H1', { perk: 'aufscheuchen' });
+    assert.equal(r.err, 'perk_wrong_role');
+  });
+
+  check('Drohne/Cloak/Fake-Marker/Aufscheuchen rejected outside hide_and_seek', () => {
+    const gs = arops.createAropsGame('teamperk' + Math.random(),
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2], timings: FAST } });
+    for (const perk of ['drone', 'cloak', 'fake_marker', 'aufscheuchen']) {
+      const r = arops.actionArUsePerk(gs, 'A1', { perk });
+      assert.equal(r.err, 'wrong_mode', perk);
+    }
+  });
+}
+
+// ═══ FOUND-HIDER FATE (host setting: spectator vs. switch to seeker) ═══
+console.log('\n═══ FOUND-HIDER FATE ═══');
+{
+  const posS = MUC;
+  const posH1 = shared.destinationPoint(MUC, 0, 50);
+  const posH2 = shared.destinationPoint(MUC, 90, 30);
+
+  const mkFound = (foundMode) => {
+    const gs = arops.createAropsGame('found' + Math.random(),
+      [{ userId: 'S', username: 'S' }, { userId: 'H1', username: 'H1' }, { userId: 'H2', username: 'H2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { S: 'seeker', H1: 'hider', H2: 'hider' },
+        hidingDurationMs: 0, gameDurationMs: 600_000, hitCooldownMs: 50, foundMode } });
+    tick(gs, 10); // → seeking
+    return gs;
+  };
+
+  check("foundMode='seeker': found hider flips role, stays alive, can hunt", () => {
+    const gs = mkFound('seeker');
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H2', { sample: { lat: posH2.lat, lon: posH2.lon, ts: t0, accuracyM: 5 } });
+
+    const r = arops.actionArHitAttempt(gs, 'S', {
+      sample: { lat: posS.lat, lon: posS.lon, ts: t0 + 1100, accuracyM: 5, headingDeg: 0 },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.H1.role, 'seeker', 'found hider becomes a seeker');
+    assert.equal(gs.players.H1.status, 'alive', 'stays alive, keeps playing');
+    assert.equal(gs.gameOver, false, 'one hider remains');
+
+    // H1 (now a seeker) hunts down H2
+    gs.players.H1.lastHitAttemptAt = 0;
+    const headingToH2 = shared.bearingDeg(posH1, posH2);
+    const r2 = arops.actionArHitAttempt(gs, 'H1', {
+      sample: { lat: posH1.lat, lon: posH1.lon, ts: t0 + 2200, accuracyM: 5, headingDeg: headingToH2 },
+    });
+    assert.equal(r2.hit, true, JSON.stringify(r2));
+    assert.equal(gs.players.H2.role, 'seeker');
+    assert.equal(gs.gameOver, true, 'no hiders left → seekers win');
+    assert.equal(gs.winner, 'seekers');
+  });
+
+  check("foundMode='spectator' (default): unchanged behavior", () => {
+    const gs = mkFound(undefined);
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+
+    const r = arops.actionArHitAttempt(gs, 'S', {
+      sample: { lat: posS.lat, lon: posS.lon, ts: t0 + 1100, accuracyM: 5, headingDeg: 0 },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.H1.role, 'hider', 'role unchanged in spectator mode');
+    assert.equal(gs.players.H1.status, 'found', 'sidelined as before');
+  });
+}
+
 // ═══ MISS DIAGNOSTICS ═══════════════════════════════════════
 console.log('\n═══ MISS-DIAGNOSE ═══');
 {

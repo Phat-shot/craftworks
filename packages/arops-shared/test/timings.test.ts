@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scaleTimings, isInZone } from '../src/timings';
+import { scaleTimings, isInZone, scaleDroneRangeM } from '../src/timings';
 import { destinationPoint } from '../src/geo';
 
 const MUC = { lat: 48.13743, lon: 11.57549 };
@@ -29,6 +29,21 @@ test('timings: huge field hits upper clamps', () => {
   assert.equal(t.freezeMs, 120_000);
   assert.equal(t.baseSettingMs, 300_000);
   assert.equal(t.zoneRadiusM, 45);
+});
+
+test('scaleDroneRangeM: small field hits lower clamp', () => {
+  assert.equal(scaleDroneRangeM(2_000), 50);
+});
+
+test('scaleDroneRangeM: monotonic with field size', () => {
+  const a = scaleDroneRangeM(40_000);    // L=200 → 80
+  const b = scaleDroneRangeM(1_000_000); // L=1000 → 200 (clamped)
+  assert.ok(b >= a);
+  assert.equal(a, 80);
+});
+
+test('scaleDroneRangeM: huge field hits upper clamp', () => {
+  assert.equal(scaleDroneRangeM(3_000_000), 200);
 });
 
 test('zone: inside / outside', () => {

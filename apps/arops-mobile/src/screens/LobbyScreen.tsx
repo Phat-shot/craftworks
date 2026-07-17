@@ -15,6 +15,7 @@ interface ArSettings {
   subMode?: string;
   hidingDurationMs?: number;
   gameDurationMs?: number;
+  foundMode?: 'spectator' | 'seeker';
 }
 
 const SUB_MODES = [
@@ -107,6 +108,7 @@ export default function LobbyScreen({
   const zones = ar.zones || [];
   const subMode = ar.subMode || 'hide_and_seek';
   const teamMode = subMode !== 'hide_and_seek';
+  const foundMode = ar.foundMode || 'spectator';
   // Server is the single source of truth for roles/teams
   const roleOf = (uid: string) => effective?.roles?.[uid] || 'hider';
   const teamOf = (uid: string) => effective?.teams?.[uid] || 'a';
@@ -246,6 +248,19 @@ export default function LobbyScreen({
               </TouchableOpacity>
             ))}
           </View>
+          {subMode === 'hide_and_seek' && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Gefunden:</Text>
+              <TouchableOpacity style={[st.smallBtn, foundMode === 'spectator' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: 'spectator' })}>
+                <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>👻 Zuschauer</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.smallBtn, foundMode === 'seeker' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: 'seeker' })}>
+                <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>🔁 Weiterspielen (Sucher)</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           {NEEDS_ZONES[subMode] !== undefined && (
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Tippen setzt:</Text>
