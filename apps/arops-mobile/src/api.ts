@@ -97,9 +97,9 @@ export async function createArLobby(name: string): Promise<{ lobbyId: string; co
   return { lobbyId: data.id, code: data.code };
 }
 
-/** Host-only: QR data-URL for the lobby join link. */
-export async function fetchLobbyQr(lobbyId: string): Promise<{ qr: string; code: string } | null> {
-  try { const d = await req(`/lobbies/${lobbyId}/qr`, undefined, 'GET'); return { qr: d.qr, code: d.code }; }
+/** Host-only: QR data-URL + full join link for the lobby. */
+export async function fetchLobbyQr(lobbyId: string): Promise<{ qr: string; code: string; url: string } | null> {
+  try { const d = await req(`/lobbies/${lobbyId}/qr`, undefined, 'GET'); return { qr: d.qr, code: d.code, url: d.url }; }
   catch { return null; }
 }
 

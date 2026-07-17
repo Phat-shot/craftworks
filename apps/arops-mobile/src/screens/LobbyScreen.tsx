@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { getSocket, getUser, fetchLobbyQr } from '../api';
 import { OSM_STYLE } from '../mapStyle';
@@ -47,7 +48,9 @@ export default function LobbyScreen({
   const [ready, setReady] = useState(false);
   const [startErr, setStartErr] = useState('');
   const [qr, setQr] = useState<string | null>(null);
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
+  const [copied, setCopied] = useState<'code' | 'link' | null>(null);
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
   const me = getUser();
   const arRef = useRef(ar);
@@ -55,8 +58,14 @@ export default function LobbyScreen({
 
   useEffect(() => {
     const socket = getSocket();
-    socket.emit('lobby:join', { lobbyId });
-    if (isHost) fetchLobbyQr(lobbyId).then(r => setQr(r?.qr ?? null));
+    // RN sockets routinely disconnect on background/foreground transitions;
+    // re-joining the room on every reconnect resyncs lobby:state so players
+    // who joined while we were disconnected show up again (server-side
+    // lobby:join is idempotent — safe to call repeatedly).
+    const joinLobby = () => socket.emit('lobby:join', { lobbyId });
+    joinLobby();
+    socket.on('connect', joinLobby);
+    if (isHost) fetchLobbyQr(lobbyId).then(r => { setQr(r?.qr ?? null); setQrUrl(r?.url ?? null); });
 
     const onState = ({ members: m }: any) => setMembers(m || []);
     const onArUpdated = ({ arSettings, polygonCheck, effective: eff }: any) => {
@@ -79,6 +88,7 @@ export default function LobbyScreen({
     socket.on('error', onError);
     return () => {
       socket.emit('lobby:leave', { lobbyId });
+      socket.off('connect', joinLobby);
       socket.off('lobby:state', onState);
       socket.off('lobby:ar_updated', onArUpdated);
       socket.off('lobby:player_joined', onJoined);
@@ -134,6 +144,12 @@ export default function LobbyScreen({
   };
   const startGame = () => { setStartErr(''); getSocket().emit('lobby:start', { lobbyId }); };
 
+  const copyToClipboard = async (text: string, which: 'code' | 'link') => {
+    await Clipboard.setStringAsync(text);
+    setCopied(which);
+    setTimeout(() => setCopied(c => (c === which ? null : c)), 1500);
+  };
+
   const center: [number, number] = polygon.length
     ? [polygon.reduce((s, p) => s + p.lon, 0) / polygon.length,
        polygon.reduce((s, p) => s + p.lat, 0) / polygon.length]
@@ -174,9 +190,15 @@ export default function LobbyScreen({
       <View style={st.topRow}>
         <Text style={st.title}>🛰️ Lobby</Text>
         {lobbyCode && (
-          <TouchableOpacity style={st.codeChip} onPress={() => qr && setQrOpen(true)}>
+          <TouchableOpacity
+            style={st.codeChip}
+            onPress={() => qr && setQrOpen(true)}
+            onLongPress={() => copyToClipboard(lobbyCode, 'code')}
+          >
             <Text style={st.codeTxt}>{lobbyCode}</Text>
-            <Text style={st.codeSub}>{qr ? 'antippen für QR' : 'Code teilen'}</Text>
+            <Text style={st.codeSub}>
+              {copied === 'code' ? '✅ kopiert' : qr ? 'antippen: QR · halten: kopieren' : 'halten zum Kopieren'}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -324,7 +346,14 @@ export default function LobbyScreen({
           <View style={st.modalBox}>
             <Text style={st.modalCode}>{lobbyCode}</Text>
             {qr && <Image source={{ uri: qr }} style={{ width: 260, height: 260, borderRadius: 8 }} />}
-            <Text style={st.hint}>Zum Beitreten scannen · Tippen zum Schließen</Text>
+            {qrUrl && (
+              <TouchableOpacity onLongPress={() => copyToClipboard(qrUrl, 'link')} activeOpacity={0.6}>
+                <Text style={st.linkTxt} numberOfLines={1} ellipsizeMode="middle">
+                  {copied === 'link' ? '✅ Link kopiert' : qrUrl}
+                </Text>
+              </TouchableOpacity>
+            )}
+            <Text style={st.hint}>Zum Beitreten scannen · Link halten zum Kopieren · Tippen zum Schließen</Text>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -362,4 +391,5 @@ const st = StyleSheet.create({
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,.85)', alignItems: 'center', justifyContent: 'center' },
   modalBox: { backgroundColor: '#141020', borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 24, alignItems: 'center', gap: 12 },
   modalCode: { color: '#f0c840', fontSize: 26, fontWeight: '900', letterSpacing: 4, fontFamily: 'monospace' as any },
+  linkTxt: { color: '#40a0ff', fontSize: 12, fontFamily: 'monospace' as any, maxWidth: 260, textDecorationLine: 'underline' },
 });
