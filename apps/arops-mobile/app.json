@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "AR Ops",
+    "slug": "arops",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "one.srz.arops",
+      "infoPlist": {
+        "NSCameraUsageDescription": "AR Ops nutzt die Kamera, um Gegner im Spielfeld zu markieren. Es werden keine Fotos gespeichert oder \u00fcbertragen.",
+        "NSLocationWhenInUseUsageDescription": "AR Ops ben\u00f6tigt deine Position, um das Spielfeld und Treffer zu berechnen."
+      }
+    },
+    "android": {
+      "package": "one.srz.arops",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "AR Ops ben\u00f6tigt deine Position f\u00fcr das Spielfeld."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "AR Ops nutzt die Kamera zum Markieren von Gegnern. Fotos verlassen das Ger\u00e4t nicht."
+        }
+      ],
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
+    ]
+  }
+}
