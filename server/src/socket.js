@@ -200,6 +200,15 @@ module.exports = function setupSocket(io, db) {
           if (!roles[m.user_id]) roles[m.user_id] = m.user_id === m.host_id ? 'seeker' : 'hider';
           if (teams[m.user_id] !== 'a' && teams[m.user_id] !== 'b') teams[m.user_id] = idx % 2 === 0 ? 'a' : 'b';
         });
+        // Bots default the same way, continuing the index sequence after real
+        // members — MUST match the ordering used in lobby:start's member merge,
+        // or the lobby preview and the actual match would disagree on defaults.
+        const bots = Array.isArray(out.bots) ? out.bots : [];
+        bots.forEach((b, i) => {
+          const idx = mem.length + i;
+          if (!roles[b.id]) roles[b.id] = 'hider';
+          if (teams[b.id] !== 'a' && teams[b.id] !== 'b') teams[b.id] = idx % 2 === 0 ? 'a' : 'b';
+        });
         out.roles = roles;
         out.teams = teams;
       } catch (e) { console.error('effectiveArSettings:', e.message); }
@@ -257,6 +266,13 @@ module.exports = function setupSocket(io, db) {
         if (SUB_MODES.includes(arSettings?.subMode)) next.subMode = arSettings.subMode;
         if (arSettings?.foundMode === 'seeker' || arSettings?.foundMode === 'spectator') {
           next.foundMode = arSettings.foundMode;
+        }
+        if (typeof arSettings?.debugMode === 'boolean') next.debugMode = arSettings.debugMode;
+        if (Array.isArray(arSettings?.bots)) {
+          next.bots = arSettings.bots
+            .filter(b => b && typeof b.id === 'string' && b.id.startsWith('bot_') && typeof b.username === 'string')
+            .slice(0, 12)
+            .map(b => ({ id: b.id, username: b.username.slice(0, 24) }));
         }
         if (Array.isArray(arSettings?.zones)) {
           next.zones = arSettings.zones
@@ -319,7 +335,10 @@ module.exports = function setupSocket(io, db) {
           return socket.emit('error', { code: 'ar_invalid_polygon', details: polyCheck.errors });
         }
         const { rows: cnt } = await db.query('SELECT COUNT(*) AS n FROM lobby_members WHERE lobby_id=$1', [lobbyId]);
-        if (+cnt[0].n < 2) return socket.emit('error', { code: 'ar_need_two_players' });
+        const botCount = Array.isArray(ar?.bots) ? ar.bots.length : 0;
+        if (!ar?.debugMode && (+cnt[0].n + botCount) < 2) {
+          return socket.emit('error', { code: 'ar_need_two_players' });
+        }
         // Zone preflight for zone-based modes
         const sub = ar?.subMode || 'hide_and_seek';
         if (sub === 'domination' || sub === 'seek_destroy') {
@@ -363,6 +382,14 @@ module.exports = function setupSocket(io, db) {
           [sessionId, m.userId, m.username]);
       }
 
+      // Bots have no `users` row (FK constraint) — appended AFTER persistence,
+      // in-memory only, same order convention as effectiveArSettings' defaulting.
+      if (lobby.game_mode === 'ar_ops' && Array.isArray(lobby.workshop_map_config?.ar_settings?.bots)) {
+        for (const b of lobby.workshop_map_config.ar_settings.bots) {
+          members.push({ userId: b.id, username: b.username, avatar_color: null, isBot: true });
+        }
+      }
+
       // Create game in worker thread
       const playerRaces = {};
       for (const m of members) playerRaces[m.userId] = m.race || 'standard';
@@ -403,6 +430,12 @@ module.exports = function setupSocket(io, db) {
     // ── GAME ACTIONS (server-authoritative) ──
     socket.on('game:join', ({ sessionId }) => {
       socket.join(`game:${sessionId}`);
+    });
+
+    // Debug-mode RTT probe (AR Ops debug overlay) — immediate echo, no cost
+    // to normal play since it's only ever sent when the overlay is open.
+    socket.on('debug:ping', ({ t }) => {
+      if (typeof t === 'number') socket.emit('debug:pong', { t });
     });
 
     socket.on('game:action', async ({ sessionId, action, data }) => {

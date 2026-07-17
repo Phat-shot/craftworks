@@ -20,6 +20,13 @@ function tick(gs, advanceMs) {
   gs._lastModeTick = Date.now() - Math.min(2000, advanceMs);
   arops.tickArops(gs);
 }
+// Real (not faked) clock advance — needed wherever code under test stamps
+// samples with Date.now() itself (e.g. tickBots), where two synchronous
+// calls can otherwise land in the same millisecond and get rejected as stale.
+function sleepMs(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { /* busy-wait */ }
+}
 function tel(gs, uid, pos, over = {}) {
   TS += 1100;
   return arops.actionArTelemetry(gs, uid, {
@@ -487,6 +494,119 @@ console.log('\n═══ FOUND-HIDER FATE ═══');
     assert.equal(r.hit, true, JSON.stringify(r));
     assert.equal(gs.players.H1.role, 'hider', 'role unchanged in spectator mode');
     assert.equal(gs.players.H1.status, 'found', 'sidelined as before');
+  });
+}
+
+// ═══ BOTS & DEBUG MODE ═══════════════════════════════════════
+console.log('\n═══ BOTS & DEBUG MODE ═══');
+{
+  // Force the bot-step throttle open on every call for deterministic tests.
+  // tickBots stamps samples with a fresh Date.now() each call — a real (if
+  // tiny) sleep guarantees strictly-increasing ts across calls, since
+  // synchronous back-to-back Date.now() calls can otherwise land in the
+  // same millisecond and get rejected by actionArTelemetry's staleness check.
+  function botTick(gs, advanceMs = 100) {
+    sleepMs(2);
+    gs._lastModeTick = Date.now() - Math.min(2000, advanceMs);
+    gs._lastBotStep = 0;
+    arops.tickArops(gs);
+  }
+
+  check('bot seeker chasing a stationary hider strictly closes distance', () => {
+    const gs = arops.createAropsGame('botA' + Math.random(),
+      [
+        { userId: 'H1', username: 'H1' },
+        { userId: 'bot_S', username: 'Bot S', isBot: true },
+      ],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { H1: 'hider', bot_S: 'seeker' },
+        hidingDurationMs: 0, gameDurationMs: 600_000 } });
+    assert.equal(gs.players.bot_S.isBot, true);
+
+    // Stationary hider at field center; bot seeker starts 150m out. Bots move
+    // on the real Date.now() clock (unlike tel()'s fake TS), so seed with that.
+    tel(gs, 'H1', MUC);
+    gs.players.bot_S.lastAccepted = { ...shared.destinationPoint(MUC, 45, 150), ts: Date.now(), accuracyM: 4, headingDeg: 0 };
+    botTick(gs); // flips hiding→seeking on this call
+
+    const distAfterSeed = shared.haversineMeters(gs.players.bot_S.lastAccepted, MUC);
+    for (let i = 0; i < 20; i++) botTick(gs);
+    const distAfter = shared.haversineMeters(gs.players.bot_S.lastAccepted, MUC);
+
+    assert.ok(distAfter < distAfterSeed - 15, `expected clear approach, ${distAfterSeed}m → ${distAfter}m`);
+    assert.ok(shared.pointInPolygon(gs.players.bot_S.lastAccepted, FIELD), 'bot must stay inside the field');
+    assert.equal(gs.players.bot_S.strikes, 0, 'bot movement must never trip anti-spoof strikes');
+  });
+
+  check('bot hider fleeing a stationary seeker strictly increases distance', () => {
+    const gs = arops.createAropsGame('botB' + Math.random(),
+      [
+        { userId: 'S1', username: 'S1' },
+        { userId: 'bot_H', username: 'Bot H', isBot: true },
+      ],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { S1: 'seeker', bot_H: 'hider' },
+        hidingDurationMs: 0, gameDurationMs: 600_000 } });
+
+    const seekerPos = shared.destinationPoint(MUC, 0, 50);
+    tel(gs, 'S1', seekerPos);
+    gs.players.bot_H.lastAccepted = { lat: MUC.lat, lon: MUC.lon, ts: Date.now(), accuracyM: 4, headingDeg: 0 };
+    botTick(gs); // flips hiding→seeking
+
+    const distAfterSeed = shared.haversineMeters(gs.players.bot_H.lastAccepted, seekerPos);
+    for (let i = 0; i < 15; i++) botTick(gs);
+    const distAfter = shared.haversineMeters(gs.players.bot_H.lastAccepted, seekerPos);
+
+    assert.ok(distAfter > distAfterSeed + 10, `expected clear flight, ${distAfterSeed}m → ${distAfter}m`);
+    assert.ok(shared.pointInPolygon(gs.players.bot_H.lastAccepted, FIELD), 'bot must stay inside the field');
+  });
+
+  check('solo debug session: explicit hider role is respected, not force-switched to seeker', () => {
+    const gs = arops.createAropsGame('solo' + Math.random(),
+      [{ userId: 'H1', username: 'H1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { H1: 'hider' }, debugMode: true,
+        hidingDurationMs: 0, gameDurationMs: 600_000 } });
+    assert.equal(gs.players.H1.role, 'hider', 'debugMode must not force a lone player into seeker');
+  });
+
+  check('solo debug hider auto-found by geofence never ends the game via checkWin', () => {
+    const gs = arops.createAropsGame('solo2' + Math.random(),
+      [{ userId: 'H1', username: 'H1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { H1: 'hider' }, debugMode: true,
+        hidingDurationMs: 0, gameDurationMs: 600_000, geofenceAutoFoundMs: 1000 } });
+    assert.equal(gs.players.H1.role, 'hider');
+    const outside = shared.destinationPoint(MUC, 0, 500);
+    tel(gs, 'H1', outside);
+    botTick(gs); // hiding→seeking; geofence marks 'outside', sets outsideSince
+    assert.equal(gs.players.H1.geofence, 'outside');
+    // Simulate elapsed real time past geofenceAutoFoundMs without a real sleep
+    // (game-loop timing uses Date.now(), independent of the fake TS clock).
+    gs.players.H1.outsideSince = Date.now() - 2000;
+    botTick(gs);
+    assert.equal(gs.players.H1.status, 'found', 'geofence auto-found still fires normally');
+    assert.equal(gs.gameOver, false, 'but a 1-player session must not auto-end from it');
+  });
+
+  check('bots are excluded from real DB persistence but flow through the engine identically', () => {
+    // No DB in these engine-level tests — this documents the contract:
+    // createAropsGame never touches a database, so a synthetic {isBot:true}
+    // player is accepted with no special-casing anywhere except tickBots.
+    const gs = arops.createAropsGame('botC' + Math.random(),
+      [
+        { userId: 'H1', username: 'H1' },
+        { userId: 'bot_1', username: 'Bot 1', isBot: true },
+        { userId: 'bot_2', username: 'Bot 2', isBot: true },
+      ],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', debugMode: true,
+        roles: { H1: 'seeker', bot_1: 'hider', bot_2: 'hider' },
+        hidingDurationMs: 0, gameDurationMs: 600_000 } });
+    assert.equal(gs._hasBots, true);
+    tel(gs, 'H1', MUC);
+    botTick(gs); // seeds both bots' initial positions
+    assert.ok(gs.players.bot_1.lastAccepted && gs.players.bot_2.lastAccepted, 'both bots seeded');
+    assert.equal(gs.gameOver, false);
   });
 }
 

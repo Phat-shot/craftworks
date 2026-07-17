@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal } from
 import * as Clipboard from 'expo-clipboard';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { getSocket, getUser, fetchLobbyQr } from '../api';
+import Icon, { IconName } from '../components/Icon';
 import { OSM_STYLE } from '../mapStyle';
 
 interface Member { id: string; username: string; ready: boolean; }
@@ -15,14 +16,22 @@ interface ArSettings {
   subMode?: string;
   hidingDurationMs?: number;
   gameDurationMs?: number;
+  hitCooldownMs?: number;
+  radarCooldownMs?: number;
+  droneCooldownMs?: number;
+  cloakCooldownMs?: number;
+  fakeMarkerCooldownMs?: number;
+  aufscheuchenCooldownMs?: number;
   foundMode?: 'spectator' | 'seeker';
+  bots?: { id: string; username: string }[];
+  debugMode?: boolean;
 }
 
-const SUB_MODES = [
-  { id: 'hide_and_seek', label: '🫥 H&S' },
-  { id: 'domination', label: '🎯 Dom' },
-  { id: 'ctf', label: '🚩 CTF' },
-  { id: 'seek_destroy', label: '💣 S&D' },
+const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
+  { id: 'hide_and_seek', icon: 'ghost', label: 'H&S' },
+  { id: 'domination', icon: 'target', label: 'Dom' },
+  { id: 'ctf', icon: 'flag', label: 'CTF' },
+  { id: 'seek_destroy', icon: 'bomb', label: 'S&D' },
 ];
 const NEEDS_ZONES: Record<string, number> = { domination: 2, seek_destroy: 1 };
 const POLY_ERR_DE: Record<string, string> = {
@@ -37,6 +46,13 @@ const START_ERR: Record<string, string> = {
   ar_need_zones: 'Zonen fehlen — Tipp-Modus auf "Zonen" stellen',
   ar_zones_invalid: 'Zonen ungültig (außerhalb / zu nah beieinander)',
   not_host: 'Nur der Host kann starten',
+};
+// Applied once when Debug-Mode is switched on — host can still retune via the
+// normal pickers afterward, nothing here is locked in.
+const DEBUG_COOLDOWNS = {
+  hidingDurationMs: 5_000, gameDurationMs: 180_000, hitCooldownMs: 500,
+  radarCooldownMs: 15_000, droneCooldownMs: 15_000, cloakCooldownMs: 15_000,
+  fakeMarkerCooldownMs: 15_000, aufscheuchenCooldownMs: 15_000,
 };
 
 export default function LobbyScreen({
@@ -109,6 +125,14 @@ export default function LobbyScreen({
   const subMode = ar.subMode || 'hide_and_seek';
   const teamMode = subMode !== 'hide_and_seek';
   const foundMode = ar.foundMode || 'spectator';
+  const bots = ar.bots || [];
+  const debugMode = ar.debugMode || false;
+  // Bots are display-only overlay from ar_settings — never touch the real
+  // socket-driven `members` state, which tracks actual joined players.
+  const displayMembers = useMemo(
+    () => [...members.map(m => ({ ...m, isBot: false })), ...bots.map(b => ({ id: b.id, username: b.username, ready: true, isBot: true }))],
+    [members, bots]
+  );
   // Server is the single source of truth for roles/teams
   const roleOf = (uid: string) => effective?.roles?.[uid] || 'hider';
   const teamOf = (uid: string) => effective?.teams?.[uid] || 'a';
@@ -127,16 +151,27 @@ export default function LobbyScreen({
   const toggleRole = (uid: string) => {
     if (!isHost) return;
     const all: Record<string, 'seeker' | 'hider'> = {};
-    for (const m of members) all[m.id] = roleOf(m.id);
+    for (const m of displayMembers) all[m.id] = roleOf(m.id);
     all[uid] = all[uid] === 'seeker' ? 'hider' : 'seeker';
     emitUpdate({ roles: all });
   };
   const toggleTeam = (uid: string) => {
     if (!isHost) return;
     const all: Record<string, 'a' | 'b'> = {};
-    for (const m of members) all[m.id] = teamOf(m.id);
+    for (const m of displayMembers) all[m.id] = teamOf(m.id);
     all[uid] = all[uid] === 'a' ? 'b' : 'a';
     emitUpdate({ teams: all });
+  };
+
+  const addBot = () => {
+    const id = 'bot_' + Math.random().toString(36).slice(2, 10);
+    const label = `Bot ${bots.length + 1}`;
+    emitUpdate({ bots: [...bots, { id, username: label }] });
+  };
+  const removeBot = (id: string) => emitUpdate({ bots: bots.filter(b => b.id !== id) });
+  const toggleDebugMode = () => {
+    const next = !debugMode;
+    emitUpdate(next ? { debugMode: true, ...DEBUG_COOLDOWNS } : { debugMode: false });
   };
 
   const toggleReady = () => {
@@ -190,7 +225,10 @@ export default function LobbyScreen({
     <View>
       {/* Code prominent + tap → QR popup */}
       <View style={st.topRow}>
-        <Text style={st.title}>🛰️ Lobby</Text>
+        <View style={st.titleRow}>
+          <Icon name="satellite" size={18} color="#f0c840" />
+          <Text style={st.title}>Lobby</Text>
+        </View>
         {lobbyCode && (
           <TouchableOpacity
             style={st.codeChip}
@@ -198,9 +236,12 @@ export default function LobbyScreen({
             onLongPress={() => copyToClipboard(lobbyCode, 'code')}
           >
             <Text style={st.codeTxt}>{lobbyCode}</Text>
-            <Text style={st.codeSub}>
-              {copied === 'code' ? '✅ kopiert' : qr ? 'antippen: QR · halten: kopieren' : 'halten zum Kopieren'}
-            </Text>
+            <View style={st.codeSubRow}>
+              {copied === 'code' && <Icon name="checkCircle" size={9} color="#807050" />}
+              <Text style={st.codeSub}>
+                {copied === 'code' ? 'kopiert' : qr ? 'antippen: QR · halten: kopieren' : 'halten zum Kopieren'}
+              </Text>
+            </View>
           </TouchableOpacity>
         )}
       </View>
@@ -234,30 +275,51 @@ export default function LobbyScreen({
 
       {/* Drawing errors: only meaningful for the host while drawing */}
       {isHost && polyErrs.length > 0 && (
-        <Text style={st.err}>⚠ {polyErrs.map(e => POLY_ERR_DE[e] || e).join(' · ')}</Text>
+        <View style={st.errRow}>
+          <Icon name="warning" size={13} color="#ff6040" />
+          <Text style={st.err}>{polyErrs.map(e => POLY_ERR_DE[e] || e).join(' · ')}</Text>
+        </View>
       )}
-      {!isHost && polygon.length < 3 && <Text style={st.hint}>⏳ Der Host zeichnet das Spielfeld…</Text>}
+      {!isHost && polygon.length < 3 && (
+        <View style={st.hintRow}>
+          <Icon name="hourglass" size={12} color="#807050" />
+          <Text style={st.hint}>Der Host zeichnet das Spielfeld…</Text>
+        </View>
+      )}
 
       {isHost && (
         <>
           <View style={st.rowBtns}>
             {SUB_MODES.map(m => (
-              <TouchableOpacity key={m.id} style={[st.smallBtn, subMode === m.id && st.smallBtnActive]}
+              <TouchableOpacity key={m.id} style={[st.smallBtnRow, subMode === m.id && st.smallBtnActive]}
                 onPress={() => emitUpdate({ subMode: m.id })}>
+                <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
                 <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]}>{m.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
+          <View style={st.rowBtns}>
+            <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
+              <Icon name="robot" size={13} color="#c0a0f0" />
+              <Text style={st.smallTxt}>+ Bot</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[st.smallBtnRow, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
+              <Icon name="bug" size={13} color={debugMode ? '#f0c840' : '#c0a0f0'} />
+              <Text style={[st.smallTxt, debugMode && st.smallTxtActive]}>Debug {debugMode ? 'AN' : 'AUS'}</Text>
+            </TouchableOpacity>
+          </View>
           {subMode === 'hide_and_seek' && (
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Gefunden:</Text>
-              <TouchableOpacity style={[st.smallBtn, foundMode === 'spectator' && st.smallBtnActive]}
+              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ foundMode: 'spectator' })}>
-                <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>👻 Zuschauer</Text>
+                <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtn, foundMode === 'seeker' && st.smallBtnActive]}
+              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ foundMode: 'seeker' })}>
-                <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>🔁 Weiterspielen (Sucher)</Text>
+                <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -271,16 +333,18 @@ export default function LobbyScreen({
                 <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen ({zones.length}/{NEEDS_ZONES[subMode]}+)</Text>
               </TouchableOpacity>
               <TouchableOpacity style={st.smallBtn} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                <Text style={st.smallTxt}>🗑</Text>
+                <Icon name="trash" size={14} color="#c0a0f0" />
               </TouchableOpacity>
             </View>
           )}
           <View style={st.rowBtns}>
-            <TouchableOpacity style={st.smallBtn} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
-              <Text style={st.smallTxt}>↩ Punkt</Text>
+            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
+              <Icon name="undo" size={13} color="#c0a0f0" />
+              <Text style={st.smallTxt}>Punkt</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={st.smallBtn} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Text style={st.smallTxt}>🗑 Feld</Text>
+            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
+              <Icon name="trash" size={13} color="#c0a0f0" />
+              <Text style={st.smallTxt}>Feld</Text>
             </TouchableOpacity>
             <Text style={st.wpCount}>{polygon.length} Punkte</Text>
           </View>
@@ -301,26 +365,44 @@ export default function LobbyScreen({
           </View>
         </>
       )}
-      <Text style={st.section}>👥 Spieler {isHost ? (teamMode ? '(Team antippen)' : '(Rolle antippen)') : ''}</Text>
+      <View style={st.sectionRow}>
+        <Icon name="people" size={13} color="#e0c080" />
+        <Text style={st.section}>Spieler {isHost ? (teamMode ? '(Team antippen)' : '(Rolle antippen)') : ''}</Text>
+      </View>
     </View>
   );
 
   const footer = (
     <View>
-      {me && members.length > 0 && (
-        <Text style={st.role}>
-          {teamMode
-            ? `Dein Team: ${teamOf(me.id) === 'a' ? '🔵 A' : '🔴 B'}`
-            : `Deine Rolle: ${roleOf(me.id) === 'seeker' ? '🔦 Seeker' : '🫥 Hider'}`}
-        </Text>
+      {me && displayMembers.length > 0 && (
+        <View style={st.roleRow}>
+          <Icon name={teamMode ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
+            size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : '#e0c080'} />
+          <Text style={st.role}>
+            {teamMode
+              ? `Dein Team: ${teamOf(me.id) === 'a' ? 'A' : 'B'}`
+              : `Deine Rolle: ${roleOf(me.id) === 'seeker' ? 'Seeker' : 'Hider'}`}
+          </Text>
+        </View>
       )}
-      {!!startErr && <Text style={st.err}>⚠ {startErr}</Text>}
+      {!!startErr && (
+        <View style={st.errRow}>
+          <Icon name="warning" size={13} color="#ff6040" />
+          <Text style={st.err}>{startErr}</Text>
+        </View>
+      )}
       <TouchableOpacity style={[st.btn, ready && st.btnActive]} onPress={toggleReady}>
-        <Text style={st.btnTxt}>{ready ? '✅ Bereit' : 'Bereit?'}</Text>
+        <View style={st.btnRow}>
+          <Icon name={ready ? 'checkCircle' : 'checkboxBlank'} size={15} color="#80ff40" />
+          <Text style={st.btnTxt}>{ready ? 'Bereit' : 'Bereit?'}</Text>
+        </View>
       </TouchableOpacity>
       {isHost && (
         <TouchableOpacity style={st.startBtn} onPress={startGame}>
-          <Text style={st.startTxt}>🚀 Spiel starten</Text>
+          <View style={st.btnRow}>
+            <Icon name="rocket" size={15} color="#e060ff" />
+            <Text style={st.startTxt}>Spiel starten</Text>
+          </View>
         </TouchableOpacity>
       )}
     </View>
@@ -329,28 +411,35 @@ export default function LobbyScreen({
   return (
     <View style={st.wrap}>
       <FlatList
-        data={members}
+        data={displayMembers}
         keyExtractor={m => m.id}
         ListHeaderComponent={header}
         ListFooterComponent={footer}
         contentContainerStyle={{ paddingBottom: 32 }}
         renderItem={({ item }) => (
           <View style={st.row}>
+            {item.isBot && <Icon name="robot" size={13} color="#807050" />}
             <Text style={st.name}>{item.username}</Text>
             {teamMode ? (
-              <TouchableOpacity disabled={!isHost} onPress={() => toggleTeam(item.id)}>
+              <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleTeam(item.id)}>
+                <Icon name="circle" size={11} color={teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050'} />
                 <Text style={[st.roleTag, { color: teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050' }]}>
-                  {teamOf(item.id) === 'a' ? '🔵 Team A' : '🔴 Team B'}
+                  {teamOf(item.id) === 'a' ? 'Team A' : 'Team B'}
                 </Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity disabled={!isHost} onPress={() => toggleRole(item.id)}>
-                <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? '🔦 Seeker' : '🫥 Hider'}</Text>
+              <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleRole(item.id)}>
+                <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color="#c0a0f0" />
+                <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? 'Seeker' : 'Hider'}</Text>
               </TouchableOpacity>
             )}
-            <Text style={{ color: item.ready ? '#80ff40' : '#807050', fontSize: 12, marginLeft: 8 }}>
-              {item.ready ? '✅' : '⬜'}
-            </Text>
+            <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}
+              color={item.ready ? '#80ff40' : '#807050'} style={{ marginLeft: 8 }} />
+            {isHost && item.isBot && (
+              <TouchableOpacity onPress={() => removeBot(item.id)} style={{ marginLeft: 8 }}>
+                <Icon name="close" size={14} color="#ff6040" />
+              </TouchableOpacity>
+            )}
           </View>
         )}
       />
@@ -362,9 +451,10 @@ export default function LobbyScreen({
             <Text style={st.modalCode}>{lobbyCode}</Text>
             {qr && <Image source={{ uri: qr }} style={{ width: 260, height: 260, borderRadius: 8 }} />}
             {qrUrl && (
-              <TouchableOpacity onLongPress={() => copyToClipboard(qrUrl, 'link')} activeOpacity={0.6}>
+              <TouchableOpacity onLongPress={() => copyToClipboard(qrUrl, 'link')} activeOpacity={0.6} style={st.btnRow}>
+                {copied === 'link' && <Icon name="checkCircle" size={12} color="#40a0ff" />}
                 <Text style={st.linkTxt} numberOfLines={1} ellipsizeMode="middle">
-                  {copied === 'link' ? '✅ Link kopiert' : qrUrl}
+                  {copied === 'link' ? 'Link kopiert' : qrUrl}
                 </Text>
               </TouchableOpacity>
             )}
@@ -379,25 +469,37 @@ export default function LobbyScreen({
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810', padding: 16, paddingTop: 52 },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   title: { fontSize: 20, fontWeight: '900', color: '#f0c840' },
   codeChip: { backgroundColor: 'rgba(240,200,64,.12)', borderWidth: 1.5, borderColor: '#f0c840', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6, alignItems: 'center' },
   codeTxt: { color: '#f0c840', fontSize: 18, fontWeight: '900', letterSpacing: 2, fontFamily: 'monospace' as any },
+  codeSubRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   codeSub: { color: '#807050', fontSize: 9 },
   hostHint: { color: '#807050', fontSize: 11, marginBottom: 8 },
   mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
   rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
   smallBtn: { backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
+  smallBtnRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(40,32,64,.6)',
+    borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7,
+  },
   smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
   smallTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
   smallTxtActive: { color: '#f0c840' },
   wpCount: { color: '#807050', fontSize: 11 },
-  section: { color: '#e0c080', fontSize: 12, fontWeight: '800', marginTop: 6, marginBottom: 4 },
-  hint: { color: '#807050', fontSize: 12, textAlign: 'center', marginTop: 8 },
-  err: { color: '#ff6040', fontSize: 12, marginBottom: 8 },
-  role: { color: '#e0c080', fontSize: 14, fontWeight: '700', marginVertical: 8 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 4 },
+  section: { color: '#e0c080', fontSize: 12, fontWeight: '800' },
+  hintRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 8 },
+  hint: { color: '#807050', fontSize: 12, textAlign: 'center' },
+  errRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
+  err: { color: '#ff6040', fontSize: 12 },
+  roleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 8 },
+  role: { color: '#e0c080', fontSize: 14, fontWeight: '700' },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#1a1428', gap: 8 },
   name: { flex: 1, color: '#e0c080', fontSize: 14 },
+  roleTagRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   roleTag: { fontSize: 13, color: '#c0a0f0', fontWeight: '700' },
+  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   btn: { backgroundColor: 'rgba(60,160,20,.2)', borderWidth: 2, borderColor: '#3a8020', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
   btnActive: { backgroundColor: 'rgba(60,160,20,.45)' },
   btnTxt: { color: '#80ff40', fontSize: 15, fontWeight: '800' },

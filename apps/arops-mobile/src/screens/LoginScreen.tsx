@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { loginGuest } from '../api';
+import Icon from '../components/Icon';
 
 export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [name, setName] = useState('');
@@ -22,7 +23,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
 
   return (
     <View style={st.wrap}>
-      <Text style={st.logo}>🛰️</Text>
+      <Icon name="satellite" size={64} color="#f0c840" style={{ marginBottom: 8 }} />
       <Text style={st.title}>AR Ops</Text>
       <Text style={st.sub}>Hide & Seek im echten Gelände</Text>
       <TextInput
@@ -36,7 +37,12 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
       />
       {!!error && <Text style={st.err}>{error}</Text>}
       <TouchableOpacity style={st.btn} onPress={go} disabled={busy}>
-        {busy ? <ActivityIndicator color="#80ff40" /> : <Text style={st.btnTxt}>▶ Los geht's</Text>}
+        {busy ? <ActivityIndicator color="#80ff40" /> : (
+          <View style={st.btnRow}>
+            <Icon name="play" size={16} color="#80ff40" />
+            <Text style={st.btnTxt}>Los geht's</Text>
+          </View>
+        )}
       </TouchableOpacity>
     </View>
   );
@@ -44,8 +50,8 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
 
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  logo: { fontSize: 64, marginBottom: 8 },
   title: { fontSize: 32, fontWeight: '900', color: '#f0c840' },
+  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sub: { fontSize: 13, color: '#807050', marginBottom: 32 },
   input: {
     width: '100%', maxWidth: 320, backgroundColor: '#141020', borderWidth: 1, borderColor: '#2a2040',

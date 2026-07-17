@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { restoreSession, createArLobby, getUser } from './src/api';
+import Icon from './src/components/Icon';
 import LoginScreen from './src/screens/LoginScreen';
 import JoinLobbyScreen from './src/screens/JoinLobbyScreen';
 import LobbyScreen from './src/screens/LobbyScreen';
@@ -46,14 +47,19 @@ export default function App() {
       {route.name === 'login' && <LoginScreen onLoggedIn={() => setRoute({ name: 'menu' })} />}
       {route.name === 'menu' && (
         <View style={st.center}>
-          <Text style={st.logo}>🛰️</Text>
+          <Icon name="satellite" size={56} color="#f0c840" style={{ marginBottom: 6 }} />
           <Text style={st.title}>AR Ops</Text>
-          <Text style={st.sub}>Hallo {getUser()?.username} 👋</Text>
+          <View style={st.subRow}>
+            <Text style={st.sub}>Hallo {getUser()?.username}</Text>
+            <Icon name="wave" size={14} color="#807050" />
+          </View>
           <TouchableOpacity style={st.hostBtn} onPress={host}>
-            <Text style={st.hostTxt}>🎯 Spiel hosten</Text>
+            <Icon name="target" size={16} color="#80ff40" />
+            <Text style={st.hostTxt}>Spiel hosten</Text>
           </TouchableOpacity>
           <TouchableOpacity style={st.joinBtn} onPress={() => setRoute({ name: 'join' })}>
-            <Text style={st.joinTxt}>🔗 Lobby beitreten</Text>
+            <Icon name="link" size={16} color="#e060ff" />
+            <Text style={st.joinTxt}>Lobby beitreten</Text>
           </TouchableOpacity>
           {!!hostErr && <Text style={st.err}>{hostErr}</Text>}
         </View>
@@ -69,17 +75,19 @@ export default function App() {
 
 const st = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  logo: { fontSize: 56, marginBottom: 6 },
   title: { fontSize: 30, fontWeight: '900', color: '#f0c840', marginBottom: 4 },
-  sub: { fontSize: 13, color: '#807050', marginBottom: 32 },
+  subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 32 },
+  sub: { fontSize: 13, color: '#807050' },
   hostBtn: {
-    width: 260, backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: '#3a8020',
-    borderRadius: 12, padding: 16, alignItems: 'center', marginBottom: 12,
+    width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: '#3a8020',
+    borderRadius: 12, padding: 16, marginBottom: 12,
   },
   hostTxt: { color: '#80ff40', fontSize: 16, fontWeight: '800' },
   joinBtn: {
-    width: 260, backgroundColor: 'rgba(160,60,200,.2)', borderWidth: 2, borderColor: '#803aa0',
-    borderRadius: 12, padding: 16, alignItems: 'center',
+    width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: 'rgba(160,60,200,.2)', borderWidth: 2, borderColor: '#803aa0',
+    borderRadius: 12, padding: 16,
   },
   joinTxt: { color: '#e060ff', fontSize: 16, fontWeight: '800' },
   err: { color: '#ff6040', fontSize: 12, marginTop: 12 },

@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg } from '@craftworks/arops-shared';
 import { useKeepAwake } from 'expo-keep-awake';
 import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import CameraLayer from '../components/CameraLayer';
+import Icon, { IconName } from '../components/Icon';
 import { OSM_STYLE } from '../mapStyle';
 
 interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
@@ -14,6 +15,7 @@ interface FlagInfo { team: 'a'|'b'; state: string; carrier: string | null; lat?:
 interface Snap {
   sessionId?: string;
   subMode?: string;
+  debugMode?: boolean;
   phase: string;
   phaseEndsAt: number | null;
   serverTime: number;
@@ -49,30 +51,31 @@ interface Snap {
 
 interface RadarContact { userId: string; lat: number; lon: number; ageMs: number; }
 
-const ERR_DE: Record<string, string> = {
-  wrong_phase: '⏳ Noch Versteckphase — warte auf die Suchphase',
-  cooldown: '⏱ Noch im Cooldown',
-  outside_field: '🚧 Du bist außerhalb des Spielfelds',
-  no_heading: '🧭 Kein Kompass — Handy in einer 8 bewegen',
-  role_cannot_shoot: '🫥 Hider können nicht schießen',
-  implausible: '⚠️ Position unplausibel',
-  frozen: '🧊 Du bist eingefroren',
-  bases_too_close: '🚩 Zu nah an der Gegner-Base',
-  not_captain: '🚩 Nur der Captain setzt die Base',
-  wrong_mode: '✖ Falscher Modus',
-  no_position: '✖ Keine Position bekannt',
-  perk_wrong_role: '✖ Für deine Rolle nicht verfügbar',
+interface Toast { icon: IconName; text: string; }
+const ERR_DE: Record<string, Toast> = {
+  wrong_phase: { icon: 'hourglass', text: 'Noch Versteckphase — warte auf die Suchphase' },
+  cooldown: { icon: 'hourglass', text: 'Noch im Cooldown' },
+  outside_field: { icon: 'boundary', text: 'Du bist außerhalb des Spielfelds' },
+  no_heading: { icon: 'compass', text: 'Kein Kompass — Handy in einer 8 bewegen' },
+  role_cannot_shoot: { icon: 'ghost', text: 'Hider können nicht schießen' },
+  implausible: { icon: 'warning', text: 'Position unplausibel' },
+  frozen: { icon: 'snowflake', text: 'Du bist eingefroren' },
+  bases_too_close: { icon: 'flag', text: 'Zu nah an der Gegner-Base' },
+  not_captain: { icon: 'flag', text: 'Nur der Captain setzt die Base' },
+  wrong_mode: { icon: 'close', text: 'Falscher Modus' },
+  no_position: { icon: 'close', text: 'Keine Position bekannt' },
+  perk_wrong_role: { icon: 'close', text: 'Für deine Rolle nicht verfügbar' },
 };
 
 // View modes: 2D map (default) → heading-rotated map → split cam/map →
 // transparent map over camera → pure camera.
 type ViewMode = 'map' | 'rotated' | 'split' | 'overlay' | 'camera';
-const MODES: { id: ViewMode; icon: string; label: string }[] = [
-  { id: 'map',     icon: '🗺',  label: 'Karte' },
-  { id: 'rotated', icon: '🧭', label: 'Gedreht' },
-  { id: 'split',   icon: '◧',  label: 'Split' },
-  { id: 'overlay', icon: '👻', label: 'Overlay' },
-  { id: 'camera',  icon: '📷', label: 'Kamera' },
+const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
+  { id: 'map',     icon: 'map',       label: 'Karte' },
+  { id: 'rotated', icon: 'compass',   label: 'Gedreht' },
+  { id: 'split',   icon: 'splitView', label: 'Split' },
+  { id: 'overlay', icon: 'ghost',     label: 'Overlay' },
+  { id: 'camera',  icon: 'camera',    label: 'Kamera' },
 ];
 
 export default function GameScreen({ sessionId }: { sessionId: string }) {
@@ -80,43 +83,69 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const socket = getSocket();
   const me = getUser();
   const [snap, setSnap] = useState<Snap | null>(null);
-  const [lastResult, setLastResult] = useState('');
+  const [lastResult, setLastResult] = useState<Toast | null>(null);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('map');
   const [showRange, setShowRange] = useState(false);
   const telemetry = useTelemetry(socket, sessionId);
 
+  // ── Debug overlay (raw hits/perks, opponent state, ping, throughput) ──
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugLog, setDebugLog] = useState<any[]>([]);
+  const [pingMs, setPingMs] = useState<number | null>(null);
+  const [ticksPerSec, setTicksPerSec] = useState(0);
+  const tickCounterRef = useRef(0);
+  const debugMode = !!snap?.debugMode;
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTicksPerSec(tickCounterRef.current);
+      tickCounterRef.current = 0;
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (!debugMode) return;
+    const onPong = ({ t }: { t: number }) => setPingMs(Date.now() - t);
+    socket.on('debug:pong', onPong);
+    const id = setInterval(() => socket.emit('debug:ping', { t: Date.now() }), 3000);
+    return () => { clearInterval(id); socket.off('debug:pong', onPong); };
+  }, [debugMode]);
+
   useEffect(() => {
     socket.emit('game:join', { sessionId });
     const onTick = (s: Snap) => {
       if (s.sessionId && s.sessionId !== sessionId) return; // stale session
+      tickCounterRef.current++;
       setSnap(s);
     };
     const onResult = (r: any) => {
+      setDebugLog(log => [{ t: Date.now(), ...r }, ...log].slice(0, 30));
       if (r.action === 'ar_hit_attempt') {
-        let txt: string;
-        if (r.hit) txt = `🎯 Treffer! (${Math.round((r.confidence || 0) * 100)}%)`;
-        else if (r.err) txt = ERR_DE[r.err] || `✖ ${r.err}`;
-        else if (r.near) txt = `💨 Knapp! ${r.near.deltaDeg}° daneben (Toleranz ${r.near.toleranceDeg}°, ~${r.near.distanceM} m)`;
-        else if (r.reason === 'no_candidates') txt = '✖ Kein gültiges Ziel (Team? Eingefroren? Keine Daten?)';
-        else if (r.reason === 'target_stale') txt = '📵 Gegner-Position veraltet — dessen App/Display muss aktiv sein!';
-        else if (r.reason === 'low_confidence') txt = '📡 Im Kegel, aber Datenqualität zu niedrig (GPS/Aktualität)';
-        else if (r.reason === 'out_of_range') txt = '📏 Außer Reichweite (max. 75 m)';
-        else txt = '💨 Daneben — kein Ziel im Kegel';
-        setLastResult(txt);
-        setTimeout(() => setLastResult(''), 4500);
+        let toast: Toast;
+        if (r.hit) toast = { icon: 'crosshair', text: `Treffer! (${Math.round((r.confidence || 0) * 100)}%)` };
+        else if (r.err) toast = ERR_DE[r.err] || { icon: 'close', text: r.err };
+        else if (r.near) toast = { icon: 'windy', text: `Knapp! ${r.near.deltaDeg}° daneben (Toleranz ${r.near.toleranceDeg}°, ~${r.near.distanceM} m)` };
+        else if (r.reason === 'no_candidates') toast = { icon: 'close', text: 'Kein gültiges Ziel (Team? Eingefroren? Keine Daten?)' };
+        else if (r.reason === 'target_stale') toast = { icon: 'signalOff', text: 'Gegner-Position veraltet — dessen App/Display muss aktiv sein!' };
+        else if (r.reason === 'low_confidence') toast = { icon: 'signal', text: 'Im Kegel, aber Datenqualität zu niedrig (GPS/Aktualität)' };
+        else if (r.reason === 'out_of_range') toast = { icon: 'ruler', text: 'Außer Reichweite (max. 75 m)' };
+        else toast = { icon: 'windy', text: 'Daneben — kein Ziel im Kegel' };
+        setLastResult(toast);
+        setTimeout(() => setLastResult(null), 4500);
       } else if (r.action === 'ar_use_perk' && r.contacts) {
         setRadarContacts(r.contacts);
         setTimeout(() => setRadarContacts([]), 15_000);
       } else if (r.action === 'ar_use_perk' && typeof r.alert === 'boolean') {
-        setLastResult(r.alert ? '🛸 Gegner in der Nähe!' : '🛸 Nichts entdeckt');
-        setTimeout(() => setLastResult(''), 4000);
+        setLastResult({ icon: 'drone', text: r.alert ? 'Gegner in der Nähe!' : 'Nichts entdeckt' });
+        setTimeout(() => setLastResult(null), 4000);
       } else if (r.action === 'ar_use_perk' && r.err) {
-        setLastResult(ERR_DE[r.err] || `✖ ${r.err}`);
-        setTimeout(() => setLastResult(''), 4000);
+        setLastResult(ERR_DE[r.err] || { icon: 'close', text: r.err });
+        setTimeout(() => setLastResult(null), 4000);
       } else if (r.action === 'ar_set_base') {
-        setLastResult(r.ok ? '🚩 Base gesetzt!' : (ERR_DE[r.err] || `✖ ${r.err}`));
-        setTimeout(() => setLastResult(''), 4000);
+        setLastResult(r.ok ? { icon: 'flag', text: 'Base gesetzt!' } : (ERR_DE[r.err] || { icon: 'close', text: r.err }));
+        setTimeout(() => setLastResult(null), 4000);
       }
     };
     socket.on('game:ar_tick', onTick);
@@ -129,7 +158,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
 
   const shoot = () => {
     const s = telemetry.snapshot();
-    if (!s) return setLastResult('✖ Keine Position');
+    if (!s) return setLastResult({ icon: 'close', text: 'Keine Position' });
     socket.emit('game:action', { sessionId, action: 'ar_hit_attempt', data: { sample: s } });
   };
   const useRadar = () =>
@@ -299,21 +328,22 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const fakeMarkerActive = !!snap?.me?.fakeMarkerActive;
   const fakeMarkerRemainingS = Math.ceil((snap?.me?.fakeMarkerRemainingMs ?? 0) / 1000);
   const aufscheuchenCd = snap?.me?.aufscheuchenCooldownRemainingMs ?? 0;
-  const phaseLabel = snap?.phase === 'hiding' ? '🫥 Versteckphase'
-    : snap?.phase === 'seeking' ? '🔦 Suchphase'
-    : snap?.phase === 'base_setup' ? '🚩 Base setzen'
-    : snap?.phase === 'live' ? '🟢 Live'
-    : snap?.phase === 'ended' ? '🏁 Beendet' : '⏳';
+  const phaseLabel: Toast = snap?.phase === 'hiding' ? { icon: 'ghost', text: 'Versteckphase' }
+    : snap?.phase === 'seeking' ? { icon: 'flashlight', text: 'Suchphase' }
+    : snap?.phase === 'base_setup' ? { icon: 'flag', text: 'Base setzen' }
+    : snap?.phase === 'live' ? { icon: 'circle', text: 'Live' }
+    : snap?.phase === 'ended' ? { icon: 'flagCheckered', text: 'Beendet' } : { icon: 'hourglass', text: '' };
   const frozenMs = snap?.me?.frozenRemainingMs ?? 0;
   const isCaptainSetup = snap?.phase === 'base_setup' && snap?.me?.isCaptain;
-  const scoreLine = snap?.subMode === 'domination'
-    ? `🅰 ${snap.teamScore?.a ?? 0} : ${snap.teamScore?.b ?? 0} 🅱 · Ziel ${snap.targetScore}`
+  const scoreLine: string | null = snap?.subMode === 'domination'
+    ? `A ${snap.teamScore?.a ?? 0} : ${snap.teamScore?.b ?? 0} B · Ziel ${snap.targetScore}`
     : snap?.subMode === 'ctf'
-    ? `🚩 🅰 ${snap.captures?.a ?? 0} : ${snap.captures?.b ?? 0} 🅱 · Ziel ${snap.targetCaptures}`
+    ? `A ${snap.captures?.a ?? 0} : ${snap.captures?.b ?? 0} B · Ziel ${snap.targetCaptures}`
     : snap?.subMode === 'seek_destroy'
-    ? (snap.bomb ? `💣 ${Math.max(0, Math.ceil((snap.bomb.explodeAt - snap.serverTime) / 1000))}s${snap.bomb.defusePct ? ` · Defuse ${snap.bomb.defusePct}%` : ''}`
-       : (snap.plantPct ? `Plant ${snap.plantPct}%` : (snap?.me?.team === 'a' ? '💣 Angreifer' : '🛡 Verteidiger')))
+    ? (snap.bomb ? `${Math.max(0, Math.ceil((snap.bomb.explodeAt - snap.serverTime) / 1000))}s${snap.bomb.defusePct ? ` · Defuse ${snap.bomb.defusePct}%` : ''}`
+       : (snap.plantPct ? `Plant ${snap.plantPct}%` : (snap?.me?.team === 'a' ? 'Angreifer' : 'Verteidiger')))
     : null;
+  const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
   // Rotated modes align the map to the compass (heading-up)
   const mapHeading = (viewMode === 'rotated' || viewMode === 'split' || viewMode === 'overlay')
     ? (telemetry.heading ?? 0) : 0;
@@ -390,7 +420,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
 
   const shootButton = canShoot && hasCam && (
     <TouchableOpacity style={[st.shutter, hitCd > 0 && st.shutterCd]} onPress={shoot} disabled={hitCd > 0}>
-      <Text style={st.shutterTxt}>{hitCd > 0 ? Math.ceil(hitCd / 1000) + 's' : '📸'}</Text>
+      {hitCd > 0 ? <Text style={st.shutterTxt}>{Math.ceil(hitCd / 1000) + 's'}</Text> : <Icon name="photo" size={26} color="#f0c840" />}
     </TouchableOpacity>
   );
 
@@ -398,73 +428,138 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     <View style={st.wrap}>
       {/* Status bar */}
       <View style={st.status}>
-        <Text style={st.phase}>{phaseLabel}</Text>
-        <Text style={st.timer}>⏱ {Math.floor(remainingS / 60)}:{String(remainingS % 60).padStart(2, '0')}</Text>
-        <Text style={st.info}>{isSeeker ? '🔦' : '🫥'} · Hider: {snap?.hidersRemaining ?? '–'}</Text>
+        <View style={st.iconTextRow}>
+          <Icon name={phaseLabel.icon} size={13} color="#f0c840" />
+          <Text style={st.phase}>{phaseLabel.text}</Text>
+        </View>
+        <View style={st.iconTextRow}>
+          <Icon name="clock" size={13} color="#80ff80" />
+          <Text style={st.timer}>{Math.floor(remainingS / 60)}:{String(remainingS % 60).padStart(2, '0')}</Text>
+        </View>
+        <View style={[st.iconTextRow, { marginLeft: 'auto' }]}>
+          <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color="#a090c0" />
+          <Text style={st.info}>Hider: {snap?.hidersRemaining ?? '–'}</Text>
+        </View>
       </View>
 
       {frozenMs > 0 && (
         <View style={st.frozenBanner}>
-          <Text style={st.frozenTxt}>🧊 EINGEFROREN — {Math.ceil(frozenMs / 1000)}s · Stehen bleiben! Bewegung verlängert.</Text>
+          <Icon name="snowflake" size={13} color="#04121f" />
+          <Text style={st.frozenTxt}>EINGEFROREN — {Math.ceil(frozenMs / 1000)}s · Stehen bleiben! Bewegung verlängert.</Text>
         </View>
       )}
       {!!scoreLine && (
-        <View style={st.scoreBar}><Text style={st.scoreTxt}>{scoreLine}</Text></View>
+        <View style={st.scoreBar}>
+          <Icon name={scoreIcon} size={13} color="#f0c840" />
+          <Text style={st.scoreTxt}>{scoreLine}</Text>
+        </View>
       )}
       {snap?.me?.proximityAlert && (
-        <View style={st.proxAlert}><Text style={st.proxTxt}>⚠️ GEGNER IN DER NÄHE</Text></View>
+        <View style={st.proxAlert}>
+          <Icon name="warning" size={13} color="#fff" />
+          <Text style={st.proxTxt}>GEGNER IN DER NÄHE</Text>
+        </View>
       )}
       {cloakActive && (
-        <View style={st.cloakBanner}><Text style={st.cloakTxt}>🫥 CLOAK AKTIV — {cloakRemainingS}s</Text></View>
+        <View style={st.cloakBanner}>
+          <Icon name="ghost" size={13} color="#fff" />
+          <Text style={st.cloakTxt}>CLOAK AKTIV — {cloakRemainingS}s</Text>
+        </View>
       )}
       {fakeMarkerActive && (
-        <View style={st.cloakBanner}><Text style={st.cloakTxt}>🎭 FAKE-MARKER AKTIV — {fakeMarkerRemainingS}s</Text></View>
+        <View style={st.cloakBanner}>
+          <Icon name="mask" size={13} color="#fff" />
+          <Text style={st.cloakTxt}>FAKE-MARKER AKTIV — {fakeMarkerRemainingS}s</Text>
+        </View>
       )}
       {snap?.me?.geofence === 'warning' && (
-        <View style={st.geoWarn}><Text style={st.geoTxt}>🚧 Spielfeldrand!</Text></View>
+        <View style={st.geoWarn}>
+          <Icon name="boundary" size={12} color="#100" />
+          <Text style={st.geoTxt}>Spielfeldrand!</Text>
+        </View>
       )}
       {snap?.me?.geofence === 'outside' && (
-        <View style={st.geoOut}><Text style={st.geoTxt}>🚨 AUSSERHALB — zurück ins Feld!</Text></View>
+        <View style={st.geoOut}>
+          <Icon name="alertOctagon" size={12} color="#100" />
+          <Text style={st.geoTxt}>AUSSERHALB — zurück ins Feld!</Text>
+        </View>
       )}
-      {!!lastResult && <View style={st.result}><Text style={st.resultTxt}>{lastResult}</Text></View>}
+      {!!lastResult && (
+        <View style={st.result}>
+          <Icon name={lastResult.icon} size={13} color="#f0c840" />
+          <Text style={st.resultTxt}>{lastResult.text}</Text>
+        </View>
+      )}
 
       {/* ── View modes ── */}
+      {/*
+        Single CameraLayer instance, gated on `hasCam` rather than mounted
+        separately per viewMode: switching directly between two camera-using
+        modes (split/overlay/camera) used to unmount + remount CameraView in
+        the same React commit, racing its native session teardown on Android
+        and hanging the camera. Only crossing hasCam's own boundary (camera
+        mode <-> map/rotated) unmounts it now.
+      */}
       <View style={{ flex: 1 }}>
-        {viewMode === 'map' && renderMap(true)}
-        {viewMode === 'rotated' && renderMap(false)}
-        {viewMode === 'split' && (
-          <View style={{ flex: 1 }}>
-            <View style={{ flex: 1 }}>
-              <CameraLayer>{crosshair}</CameraLayer>
-            </View>
-            <View style={{ flex: 1 }}>{renderMap(false)}</View>
-          </View>
-        )}
-        {viewMode === 'overlay' && (
+        {!hasCam && viewMode === 'map' && renderMap(true)}
+        {!hasCam && viewMode === 'rotated' && renderMap(false)}
+        {hasCam && (
           <CameraLayer>
-            <View style={[StyleSheet.absoluteFill, { opacity: 0.45 }]} pointerEvents="none">
-              {renderMap(false)}
-            </View>
-            {crosshair}
+            {viewMode === 'split' && (
+              <View style={{ flex: 1 }}>
+                <View style={{ flex: 1 }}>{crosshair}</View>
+                <View style={{ flex: 1 }}>{renderMap(false)}</View>
+              </View>
+            )}
+            {viewMode === 'overlay' && (
+              <>
+                <View style={[StyleSheet.absoluteFill, { opacity: 0.45 }]} pointerEvents="none">
+                  {renderMap(false)}
+                </View>
+                {crosshair}
+              </>
+            )}
+            {viewMode === 'camera' && crosshair}
           </CameraLayer>
         )}
-        {viewMode === 'camera' && <CameraLayer>{crosshair}</CameraLayer>}
 
         {/* Shoot button floats over camera modes */}
         {shootButton && <View style={st.shootWrap}>{shootButton}</View>}
       </View>
 
       {/* Endgame overlay */}
-      {snap?.phase === 'ended' && (
-        <View style={st.endOverlay}>
-          <Text style={st.endTitle}>{
-            snap.winner === 'seekers' ? '🔦 Seeker gewinnen!'
-            : snap.winner === 'hiders' ? '🫥 Hider gewinnen!'
-            : snap.winner === 'draw' ? '🤝 Unentschieden'
-            : snap.winner === 'team_' + (snap.me?.team || '') ? '🏆 Dein Team gewinnt!'
-            : '💀 Gegner-Team gewinnt'
-          }</Text>
-          <Text style={st.endScore}>Deine Punkte: {snap.me?.score ?? 0}</Text>
+      {snap?.phase === 'ended' && (() => {
+        const end: Toast = snap.winner === 'seekers' ? { icon: 'flashlight', text: 'Seeker gewinnen!' }
+          : snap.winner === 'hiders' ? { icon: 'ghost', text: 'Hider gewinnen!' }
+          : snap.winner === 'draw' ? { icon: 'handshake', text: 'Unentschieden' }
+          : snap.winner === 'team_' + (snap.me?.team || '') ? { icon: 'trophy', text: 'Dein Team gewinnt!' }
+          : { icon: 'skull', text: 'Gegner-Team gewinnt' };
+        return (
+          <View style={st.endOverlay}>
+            <Icon name={end.icon} size={32} color="#f0c840" style={{ marginBottom: 8 }} />
+            <Text style={st.endTitle}>{end.text}</Text>
+            <Text style={st.endScore}>Deine Punkte: {snap.me?.score ?? 0}</Text>
+          </View>
+        );
+      })()}
+
+      {/* Debug overlay: raw hits/perks, ping, throughput — debugMode only */}
+      {debugMode && debugOpen && (
+        <View style={st.debugPanel}>
+          <View style={st.iconTextRow}>
+            <Icon name="bug" size={13} color="#40ff80" />
+            <Text style={st.debugHead}>Debug · Ping {pingMs ?? '–'}ms · {ticksPerSec} ticks/s</Text>
+          </View>
+          <ScrollView style={{ flex: 1 }}>
+            <Text style={st.debugSub}>Events (server, letzte 15)</Text>
+            {(snap?.events ?? []).slice().reverse().map(e => (
+              <Text key={e.seq} style={st.debugLine}>{JSON.stringify(e)}</Text>
+            ))}
+            <Text style={st.debugSub}>Action-Results (Client, letzte 30)</Text>
+            {debugLog.map((e, i) => (
+              <Text key={i} style={st.debugLine}>{JSON.stringify(e)}</Text>
+            ))}
+          </ScrollView>
         </View>
       )}
 
@@ -475,52 +570,65 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
             <TouchableOpacity key={m.id}
               style={[st.modeBtn, viewMode === m.id && st.modeBtnActive]}
               onPress={() => setViewMode(m.id)}>
-              <Text style={st.modeIcon}>{m.icon}</Text>
+              <Icon name={m.icon} size={18} color={viewMode === m.id ? '#f0c840' : '#c0a0f0'} />
             </TouchableOpacity>
           ))}
           <TouchableOpacity
             style={[st.modeBtn, showRange && st.modeBtnActive]}
             onPress={() => setShowRange(r => !r)}>
-            <Text style={st.modeIcon}>🎯</Text>
+            <Icon name="target" size={18} color={showRange ? '#f0c840' : '#c0a0f0'} />
           </TouchableOpacity>
+          {debugMode && (
+            <TouchableOpacity
+              style={[st.modeBtn, debugOpen && st.modeBtnActive]}
+              onPress={() => setDebugOpen(o => !o)}>
+              <Icon name="bug" size={18} color={debugOpen ? '#f0c840' : '#c0a0f0'} />
+            </TouchableOpacity>
+          )}
         </View>
         <View style={st.actionRow}>
           {isCaptainSetup && (
-            <TouchableOpacity style={st.baseBtn} onPress={() => setBase()}>
-              <Text style={st.baseTxt}>🚩 Base HIER setzen</Text>
+            <TouchableOpacity style={[st.baseBtn, st.btnRow]} onPress={() => setBase()}>
+              <Icon name="flag" size={14} color="#f0c840" />
+              <Text style={st.baseTxt}>Base HIER setzen</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={st.radarBtn} onPress={useRadar}
+          <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useRadar}
             disabled={radarCd > 0 || snap?.phase !== 'seeking'}>
-            <Text style={st.actTxt}>🛰️ {radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
+            <Icon name="radar" size={15} color="#c0a0f0" />
+            <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
           </TouchableOpacity>
           {snap?.subMode === 'hide_and_seek' && isHider && (
             <>
-              <TouchableOpacity style={st.radarBtn} onPress={useDrone}
+              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useDrone}
                 disabled={droneCd > 0 || snap?.phase !== 'seeking'}>
-                <Text style={st.actTxt}>🛸 {droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
+                <Icon name="drone" size={15} color="#c0a0f0" />
+                <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={st.radarBtn} onPress={useCloak}
+              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useCloak}
                 disabled={cloakCd > 0 || cloakActive || snap?.phase !== 'seeking'}>
+                <Icon name="ghost" size={15} color="#c0a0f0" />
                 <Text style={st.actTxt}>
-                  🫥 {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
+                  {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={st.radarBtn} onPress={useFakeMarker}
+              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
                 disabled={fakeMarkerCd > 0 || snap?.phase !== 'seeking'}>
-                <Text style={st.actTxt}>🎭 {fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
+                <Icon name="mask" size={15} color="#c0a0f0" />
+                <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
               </TouchableOpacity>
             </>
           )}
           {snap?.subMode === 'hide_and_seek' && isSeeker && (
-            <TouchableOpacity style={st.radarBtn} onPress={useAufscheuchen}
+            <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
               disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
-              <Text style={st.actTxt}>😱 {aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
+              <Icon name="scare" size={15} color="#c0a0f0" />
+              <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
             </TouchableOpacity>
           )}
           {canShoot && !hasCam && (
             <TouchableOpacity style={st.camBtn} onPress={() => setViewMode('camera')}>
-              <Text style={st.camTxt}>📸</Text>
+              <Icon name="photo" size={24} color="#f0c840" />
             </TouchableOpacity>
           )}
         </View>
@@ -535,23 +643,24 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
     backgroundColor: '#141020', gap: 14,
   },
+  iconTextRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   phase: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
   timer: { color: '#80ff80', fontWeight: '800', fontSize: 14 },
-  info: { color: '#a090c0', fontSize: 13, marginLeft: 'auto' },
-  proxAlert: { backgroundColor: 'rgba(224,48,32,.9)', padding: 8, alignItems: 'center' },
-  cloakBanner: { backgroundColor: 'rgba(120,60,200,.9)', padding: 8, alignItems: 'center' },
+  info: { color: '#a090c0', fontSize: 13 },
+  proxAlert: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(224,48,32,.9)', padding: 8, alignItems: 'center' },
+  cloakBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(120,60,200,.9)', padding: 8, alignItems: 'center' },
   cloakTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
-  frozenBanner: { backgroundColor: 'rgba(80,160,255,.92)', padding: 8, alignItems: 'center' },
+  frozenBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(80,160,255,.92)', padding: 8, alignItems: 'center' },
   frozenTxt: { color: '#04121f', fontWeight: '900', fontSize: 12 },
-  scoreBar: { backgroundColor: '#1a1428', paddingVertical: 5, alignItems: 'center' },
+  scoreBar: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: '#1a1428', paddingVertical: 5, alignItems: 'center' },
   scoreTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
   baseBtn: { backgroundColor: 'rgba(240,200,64,.2)', borderWidth: 2, borderColor: '#f0c840', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
   baseTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
   proxTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
-  geoWarn: { backgroundColor: 'rgba(240,200,64,.85)', padding: 6, alignItems: 'center' },
-  geoOut: { backgroundColor: 'rgba(224,48,32,.95)', padding: 6, alignItems: 'center' },
+  geoWarn: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(240,200,64,.85)', padding: 6, alignItems: 'center' },
+  geoOut: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(224,48,32,.95)', padding: 6, alignItems: 'center' },
   geoTxt: { color: '#100', fontWeight: '800', fontSize: 12 },
-  result: { backgroundColor: 'rgba(20,16,32,.95)', padding: 8, alignItems: 'center' },
+  result: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(20,16,32,.95)', padding: 8, alignItems: 'center' },
   resultTxt: { color: '#f0c840', fontWeight: '800' },
   crosshair: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   chH: { position: 'absolute', width: 50, height: 2, backgroundColor: 'rgba(240,200,64,.8)' },
@@ -570,6 +679,14 @@ const st = StyleSheet.create({
   },
   endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
+  debugPanel: {
+    position: 'absolute', top: 90, left: 8, right: 8, bottom: 100,
+    backgroundColor: 'rgba(5,5,10,.94)', borderWidth: 1, borderColor: '#40ff80',
+    borderRadius: 10, padding: 8, zIndex: 60,
+  },
+  debugHead: { color: '#40ff80', fontSize: 12, fontWeight: '800', marginBottom: 6 },
+  debugSub: { color: '#f0c840', fontSize: 11, fontWeight: '700', marginTop: 8, marginBottom: 2 },
+  debugLine: { color: '#a0e0a0', fontSize: 9, fontFamily: 'monospace' as any, marginBottom: 1 },
   bottomBar: { backgroundColor: '#141020', paddingBottom: 24, paddingTop: 8 },
   modeRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 },
   modeBtn: {
@@ -577,8 +694,8 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
   },
   modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
-  modeIcon: { fontSize: 18 },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 10 },
+  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   radarBtn: {
     backgroundColor: 'rgba(40,32,64,.9)', borderWidth: 2, borderColor: '#4a3a70',
     borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
@@ -588,5 +705,4 @@ const st = StyleSheet.create({
     width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(240,200,64,.25)',
     borderWidth: 3, borderColor: '#f0c840', alignItems: 'center', justifyContent: 'center',
   },
-  camTxt: { fontSize: 24 },
 });

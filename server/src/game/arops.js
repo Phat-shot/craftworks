@@ -139,6 +139,9 @@ const MODES = {
       this.checkWin(gs);
     },
     checkWin(gs) {
+      // Solo debug sessions (host alone, no bots) can't have a winner — never
+      // auto-end them just because there are trivially "0 hiders left".
+      if (Object.keys(gs.players).length < 2) return;
       const hidersLeft = Object.values(gs.players)
         .filter(p => p.role === 'hider' && p.status === 'alive').length;
       if (hidersLeft === 0) endGame(gs, 'seekers');
@@ -514,6 +517,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
     if (typeof ar[k] === 'number') cfg[k] = ar[k];
   }
   cfg.foundMode = ar.foundMode === 'seeker' ? 'seeker' : 'spectator';
+  cfg.debugMode = ar.debugMode === true;
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG, ...(ar.hitConfig || {}) };
 
   // Field-size-scaled timings; each key overridable via ar_settings.timings
@@ -552,7 +556,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
     if (team && !captains[team]) captains[team] = p.userId;
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      role, team,
+      role, team, isBot: !!p.isBot,
       status: 'alive',
       foundBy: null, foundAt: null,
       score: 0,
@@ -566,7 +570,9 @@ function createAropsGame(sessionId, players, workshopConfig) {
       frozenUntil: 0, freezeAnchor: null, freezeViolations: 0,
     };
   });
-  if (!mode.usesTeams && seekerCount === 0) {
+  // Every normal match needs at least one seeker — but a solo debug session
+  // (host testing the hider view alone) should be able to explicitly opt out.
+  if (!mode.usesTeams && seekerCount === 0 && !cfg.debugMode) {
     const first = Object.values(playerState)[0];
     if (first) first.role = 'seeker';
   }
@@ -581,6 +587,8 @@ function createAropsGame(sessionId, players, workshopConfig) {
     events: [], _eventSeq: 0,
     modeState: {},
     _lastModeTick: now(),
+    _hasBots: Object.values(playerState).some(p => p.isBot),
+    _lastBotStep: 0,
   };
   if (mode.initState) mode.initState(gs);
   return gs;
@@ -914,6 +922,76 @@ function actionArUsePerk(gs, userId, data) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  BOTS (debug/testing only — added via LobbyScreen's "+ Bot" button,
+//  never persisted to the users table; see socket.js lobby:ar_update).
+//  Movement is fed through actionArTelemetry like a real client, so
+//  hit/radar/geofence/zone code never needs to special-case bots.
+// ═══════════════════════════════════════════════════════════
+const BOT_STEP_MS = 1200;   // < DEFAULT_PLAUSIBILITY.minGapMs(1500) — every
+                            // step is trivially plausibility-exempt, matching
+                            // a real client's ~1s telemetry cadence.
+const BOT_SPEED_MPS = 1.3;  // brisk walking pace
+
+function nearestAlivePlayer(gs, from, filterFn) {
+  let best = null, bestDist = Infinity;
+  for (const c of Object.values(gs.players)) {
+    if (c.userId === from.userId || c.status !== 'alive' || !c.lastAccepted || !filterFn(c)) continue;
+    const d = shared.haversineMeters(from.lastAccepted, c.lastAccepted);
+    if (d < bestDist) { bestDist = d; best = c; }
+  }
+  return best;
+}
+
+function tickBots(gs, t) {
+  if (!gs._hasBots) return;
+  if (gs._lastBotStep && t - gs._lastBotStep < BOT_STEP_MS) return;
+  gs._lastBotStep = t;
+
+  const stepM = (BOT_STEP_MS / 1000) * BOT_SPEED_MPS;
+  for (const p of Object.values(gs.players)) {
+    if (!p.isBot || p.status !== 'alive') continue;
+
+    if (!p.lastAccepted) {
+      const start = randomPointInPolygon(gs.polygon) || fieldCentroid(gs.polygon);
+      actionArTelemetry(gs, p.userId, {
+        sample: { lat: start.lat, lon: start.lon, ts: t, accuracyM: 4, headingDeg: 0 },
+      });
+      continue;
+    }
+
+    let dest;
+    if (gs.subMode === 'hide_and_seek') {
+      // Hiders sit still once they've picked a spot during 'hiding'; seekers
+      // don't move until 'seeking' starts (mirrors what a real player can do).
+      if (p.role === 'hider' && gs.phase === 'hiding') continue;
+      if (p.role === 'seeker' && gs.phase !== 'seeking') continue;
+      const target = p.role === 'seeker'
+        ? nearestAlivePlayer(gs, p, c => c.role === 'hider')
+        : nearestAlivePlayer(gs, p, c => c.role === 'seeker');
+      if (target) {
+        const brg = shared.bearingDeg(p.lastAccepted, target.lastAccepted);
+        dest = shared.destinationPoint(p.lastAccepted, p.role === 'seeker' ? brg : (brg + 180) % 360, stepM);
+      }
+    }
+    // Team modes (v1 scope) and hide_and_seek bots without a target: wander.
+    if (!dest) {
+      dest = shared.destinationPoint(p.lastAccepted, Math.random() * 360, stepM);
+    }
+    if (!shared.pointInPolygon(dest, gs.polygon)) {
+      // Would leave the field — head back toward the centroid instead.
+      const centroid = fieldCentroid(gs.polygon);
+      dest = shared.destinationPoint(p.lastAccepted, shared.bearingDeg(p.lastAccepted, centroid), stepM);
+    }
+    actionArTelemetry(gs, p.userId, {
+      sample: {
+        lat: dest.lat, lon: dest.lon, ts: t, accuracyM: 4,
+        headingDeg: shared.bearingDeg(p.lastAccepted, dest),
+      },
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  TICK (core: geofence exposure + proximity, then mode logic)
 // ═══════════════════════════════════════════════════════════
 function tickArops(gs) {
@@ -935,6 +1013,8 @@ function tickArops(gs) {
 
   mode.tick(gs, t, dtMs);
   if (gs.gameOver) return;
+
+  tickBots(gs, t);
 
   // Proximity warner (active shoot phases only)
   for (const p of Object.values(gs.players)) {
@@ -1002,6 +1082,7 @@ function getAropsSnapshot(gs, userId) {
     phase: gs.phase, phaseEndsAt, serverTime: t,
     polygon: gs.polygon,
     winner: gs.winner,
+    debugMode: !!gs.cfg.debugMode,
     timings: {
       freezeMs: gs.timings.freezeMs,
       captureDwellMs: gs.timings.captureDwellMs,

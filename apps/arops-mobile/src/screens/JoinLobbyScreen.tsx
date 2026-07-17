@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { joinLobbyByCode, getUser, parseLobbyCode } from '../api';
+import Icon from '../components/Icon';
 
 export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: string) => void }) {
   const [code, setCode] = useState('');
@@ -54,7 +55,7 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
         <View style={st.scanFrame} pointerEvents="none" />
         <Text style={st.scanHint}>QR-Code der Lobby scannen</Text>
         <TouchableOpacity style={st.scanClose} onPress={() => setScanning(false)}>
-          <Text style={{ color: '#fff', fontSize: 22 }}>✕</Text>
+          <Icon name="close" size={22} color="#fff" />
         </TouchableOpacity>
       </View>
     );
@@ -62,7 +63,10 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
 
   return (
     <View style={st.wrap}>
-      <Text style={st.hi}>Hallo {getUser()?.username} 👋</Text>
+      <View style={st.hiRow}>
+        <Text style={st.hi}>Hallo {getUser()?.username}</Text>
+        <Icon name="wave" size={13} color="#807050" />
+      </View>
       <Text style={st.title}>Lobby beitreten</Text>
       <TextInput
         style={st.input}
@@ -75,10 +79,16 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
       />
       {!!error && <Text style={st.err}>{error}</Text>}
       <TouchableOpacity style={st.btn} onPress={() => join(code)} disabled={code.trim().length < 6}>
-        <Text style={st.btnTxt}>→ Beitreten</Text>
+        <View style={st.btnRow}>
+          <Icon name="arrowRight" size={16} color="#e060ff" />
+          <Text style={st.btnTxt}>Beitreten</Text>
+        </View>
       </TouchableOpacity>
       <TouchableOpacity style={st.scanBtn} onPress={openScanner}>
-        <Text style={st.scanBtnTxt}>📷 QR-Code scannen</Text>
+        <View style={st.btnRow}>
+          <Icon name="qrcode" size={15} color="#c0a0f0" />
+          <Text style={st.scanBtnTxt}>QR-Code scannen</Text>
+        </View>
       </TouchableOpacity>
     </View>
   );
@@ -86,7 +96,9 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
 
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  hi: { color: '#807050', fontSize: 13, marginBottom: 24 },
+  hiRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 24 },
+  hi: { color: '#807050', fontSize: 13 },
+  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { fontSize: 24, fontWeight: '900', color: '#f0c840', marginBottom: 16 },
   input: {
     width: 320, backgroundColor: '#141020', borderWidth: 1, borderColor: '#2a2040', borderRadius: 10,
