@@ -1,18 +1,23 @@
 name: Build & Push Docker Image
+
 on:
   push:
     branches: [main]
     tags:    ['v*.*.*']
   pull_request:
     branches: [main]
+
 env:
   REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,12 +38,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.server
+          file: ./Dockerfile.server
           push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ghcr.io/phat-shot/craftworks:latest
-            ghcr.io/phat-shot/craftworks:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          no-cache: true
+          build-args: |
+            REACT_APP_GAME_URL=/td-game.html

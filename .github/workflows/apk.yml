@@ -1,0 +1,23 @@
+name: APK Build (EAS)
+# Manuell triggern: Actions → "APK Build (EAS)" → Run workflow.
+# Bewusst NICHT bei jedem Push (EAS-Free-Tier: begrenzte Builds/Monat).
+on:
+  workflow_dispatch:
+jobs:
+  eas-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install app deps
+        working-directory: apps/arops-mobile
+        run: npm install --no-audit --no-fund
+      - name: Trigger EAS build
+        working-directory: apps/arops-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli@latest build -p android --profile preview --non-interactive --no-wait
+      - name: Hinweis
+        run: echo "Build läuft in der EAS-Cloud — Link und Status auf https://expo.dev"

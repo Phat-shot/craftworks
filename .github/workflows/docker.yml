@@ -1,0 +1,46 @@
+name: Build & Push Docker Image
+on:
+  push:
+    branches: [main, test]
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write VERSION file with commit SHA + timestamp
+        run: |
+          echo "$(date +%Y%m%d-%H%M)-${GITHUB_SHA::7}" > server/src/VERSION
+          echo "Version: $(cat server/src/VERSION)"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Branch → Tag: main = latest, test = test (+ jeweils SHA-Tag)
+      - name: Compute image tags
+        id: tags
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "tags=ghcr.io/phat-shot/craftworks:latest,ghcr.io/phat-shot/craftworks:${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=ghcr.io/phat-shot/craftworks:test,ghcr.io/phat-shot/craftworks:test-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.server
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
