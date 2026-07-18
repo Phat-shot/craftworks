@@ -37,10 +37,10 @@ interface ArSettings {
 }
 
 const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
-  { id: 'hide_and_seek', icon: 'ghost', label: 'H&S' },
-  { id: 'domination', icon: 'target', label: 'Dom' },
-  { id: 'ctf', icon: 'flag', label: 'CTF' },
-  { id: 'seek_destroy', icon: 'bomb', label: 'S&D' },
+  { id: 'hide_and_seek', icon: 'ghost', label: 'Verstecken' },
+  { id: 'domination', icon: 'target', label: 'Herrschaft' },
+  { id: 'ctf', icon: 'flag', label: 'Flagge' },
+  { id: 'seek_destroy', icon: 'bomb', label: 'Sprengen' },
 ];
 const NEEDS_ZONES: Record<string, number> = { domination: 2, seek_destroy: 1 };
 const POLY_ERR_DE: Record<string, string> = {
@@ -307,7 +307,12 @@ export default function LobbyScreen({
         )}
       </View>
       {isHost && (
-        <View style={st.rowBtns}>
+        <>
+          <View style={st.sectionRow}>
+            <Icon name="target" size={13} color="#e0c080" />
+            <Text style={st.section}>Modus</Text>
+          </View>
+          <View style={st.rowBtns}>
           {SUB_MODES.map(m => (
             <TouchableOpacity key={m.id} style={[st.smallBtnRow, subMode === m.id && st.smallBtnActive]}
               onPress={() => emitUpdate({ subMode: m.id })}>
@@ -315,7 +320,8 @@ export default function LobbyScreen({
               <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]}>{m.label}</Text>
             </TouchableOpacity>
           ))}
-        </View>
+          </View>
+        </>
       )}
       <View style={st.divider} />
 
@@ -406,11 +412,11 @@ export default function LobbyScreen({
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
               <Icon name="robot" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>+ Bot</Text>
+              <Text style={st.smallTxt}>Bot hinzufügen</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[st.smallBtnRow, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
               <Icon name="bug" size={13} color={debugMode ? '#f0c840' : '#c0a0f0'} />
-              <Text style={[st.smallTxt, debugMode && st.smallTxtActive]}>Debug {debugMode ? 'AN' : 'AUS'}</Text>
+              <Text style={[st.smallTxt, debugMode && st.smallTxtActive]}>Debug-Modus {debugMode ? 'AN' : 'AUS'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={st.smallBtnRow} onPress={generateComicMap}
               disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
@@ -447,35 +453,39 @@ export default function LobbyScreen({
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Tippen setzt:</Text>
               <TouchableOpacity style={[st.smallBtn, tapMode === 'polygon' && st.smallBtnActive]} onPress={() => setTapMode('polygon')}>
-                <Text style={[st.smallTxt, tapMode === 'polygon' && st.smallTxtActive]}>Feld</Text>
+                <Text style={[st.smallTxt, tapMode === 'polygon' && st.smallTxtActive]}>Spielfeld</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[st.smallBtn, tapMode === 'zones' && st.smallBtnActive]} onPress={() => setTapMode('zones')}>
                 <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen ({zones.length}/{NEEDS_ZONES[subMode]}+)</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={st.smallBtn} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                <Icon name="trash" size={14} color="#c0a0f0" />
+              <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
+                <Icon name="trash" size={13} color="#c0a0f0" />
+                <Text style={st.smallTxt}>Zonen leeren</Text>
               </TouchableOpacity>
             </View>
           )}
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
               <Icon name="undo" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>Punkt</Text>
+              <Text style={st.smallTxt}>Punkt zurück</Text>
             </TouchableOpacity>
             <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
               <Icon name="trash" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>Feld</Text>
+              <Text style={st.smallTxt}>Feld leeren</Text>
             </TouchableOpacity>
             <Text style={st.wpCount}>{polygon.length} Punkte</Text>
           </View>
           <View style={st.rowBtns}>
+            <Text style={st.wpCount}>Versteckzeit:</Text>
             {HIDING.map(o => (
               <TouchableOpacity key={o.ms} style={[st.smallBtn, hid === o.ms && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hidingDurationMs: o.ms })}>
                 <Text style={[st.smallTxt, hid === o.ms && st.smallTxtActive]}>{o.l}</Text>
               </TouchableOpacity>
             ))}
-            <View style={{ width: 10 }} />
+          </View>
+          <View style={st.rowBtns}>
+            <Text style={st.wpCount}>Spielzeit:</Text>
             {DURATION.map(o => (
               <TouchableOpacity key={o.ms} style={[st.smallBtn, dur === o.ms && st.smallBtnActive]}
                 onPress={() => emitUpdate({ gameDurationMs: o.ms })}>

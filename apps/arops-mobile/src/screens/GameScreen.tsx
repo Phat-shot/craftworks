@@ -503,10 +503,10 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       </View>
 
       {telemetry.heading === null && (
-        <View style={st.geoWarn}>
+        <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryHeading}>
           <Icon name="compass" size={12} color="#100" />
-          <Text style={st.geoTxt}>Kein Kompass — Handy kurz in einer 8 bewegen</Text>
-        </View>
+          <Text style={st.geoTxt}>Kein Kompass — Handy in einer 8 bewegen · antippen zum Neustart</Text>
+        </TouchableOpacity>
       )}
 
       {frozenMs > 0 && (
