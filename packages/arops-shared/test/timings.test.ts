@@ -78,6 +78,18 @@ test('scaleCoreConfig: a smaller-than-reference field never exceeds the referenc
   assert.ok(tiny.droneCooldownMs <= 60_000);
 });
 
+test('scaleCoreConfig: hitHalfWidthM matches the "Normal" manual preset at the reference field size', () => {
+  const ref = scaleCoreConfig(REF_AREA_M2);
+  assert.ok(Math.abs(ref.hitHalfWidthM - 1) < 0.05);
+});
+
+test('scaleCoreConfig: hitHalfWidthM scales with field size, within clamps', () => {
+  const tiny = scaleCoreConfig(2_000);
+  const huge = scaleCoreConfig(1_000_000_000);
+  assert.equal(tiny.hitHalfWidthM, 0.5);
+  assert.equal(huge.hitHalfWidthM, 5);
+});
+
 test('zone: inside / outside', () => {
   const z = { id: 'z1', lat: MUC.lat, lon: MUC.lon, radiusM: 20 };
   assert.equal(isInZone(MUC, z), true);

@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.validateHit = exports.hitToleranceDeg = exports.pickTargetSample = void 0;
+exports.pickTargetSample = pickTargetSample;
+exports.hitToleranceDeg = hitToleranceDeg;
+exports.validateHit = validateHit;
 // ═══════════════════════════════════════════════════════════
 //  AR OPS — hit validation
 //
@@ -57,7 +59,6 @@ function pickTargetSample(samples, ts) {
     }
     return nearest;
 }
-exports.pickTargetSample = pickTargetSample;
 const RAD2DEG = 180 / Math.PI;
 /**
  * Angular tolerance (half-angle of the accepted cone) for a given
@@ -73,7 +74,6 @@ function hitToleranceDeg(distanceM, accuracySumM, cfg = types_1.DEFAULT_HIT_CONF
     const gpsAngle = Math.atan2(accuracySumM, distanceM) * RAD2DEG;
     return Math.min(cfg.maxToleranceDeg, cfg.baseConeHalfAngleDeg + gpsAngle);
 }
-exports.hitToleranceDeg = hitToleranceDeg;
 /** Validate a hit attempt. Deterministic; identical results on app and server. */
 function validateHit(attempt, cfg = types_1.DEFAULT_HIT_CONFIG) {
     const { shooter, target } = attempt;
@@ -125,4 +125,3 @@ function validateHit(attempt, cfg = types_1.DEFAULT_HIT_CONFIG) {
         distanceM, angleDeltaDeg: delta, toleranceDeg: tolerance, timeSkewMs,
     };
 }
-exports.validateHit = validateHit;

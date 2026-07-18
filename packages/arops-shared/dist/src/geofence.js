@@ -1,6 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sortPolygonPoints = exports.isMovementPlausible = exports.speedBetweenMps = exports.geofenceStatus = exports.validatePolygon = void 0;
+exports.validatePolygon = validatePolygon;
+exports.geofenceStatus = geofenceStatus;
+exports.speedBetweenMps = speedBetweenMps;
+exports.isMovementPlausible = isMovementPlausible;
+exports.sortPolygonPoints = sortPolygonPoints;
 // ═══════════════════════════════════════════════════════════
 //  AR OPS — geofence + area validation + movement plausibility
 // ═══════════════════════════════════════════════════════════
@@ -26,7 +30,6 @@ function validatePolygon(polygon, opts = types_1.DEFAULT_POLYGON_OPTIONS) {
         errors.push('area_too_large');
     return { ok: errors.length === 0, errors, areaM2 };
 }
-exports.validatePolygon = validatePolygon;
 /**
  * Player position vs. playfield.
  * `warnDistanceM`: within this distance of the edge (while inside) → 'warning'.
@@ -42,7 +45,6 @@ function geofenceStatus(point, polygon, warnDistanceM = 10) {
         signedDistanceM: edgeDist,
     };
 }
-exports.geofenceStatus = geofenceStatus;
 /** Speed between two telemetry samples in m/s (Infinity if timestamps equal). */
 function speedBetweenMps(a, b) {
     const dtMs = Math.abs(b.ts - a.ts);
@@ -50,7 +52,6 @@ function speedBetweenMps(a, b) {
         return Infinity;
     return (0, geo_1.haversineMeters)(a, b) / (dtMs / 1000);
 }
-exports.speedBetweenMps = speedBetweenMps;
 /**
  * Movement plausibility between two consecutive samples.
  * Short gaps are always accepted (GPS jitter dominates there);
@@ -63,7 +64,6 @@ function isMovementPlausible(prev, next, cfg = types_1.DEFAULT_PLAUSIBILITY) {
         return true;
     return speedBetweenMps(prev, next) <= cfg.maxSpeedMps;
 }
-exports.isMovementPlausible = isMovementPlausible;
 /**
  * Sort polygon points by angle around their centroid.
  * Repairs self-intersecting polygons caused by arbitrary tap order —
@@ -76,4 +76,3 @@ function sortPolygonPoints(points) {
     const cLon = points.reduce((s, p) => s + p.lon, 0) / points.length;
     return [...points].sort((a, b) => Math.atan2(a.lat - cLat, a.lon - cLon) - Math.atan2(b.lat - cLat, b.lon - cLon));
 }
-exports.sortPolygonPoints = sortPolygonPoints;

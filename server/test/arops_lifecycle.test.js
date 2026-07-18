@@ -7,6 +7,16 @@ const assert = require('assert');
 const arops = require('../src/game/arops');
 const shared = require('../../packages/arops-shared/dist/src');
 
+// These tests predate "Auto" mode (field-size-derived timings/hitConfig,
+// ON by default) and are deliberately about the STABLE, known DEFAULTS/
+// DEFAULT_HIT_CONFIG values with tiny explicit ms-timings for fast test
+// execution — scaleCoreConfig() has its own dedicated tests in
+// packages/arops-shared. Force autoScale off here unless a test opts in.
+function createGame(sessionId, players, workshopConfig) {
+  const wc = { ...workshopConfig, ar_settings: { autoScale: false, ...(workshopConfig.ar_settings || {}) } };
+  return arops.createAropsGame(sessionId, players, wc);
+}
+
 const MUC = { lat: 48.13743, lon: 11.57549 };
 let passed = 0, failed = 0;
 function check(name, fn) {
@@ -25,12 +35,12 @@ function sampleAt(pos, over = {}) {
 console.log('\n── Session creation ──');
 
 check('invalid polygon rejected', () => {
-  assert.throws(() => arops.createAropsGame('bad', [{ userId: 'a', username: 'A' }], {
+  assert.throws(() => createGame('bad', [{ userId: 'a', username: 'A' }], {
     ar_settings: { polygon: [MUC] },
   }), /invalid_polygon/);
 });
 
-const gs = arops.createAropsGame('s1',
+const gs = createGame('s1',
   [
     { userId: 'S', username: 'Seeker' },
     { userId: 'H1', username: 'HiderOne' },
@@ -307,7 +317,7 @@ check('post-game actions rejected', () => {
 // ── Timeout path: hiders win ────────────────────────────────
 console.log('\n── Timeout → hiders win ──');
 
-const gs2 = arops.createAropsGame('s2',
+const gs2 = createGame('s2',
   [{ userId: 'S', username: 'S' }, { userId: 'H', username: 'H' }],
   { ar_settings: { polygon: FIELD, roles: { S: 'seeker', H: 'hider' }, hidingDurationMs: 100, gameDurationMs: 500 } }
 );

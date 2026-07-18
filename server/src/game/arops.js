@@ -512,33 +512,21 @@ function createAropsGame(sessionId, players, workshopConfig) {
     throw new Error('invalid_polygon: ' + polyCheck.errors.join(','));
   }
 
-  const cfg = { ...DEFAULTS };
-  for (const k of Object.keys(DEFAULTS)) {
-    if (typeof ar[k] === 'number') cfg[k] = ar[k];
-  }
-  cfg.foundMode = ar.foundMode === 'seeker' ? 'seeker' : 'spectator';
-  cfg.debugMode = ar.debugMode === true;
-  const hitConfig = { ...shared.DEFAULT_HIT_CONFIG, ...(ar.hitConfig || {}) };
-
   const areaM2 = shared.polygonAreaM2(polygon);
 
-  // Field-size-scaled timings; each key overridable via ar_settings.timings
-  const timings = shared.scaleTimings(areaM2);
-  if (ar.timings && typeof ar.timings === 'object') {
-    for (const k of Object.keys(timings)) {
-      if (typeof ar.timings[k] === 'number') timings[k] = ar.timings[k];
-    }
-  }
+  // "Auto" mode: hiding/game duration, shot range/width, and perk cooldowns
+  // are derived from the field size instead of the fixed DEFAULTS — ON by
+  // default (only off if the host explicitly disables it), since field area
+  // no longer has an upper limit (DEFAULT_POLYGON_OPTIONS.maxAreaM2) and
+  // fixed presets stop making sense once a field is much bigger than what
+  // they were tuned for. This only replaces the BASE — an explicit ar[k] /
+  // ar.hitConfig value (host override, or a test file's deliberately tiny
+  // ms timings) always wins, applied after this, same as it always was.
+  const autoScale = ar.autoScale !== false;
+  const auto = autoScale ? shared.scaleCoreConfig(areaM2) : null;
 
-  // "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
-  // from the field size instead of the host's manual presets — takes
-  // precedence over any manual ar[k]/ar.hitConfig values above. Field area
-  // no longer has an upper limit (DEFAULT_POLYGON_OPTIONS.maxAreaM2), so
-  // fixed presets stop making sense once a field gets much bigger than what
-  // they were tuned for.
-  cfg.autoScale = ar.autoScale === true;
-  if (cfg.autoScale) {
-    const auto = shared.scaleCoreConfig(areaM2);
+  const cfg = { ...DEFAULTS };
+  if (auto) {
     cfg.hidingDurationMs = auto.hidingDurationMs;
     cfg.gameDurationMs = auto.gameDurationMs;
     cfg.radarCooldownMs = auto.radarCooldownMs;
@@ -546,7 +534,30 @@ function createAropsGame(sessionId, players, workshopConfig) {
     cfg.cloakCooldownMs = auto.cloakCooldownMs;
     cfg.fakeMarkerCooldownMs = auto.fakeMarkerCooldownMs;
     cfg.aufscheuchenCooldownMs = auto.aufscheuchenCooldownMs;
+  }
+  for (const k of Object.keys(DEFAULTS)) {
+    if (typeof ar[k] === 'number') cfg[k] = ar[k];
+  }
+  cfg.autoScale = autoScale;
+  cfg.foundMode = ar.foundMode === 'seeker' ? 'seeker' : 'spectator';
+  cfg.debugMode = ar.debugMode === true;
+
+  const hitConfig = { ...shared.DEFAULT_HIT_CONFIG };
+  if (auto) {
     hitConfig.maxRangeM = auto.hitRangeM;
+    // Same meters-at-10m-reference → angle conversion the Lobby's manual
+    // "Breite" presets use (see LobbyScreen.tsx REF_DIST_M), so auto and
+    // manual modes are directly comparable.
+    hitConfig.baseConeHalfAngleDeg = Math.atan(auto.hitHalfWidthM / 10) * (180 / Math.PI);
+  }
+  Object.assign(hitConfig, ar.hitConfig || {});
+
+  // Field-size-scaled timings; each key overridable via ar_settings.timings
+  const timings = shared.scaleTimings(areaM2);
+  if (ar.timings && typeof ar.timings === 'object') {
+    for (const k of Object.keys(timings)) {
+      if (typeof ar.timings[k] === 'number') timings[k] = ar.timings[k];
+    }
   }
 
   // Zones (domination points / bomb sites), host-placed

@@ -307,17 +307,20 @@ export default function LobbyScreen({
     hitConfig: { ...ar.hitConfig, baseConeHalfAngleDeg: Math.atan(halfWidthM / REF_DIST_M) * (180 / Math.PI) },
   });
 
-  // "Auto": derive hiding/game duration, shot range and perk cooldowns from
-  // the field size instead of manual presets — the field has no upper size
-  // limit anymore, so fixed presets stop making sense once it's much bigger
-  // than what they were tuned for. Same scaleCoreConfig() the server uses
-  // once the match actually starts, so this preview matches reality.
-  const autoScale = !!ar.autoScale;
+  // "Auto": derive hiding/game duration, shot range/width and perk cooldowns
+  // from the field size instead of manual presets — the field has no upper
+  // size limit anymore, so fixed presets stop making sense once it's much
+  // bigger than what they were tuned for. ON by default (server does the
+  // same — see arops.js createAropsGame). Same scaleCoreConfig() the server
+  // uses once the match actually starts, so this preview matches reality.
+  const autoScale = ar.autoScale !== false;
   const autoPreview = useMemo(
     () => (polygon.length >= 3 ? scaleCoreConfig(polygonAreaM2(polygon)) : null),
     [autoScale, JSON.stringify(polygon)]
   );
-  const fmtMin = (ms: number) => `${Math.round(ms / 60_000)}min`;
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  const fmtMin = (ms: number) => `${round1(ms / 60_000)}min`;
+  const fmtM = (m: number) => `${round1(m)}m`;
 
   const header = (
     <View>
@@ -327,18 +330,15 @@ export default function LobbyScreen({
           <Icon name="satellite" size={16} color="#f0c840" />
           {isHost && (
             <>
-              <TouchableOpacity style={[st.smallBtnRow, st.smallBtnActive]}
+              <TouchableOpacity style={[st.iconBtn, st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-                <Icon name="compass" size={13} color="#f0c840" />
-                <Text style={[st.smallTxt, st.smallTxtActive]}>Kompass+Karte</Text>
+                <Icon name="compass" size={15} color="#f0c840" />
               </TouchableOpacity>
-              <View style={[st.smallBtnRow, st.smallBtnDisabled]}>
-                <Icon name="signalOff" size={13} color="#605850" />
-                <Text style={[st.smallTxt, { color: '#605850' }]}>IR (bald)</Text>
+              <View style={[st.iconBtn, st.smallBtnDisabled]}>
+                <Icon name="signalOff" size={15} color="#605850" />
               </View>
-              <TouchableOpacity style={[st.smallBtnRow, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
-                <Icon name="bug" size={13} color={debugMode ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, debugMode && st.smallTxtActive]}>Debug {debugMode ? 'AN' : 'AUS'}</Text>
+              <TouchableOpacity style={[st.iconBtn, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
+                <Icon name="bug" size={15} color={debugMode ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
             </>
           )}
@@ -453,40 +453,31 @@ export default function LobbyScreen({
       {isHost && (
         <>
           <View style={st.rowBtns}>
-            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
-              <Icon name="undo" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>Punkt zurück</Text>
+            <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
+              <Icon name="undo" size={15} color="#c0a0f0" />
             </TouchableOpacity>
-            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Icon name="trash" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>Feld leeren</Text>
+            <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
+              <Icon name="close" size={15} color="#c0a0f0" />
             </TouchableOpacity>
-            <Text style={st.wpCount}>{polygon.length} Punkte</Text>
-          </View>
-          {NEEDS_ZONES[subMode] !== undefined && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Tippen setzt:</Text>
-              <TouchableOpacity style={[st.smallBtn, tapMode === 'polygon' && st.smallBtnActive]} onPress={() => setTapMode('polygon')}>
-                <Text style={[st.smallTxt, tapMode === 'polygon' && st.smallTxtActive]}>Spielfeld</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtn, tapMode === 'zones' && st.smallBtnActive]} onPress={() => setTapMode('zones')}>
-                <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen ({zones.length}/{NEEDS_ZONES[subMode]}+)</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                <Icon name="trash" size={13} color="#c0a0f0" />
-                <Text style={st.smallTxt}>Zonen leeren</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          <View style={st.rowBtns}>
-            <TouchableOpacity style={st.smallBtnRow} onPress={generateComicMap}
+            <Text style={st.wpCount}>{polygon.length}</Text>
+            {NEEDS_ZONES[subMode] !== undefined && (
+              <>
+                <TouchableOpacity style={[st.smallBtn, tapMode === 'polygon' && st.smallBtnActive]} onPress={() => setTapMode('polygon')}>
+                  <Text style={[st.smallTxt, tapMode === 'polygon' && st.smallTxtActive]}>Feld</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[st.smallBtn, tapMode === 'zones' && st.smallBtnActive]} onPress={() => setTapMode('zones')}>
+                  <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen {zones.length}/{NEEDS_ZONES[subMode]}+</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
+                  <Icon name="trash" size={15} color="#c0a0f0" />
+                </TouchableOpacity>
+              </>
+            )}
+            <TouchableOpacity style={st.iconBtn} onPress={generateComicMap}
               disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
               {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={comicMapStale ? 'loop' : 'palette'} size={13} color="#c0a0f0" />
+                <Icon name={comicMapStale ? 'loop' : 'palette'} size={15} color="#c0a0f0" />
               )}
-              <Text style={st.smallTxt}>
-                {comicMapLoading ? 'Lädt…' : ar.comicMap ? (comicMapStale ? 'Comic-Karte neu generieren' : 'Comic-Karte aktualisieren') : 'Comic-Karte generieren'}
-              </Text>
             </TouchableOpacity>
           </View>
           {!!comicMapErr && (
@@ -510,34 +501,36 @@ export default function LobbyScreen({
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>
                 {autoPreview
-                  ? `Reichweite ~${Math.round(autoPreview.hitRangeM)}m · Versteckzeit ${fmtMin(autoPreview.hidingDurationMs)} · Spielzeit ${fmtMin(autoPreview.gameDurationMs)}`
+                  ? `Reichweite ~${fmtM(autoPreview.hitRangeM)} · Breite ~${fmtM(autoPreview.hitHalfWidthM * 2)} · Versteckzeit ${fmtMin(autoPreview.hidingDurationMs)} · Spielzeit ${fmtMin(autoPreview.gameDurationMs)}`
                   : 'Erst das Spielfeld zeichnen, um die Auto-Werte zu sehen'}
               </Text>
             </View>
           ) : (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Reichweite:</Text>
-              {RANGE_PRESETS.map(m => (
-                <TouchableOpacity key={m} style={[st.smallBtn, hitRangeM === m && st.smallBtnActive]}
-                  onPress={() => setHitRange(m)}>
-                  <Text style={[st.smallTxt, hitRangeM === m && st.smallTxtActive]}>{m}m</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <>
+              <View style={st.rowBtns}>
+                <Text style={st.wpCount}>Reichweite:</Text>
+                {RANGE_PRESETS.map(m => (
+                  <TouchableOpacity key={m} style={[st.smallBtn, hitRangeM === m && st.smallBtnActive]}
+                    onPress={() => setHitRange(m)}>
+                    <Text style={[st.smallTxt, hitRangeM === m && st.smallTxtActive]}>{m}m</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={st.rowBtns}>
+                <Text style={st.wpCount}>Breite:</Text>
+                {WIDTH_PRESETS.map(w => {
+                  const active = hitHalfAngleDeg !== undefined
+                    && Math.abs(hitHalfAngleDeg - Math.atan(w.halfWidthM / REF_DIST_M) * (180 / Math.PI)) < 0.5;
+                  return (
+                    <TouchableOpacity key={w.label} style={[st.smallBtn, active && st.smallBtnActive]}
+                      onPress={() => setHitWidth(w.halfWidthM)}>
+                      <Text style={[st.smallTxt, active && st.smallTxtActive]}>{w.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
           )}
-          <View style={st.rowBtns}>
-            <Text style={st.wpCount}>Breite:</Text>
-            {WIDTH_PRESETS.map(w => {
-              const active = hitHalfAngleDeg !== undefined
-                && Math.abs(hitHalfAngleDeg - Math.atan(w.halfWidthM / REF_DIST_M) * (180 / Math.PI)) < 0.5;
-              return (
-                <TouchableOpacity key={w.label} style={[st.smallBtn, active && st.smallBtnActive]}
-                  onPress={() => setHitWidth(w.halfWidthM)}>
-                  <Text style={[st.smallTxt, active && st.smallTxtActive]}>{w.label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
           <View style={st.divider} />
           {!autoScale && (
             <>
@@ -723,6 +716,10 @@ const st = StyleSheet.create({
   },
   smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
   smallBtnDisabled: { opacity: 0.5 },
+  iconBtn: {
+    width: 30, height: 30, borderRadius: 7, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
+  },
   smallTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
   smallTxtActive: { color: '#f0c840' },
   wpCount: { color: '#807050', fontSize: 11 },

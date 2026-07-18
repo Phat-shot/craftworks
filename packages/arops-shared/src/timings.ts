@@ -64,6 +64,10 @@ export interface CoreScaledConfig {
   hidingDurationMs: number;
   gameDurationMs: number;
   hitRangeM: number;
+  /** Half-width in meters at a 10m reference distance — same convention the
+   *  Lobby's manual "Breite" presets use (see LobbyScreen.tsx REF_DIST_M),
+   *  so auto and manual modes speak the same units. */
+  hitHalfWidthM: number;
   radarCooldownMs: number;
   droneCooldownMs: number;
   cloakCooldownMs: number;
@@ -92,6 +96,7 @@ export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
     hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45_000, 600_000),
     gameDurationMs:   clamp((L / 1.4) * 1000 * 2.5, 300_000, 3_600_000),
     hitRangeM:        clamp(L * 0.5, 20, 500),
+    hitHalfWidthM:    clamp((L / REF_L_M) * 1, 0.5, 5),
     radarCooldownMs:        cooldown(15 * 60_000),
     droneCooldownMs:        cooldown(60_000),
     cloakCooldownMs:        cooldown(90_000),
