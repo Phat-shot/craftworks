@@ -2,8 +2,14 @@ package one.srz.aropswear.model
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
+import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.DataMapItem
+import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 /**
@@ -61,6 +67,32 @@ object PairingRepository {
             return true
         }
         return false
+    }
+
+    /**
+     * Pull-based fallback for the "/arops/claim" MessageClient push (see
+     * GameStateListenerService) — messages can silently miss the watch if
+     * Wear OS killed the app's process at the exact moment one arrived.
+     * DataItems are actively kept in sync by Play Services in the
+     * background, so polling the local cache here doesn't depend on a push
+     * having been delivered right when it was sent; the phone writes it via
+     * WearBridgeModule.putClaim. Safe to call repeatedly (PairingScreen
+     * polls this every few seconds while unclaimed).
+     */
+    suspend fun checkClaimViaDataLayer(context: Context): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val buffer = Tasks.await(Wearable.getDataClient(context).getDataItems(Uri.parse("wear://*/arops/claim")))
+            var claimed = false
+            for (item in buffer) {
+                val map = DataMapItem.fromDataItem(item.freeze()).dataMap
+                val scanned = map.getString("token")
+                if (scanned != null && tryClaim(scanned)) claimed = true
+            }
+            buffer.release()
+            claimed
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun setClaimed(value: Boolean) {

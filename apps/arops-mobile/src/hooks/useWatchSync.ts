@@ -6,15 +6,24 @@
 // match does it switch from its pairing screen to showing the HUD (see
 // GameStateListenerService.kt + PairingRepository.kt on the watch).
 import { useCallback, useRef, useState } from 'react';
-import { sendToWatch } from 'wear-bridge';
+import { sendToWatch, putClaimOnWatch } from 'wear-bridge';
 
 export function useWatchSync() {
   const [paired, setPaired] = useState(false);
   const pushingRef = useRef(false);
 
   const claim = useCallback(async (scannedToken: string): Promise<boolean> => {
+    // Two paths, belt-and-suspenders: the MessageClient push is instant if
+    // it lands, but Wear OS can kill the watch app's process in the exact
+    // moment it arrives and silently drop it. The DataItem write is the
+    // reliable fallback the watch polls every few seconds for (see
+    // PairingRepository.checkClaimViaDataLayer on the watch side).
     try {
-      const ok = await sendToWatch('/arops/claim', { token: scannedToken });
+      const [msgOk, dataOk] = await Promise.all([
+        sendToWatch('/arops/claim', { token: scannedToken }).catch(() => false),
+        putClaimOnWatch(scannedToken).catch(() => false),
+      ]);
+      const ok = msgOk || dataOk;
       setPaired(ok);
       return ok;
     } catch {
