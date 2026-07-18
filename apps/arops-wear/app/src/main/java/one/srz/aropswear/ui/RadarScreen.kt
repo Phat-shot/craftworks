@@ -7,23 +7,27 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate as rotateModifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import one.srz.aropswear.model.GameState
 import one.srz.aropswear.net.OsmTileFetcher
+import one.srz.aropswear.sensors.WatchCompass
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -31,6 +35,10 @@ import kotlin.math.sin
 @Composable
 fun RadarScreen(state: GameState) {
     var tileBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    // The watch's OWN compass, not just the phone-pushed heading — more
+    // responsive, and correct even if the phone (in a pocket, say) is
+    // facing a different way than the wrist actually is.
+    val watchHeading by WatchCompass.headingDeg.collectAsState()
 
     // OSM fallback: only fetched while the phone hasn't sent any comic-map
     // features yet — mirrors the phone's own fallback order (comic map
@@ -48,12 +56,18 @@ fun RadarScreen(state: GameState) {
         contentAlignment = Alignment.Center,
     ) {
         if (state.hasComicMap) {
-            ComicRadarCanvas(state)
+            ComicRadarCanvas(state, watchHeading)
         } else {
             tileBitmap?.let {
-                Image(bitmap = it.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
+                Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize().rotateModifier(-(watchHeading ?: 0.0).toFloat()),
+                )
             }
-            Canvas(modifier = Modifier.fillMaxSize()) { drawOwnPositionAndContacts(state) }
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                rotate(degrees = -(watchHeading ?: 0.0).toFloat()) { drawOwnPositionAndContacts(state) }
+            }
         }
 
         val mm = state.remainingS / 60
@@ -64,6 +78,14 @@ fun RadarScreen(state: GameState) {
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.align(Alignment.TopCenter),
         )
+        if (watchHeading == null) {
+            Text(
+                text = "Kompass wird kalibriert…",
+                color = ComicPalette.gold,
+                style = MaterialTheme.typography.caption2,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
     }
 }
 
@@ -72,62 +94,67 @@ fun RadarScreen(state: GameState) {
  * player, in the same color language as the phone's comic map — but no
  * 3D/tilt. A watch-sized Compose Canvas isn't the place to reproduce a
  * tilted GL render like the phone's; this keeps the visual identity instead
- * of the perspective.
+ * of the perspective. Drawn north-up, then rotated as a whole to the
+ * watch's own heading — same effect as the phone's compass-oriented map,
+ * just flat.
  */
 @Composable
-private fun ComicRadarCanvas(state: GameState) {
+private fun ComicRadarCanvas(state: GameState, watchHeading: Double?) {
     val myLat = state.myLat
     val myLon = state.myLon
     if (myLat == null || myLon == null) return
     val metersPerPixel = 0.5f // fixed zoom — no pinch/zoom on a radar this small
 
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
+        rotate(degrees = -(watchHeading ?: 0.0).toFloat()) {
+            val cx = size.width / 2f
+            val cy = size.height / 2f
 
-        fun project(lat: Double, lon: Double): Offset {
-            val dLat = (lat - myLat) * 111_320.0
-            val dLon = (lon - myLon) * 111_320.0 * cos(Math.toRadians(myLat))
-            return Offset(cx + (dLon / metersPerPixel).toFloat(), cy - (dLat / metersPerPixel).toFloat())
-        }
-
-        for (f in state.comicFeatures) {
-            if (f.points.size < 2) continue
-            val color = when (f.kind) {
-                "building" -> ComicPalette.building
-                "forest" -> ComicPalette.forest
-                "water" -> ComicPalette.water
-                "grass" -> ComicPalette.grass
-                "path" -> ComicPalette.path
-                else -> ComicPalette.road
+            fun project(lat: Double, lon: Double): Offset {
+                val dLat = (lat - myLat) * 111_320.0
+                val dLon = (lon - myLon) * 111_320.0 * cos(Math.toRadians(myLat))
+                return Offset(cx + (dLon / metersPerPixel).toFloat(), cy - (dLat / metersPerPixel).toFloat())
             }
-            val path = Path()
-            val first = project(f.points.first().first, f.points.first().second)
-            path.moveTo(first.x, first.y)
-            for (p in f.points.drop(1)) {
-                val o = project(p.first, p.second)
-                path.lineTo(o.x, o.y)
-            }
-            drawPath(path, color = color, style = Stroke(width = 3f))
-        }
 
-        drawOwnPositionAndContacts(state)
+            for (f in state.comicFeatures) {
+                if (f.points.size < 2) continue
+                val color = when (f.kind) {
+                    "building" -> ComicPalette.building
+                    "forest" -> ComicPalette.forest
+                    "water" -> ComicPalette.water
+                    "grass" -> ComicPalette.grass
+                    "path" -> ComicPalette.path
+                    else -> ComicPalette.road
+                }
+                val path = Path()
+                val first = project(f.points.first().first, f.points.first().second)
+                path.moveTo(first.x, first.y)
+                for (p in f.points.drop(1)) {
+                    val o = project(p.first, p.second)
+                    path.lineTo(o.x, o.y)
+                }
+                drawPath(path, color = color, style = Stroke(width = 3f))
+            }
+
+            drawOwnPositionAndContacts(state)
+        }
     }
 }
 
 /**
  * Contacts are relative bearing/distance pings from the phone (matches the
  * privacy model — radar never leaks absolute enemy coordinates, see
- * server/src/game/arops.js actionArUsePerk), so they're drawn relative to
- * our own position marker, not reprojected through lat/lon like the comic
- * features above.
+ * server/src/game/arops.js actionArUsePerk). Drawn north-up by absolute
+ * bearing here (0° = up), same frame as the comic features above — the
+ * caller wraps everything in one rotate() to the current heading, so both
+ * always agree instead of rotating independently.
  */
 private fun DrawScope.drawOwnPositionAndContacts(state: GameState) {
     val cx = size.width / 2f
     val cy = size.height / 2f
     val pxPerMeter = 2f
     for (c in state.contacts) {
-        val rad = Math.toRadians(c.bearingDeg - (state.headingDeg ?: 0.0))
+        val rad = Math.toRadians(c.bearingDeg)
         val r = min(c.distanceM.toFloat() * pxPerMeter, size.minDimension / 2f - 10f)
         val x = cx + (sin(rad) * r).toFloat()
         val y = cy - (cos(rad) * r).toFloat()

@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.wear.compose.material.MaterialTheme
 import one.srz.aropswear.model.GameStateRepository
 import one.srz.aropswear.model.PairingRepository
+import one.srz.aropswear.sensors.WatchCompass
 import one.srz.aropswear.ui.PairingScreen
 import one.srz.aropswear.ui.RadarScreen
 
@@ -25,5 +26,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        WatchCompass.start(this)
+    }
+
+    override fun onPause() {
+        WatchCompass.stop()
+        super.onPause()
     }
 }
