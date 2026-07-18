@@ -68,7 +68,7 @@ class EspBridgeModule : Module() {
       withContext(Dispatchers.IO) { connectToDevice(context) }
     }
 
-    AsyncFunction("disconnect") {
+    AsyncFunction("disconnect") Coroutine {
       teardown()
     }
 
@@ -173,7 +173,11 @@ class EspBridgeModule : Module() {
         val n = conn.bulkTransfer(ep, buf, buf.size, 500)
         if (n > 0) {
           for (i in 0 until n) {
-            val c = buf[i].toInt().toChar()
+            // Mask before widening — Kotlin bytes are signed, so a raw byte
+            // >=128 would sign-extend to a negative Int and produce the
+            // wrong character otherwise (only matters for non-ASCII bytes,
+            // but the JSON heartbeat lines are plain ASCII either way).
+            val c = (buf[i].toInt() and 0xFF).toChar()
             if (c == '\n') {
               val text = line.toString().trim()
               if (text.isNotEmpty()) sendEvent("onStatus", mapOf("connected" to true, "line" to text))
