@@ -1090,6 +1090,10 @@ function getAropsSnapshot(gs, userId) {
     polygon: gs.polygon,
     comicMap: gs.comicMap,
     hitTrackingMode: gs.hitTrackingMode,
+    // Host-configured shot range/cone width, exposed so the client overlay
+    // matches whatever is actually being validated (see hitConfig above).
+    hitRangeM: gs.hitConfig.maxRangeM,
+    hitConeHalfAngleDeg: gs.hitConfig.baseConeHalfAngleDeg,
     winner: gs.winner,
     debugMode: !!gs.cfg.debugMode,
     timings: {

@@ -262,6 +262,19 @@ module.exports = function setupSocket(io, db) {
         if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {
           next.hitTrackingMode = arSettings.hitTrackingMode;
         }
+        // Host-configurable shot range/width — merged onto DEFAULT_HIT_CONFIG
+        // in createAropsGame, so this genuinely changes hit validation, not
+        // just the client-side overlay. Clamped to sane bounds regardless of
+        // what the client sends.
+        if (arSettings?.hitConfig && typeof arSettings.hitConfig === 'object') {
+          next.hitConfig = { ...(next.hitConfig || {}) };
+          if (Number.isFinite(arSettings.hitConfig.maxRangeM)) {
+            next.hitConfig.maxRangeM = Math.min(200, Math.max(10, +arSettings.hitConfig.maxRangeM));
+          }
+          if (Number.isFinite(arSettings.hitConfig.baseConeHalfAngleDeg)) {
+            next.hitConfig.baseConeHalfAngleDeg = Math.min(45, Math.max(1, +arSettings.hitConfig.baseConeHalfAngleDeg));
+          }
+        }
         if (Array.isArray(arSettings?.bots)) {
           next.bots = arSettings.bots
             .filter(b => b && typeof b.id === 'string' && b.id.startsWith('bot_') && typeof b.username === 'string')
