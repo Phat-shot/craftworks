@@ -14,7 +14,11 @@ android {
         minSdk = 30
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0"
+        // Versionsschema (siehe CLAUDE.md): jedes Release (main) +1, jeder
+        // Bugfix auf test +0.1 — von Hand hochzählen, gemeinsam mit
+        // apps/arops-mobile/app.json "version" (dieselbe Zählung, beide
+        // Apps gehören zum selben AR-Ops-Release).
+        versionName = "1"
     }
 
     buildFeatures {

@@ -6,16 +6,19 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": { "SERVER_URL": "https://dev.srz.one" }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "env": { "SERVER_URL": "https://dev.srz.one" }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": { "SERVER_URL": "https://arops.srz.one" }
     }
   },
   "submit": {

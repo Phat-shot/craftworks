@@ -1,8 +1,10 @@
 name: APK Build (Gradle)
-# Manuell triggern: Actions → "APK Build (Gradle)" → Run workflow.
-# Baut lokal in der CI per Gradle statt in der EAS-Cloud — kein EAS-
-# Build-Kontingent nötig, dafür langsamer (kompletter Android-Build läuft
-# hier statt in Expos Cloud-Buildfarm).
+# Manuell triggern: Actions → "APK Build (Gradle)" → Run workflow — Channel
+# (test/main) auswählen, das steuert sowohl den Backend-Endpoint als auch
+# nichts weiter (Versionsnummer kommt immer aus app.json, unabhängig vom
+# Channel). Baut lokal in der CI per Gradle statt in der EAS-Cloud — kein
+# EAS-Build-Kontingent nötig, dafür langsamer (kompletter Android-Build
+# läuft hier statt in Expos Cloud-Buildfarm).
 #
 # assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
 # laufenden Metro-Dev-Server und fragt beim Start nach dessen URL ("Unable
@@ -13,8 +15,18 @@ name: APK Build (Gradle)
 # siehe android/app/build.gradle) — für Sideload/internes Testen
 # ausreichend, aber NICHT für einen Play-Store-Release geeignet (dafür
 # bräuchte es einen echten Signing-Key + Secrets, siehe apk.yml/EAS dafür).
+#
+# Versionsschema (siehe CLAUDE.md): jedes Release (Merge auf main) +1, jeder
+# Bugfix auf test +0.1 — app.json "version" ist die einzige Quelle dafür,
+# vor jedem Build von Hand hochzählen.
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Backend-Endpoint: test (dev.srz.one) oder main (arops.srz.one)'
+        type: choice
+        options: [test, main]
+        default: test
 jobs:
   gradle-build:
     runs-on: ubuntu-latest
@@ -34,6 +46,14 @@ jobs:
         working-directory: apps/arops-mobile
         run: npm install --no-audit --no-fund
 
+      - name: Backend-Endpoint für den gewählten Channel setzen
+        run: |
+          if [ "${{ inputs.channel }}" = "main" ]; then
+            echo "SERVER_URL=https://arops.srz.one" >> "$GITHUB_ENV"
+          else
+            echo "SERVER_URL=https://dev.srz.one" >> "$GITHUB_ENV"
+          fi
+
       - name: Expo prebuild (generiert das native android/-Projekt)
         working-directory: apps/arops-mobile
         run: npx expo prebuild --platform android --no-install
@@ -48,8 +68,16 @@ jobs:
         working-directory: apps/arops-mobile/android
         run: ./gradlew assembleRelease --no-daemon
 
+      - name: APK umbenennen (ar-ops-android-beta-v<Version>.apk)
+        working-directory: apps/arops-mobile
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          FILENAME="ar-ops-android-beta-v${VERSION}.apk"
+          mv android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/$FILENAME"
+          echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: arops-release-apk
-          path: apps/arops-mobile/android/app/build/outputs/apk/release/app-release.apk
+          name: ${{ env.APK_FILENAME }}
+          path: apps/arops-mobile/android/app/build/outputs/apk/release/${{ env.APK_FILENAME }}
           if-no-files-found: error

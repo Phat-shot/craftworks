@@ -25,8 +25,16 @@ jobs:
         working-directory: apps/arops-wear
         run: gradle :app:assembleDebug --no-daemon
 
+      - name: APK umbenennen (ar-ops-wear-beta-v<Version>.apk)
+        working-directory: apps/arops-wear
+        run: |
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          FILENAME="ar-ops-wear-beta-v${VERSION}.apk"
+          mv app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/$FILENAME"
+          echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: arops-wear-debug-apk
-          path: apps/arops-wear/app/build/outputs/apk/debug/app-debug.apk
+          name: ${{ env.APK_FILENAME }}
+          path: apps/arops-wear/app/build/outputs/apk/debug/${{ env.APK_FILENAME }}
           if-no-files-found: error

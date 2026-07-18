@@ -52,10 +52,22 @@ cd apps/arops-mobile && npm run sync-shared
 ## Deployment
 
 - **Test-Server**: `docker pull ghcr.io/phat-shot/craftworks:test` und als eigener
-  Container auf eigenem Port laufen lassen (eigene DATABASE_URL verwenden, nie die Prod-DB!)
-- **Prod** (dev.srz.one): `:latest` nach Merge auf main
+  Container auf eigenem Port laufen lassen (eigene DATABASE_URL verwenden, nie die Prod-DB!),
+  Endpoint `https://dev.srz.one`
+- **Prod**: `:latest` nach Merge auf main, Endpoint `https://arops.srz.one`
+- **App-Backend-Endpoint ist ein Build-Time-Env-Var** (`EXPO_PUBLIC_SERVER_URL`,
+  siehe `apps/arops-mobile/src/config.ts`) — pro Channel gesetzt in `eas.json`
+  (EAS-Builds) bzw. im `channel`-Input des GitHub-Workflows "APK Build (Gradle)"
+  (test → dev.srz.one, main → arops.srz.one). Nie hart im Code für einen Channel überschreiben
 - **APK**: `cd apps/arops-mobile && npx eas-cli@latest build -p android --profile preview`
-  — oder den GitHub-Workflow "APK Build" manuell triggern (braucht Secret `EXPO_TOKEN`)
+  — oder den GitHub-Workflow "APK Build (Gradle)" manuell triggern (Channel wählen,
+  kein EAS-Kontingent nötig) bzw. "APK Build (EAS)" (braucht Secret `EXPO_TOKEN`).
+  Wear-OS-Companion analog über "Wear OS APK Build (Gradle)" (`apps/arops-wear/`)
+- **Versionsschema**: `apps/arops-mobile/app.json` `"version"` ist die Quelle für den
+  APK-Dateinamen (`ar-ops-android-beta-v<Version>.apk`, Wear-Pendant
+  `ar-ops-wear-beta-v<Version>.apk` aus `apps/arops-wear/app/build.gradle.kts`
+  `versionName`). Jedes Release (Merge auf main) **+1**, jeder Bugfix auf test
+  **+0.1** — von Hand vor dem Build hochzählen, beide Apps zusammen
 
 ## Architektur-Invarianten (nicht brechen)
 
