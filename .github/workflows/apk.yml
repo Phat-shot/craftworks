@@ -52,6 +52,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -103,3 +105,30 @@ jobs:
           name: ${{ env.APK_FILENAME }}
           path: apps/arops-mobile/android/app/build/outputs/apk/release/${{ env.APK_FILENAME }}
           if-no-files-found: error
+
+      # Actions-Artifacts sind immer als Zip verpackt und laufen ohne CDN —
+      # spürbar langsamer Download als ein Release-Asset (direkt/CDN
+      # ausgeliefert, keine Extra-Zip-Schicht). Eine feste Tag pro Branch
+      # ("apk-android-test"/"apk-android-main") wird bei jedem Build
+      # überschrieben statt neue Releases anzuhäufen — ein Link zum
+      # Bookmarken, der immer den neuesten Build zeigt.
+      - name: Als Release-Asset veröffentlichen (schnellerer Download)
+        working-directory: apps/arops-mobile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="apk-android-${GITHUB_REF_NAME}"
+          ASSET="android/app/build/outputs/apk/release/${{ env.APK_FILENAME }}"
+          NOTES="Build ${GITHUB_SHA::7} · $(date -u +'%Y-%m-%d %H:%M UTC') · Branch ${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+            gh release edit "$TAG" --notes "$NOTES"
+          else
+            PRERELEASE_FLAG=""
+            [ "$GITHUB_REF_NAME" != "main" ] && PRERELEASE_FLAG="--prerelease"
+            gh release create "$TAG" "$ASSET" \
+              --title "AR Ops Android (${GITHUB_REF_NAME})" \
+              --notes "$NOTES" \
+              --target "$GITHUB_SHA" \
+              $PRERELEASE_FLAG
+          fi

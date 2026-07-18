@@ -59,11 +59,15 @@ cd apps/arops-mobile && npm run sync-shared
   `apps/arops-mobile/app.config.js` → `expo-constants`, siehe `src/config.ts`) —
   gesetzt vom Branch im GitHub-Workflow "APK Build" (test → dev.srz.one,
   main → arops.srz.one). Nie hart im Code für einen Channel überschreiben
-- **APK**: baut automatisch bei jedem Push auf `main`/`test` (Workflow "APK Build",
-  analog zu "Build & Push Docker Image") — kein EAS, kein Kontingent, kein
-  `EXPO_TOKEN`-Secret nötig. Artifact im jeweiligen Workflow-Run herunterladen.
-  Wear-OS-Companion analog über "Wear OS APK Build" (`apps/arops-wear/`), ebenfalls
-  bei jedem Push auf `main`/`test`
+- **APK**: baut automatisch bei Push auf `main` (immer) bzw. `test` (nur bei
+  Änderungen an der jeweiligen App) — Workflow "APK Build", analog zu
+  "Build & Push Docker Image" — kein EAS, kein Kontingent, kein
+  `EXPO_TOKEN`-Secret nötig. **Download als GitHub-Release-Asset** (nicht
+  Actions-Artifact — das ist immer gezippt und läuft ohne CDN, spürbar
+  langsamer): fester Tag pro Branch, `apk-android-test`/`apk-android-main`
+  unter github.com/phat-shot/craftworks/releases, wird bei jedem Build
+  überschrieben statt neue Releases anzuhäufen. Wear-OS-Companion analog über
+  "Wear OS APK Build" (`apps/arops-wear/`) unter `apk-wear-test`/`apk-wear-main`
 - **Versionsschema**: `apps/arops-mobile/app.json` `"version"` ist die Quelle für den
   APK-Dateinamen (`ar-ops-android-beta-v<Version>.apk`, Wear-Pendant
   `ar-ops-wear-beta-v<Version>.apk` aus `apps/arops-wear/app/build.gradle.kts`
