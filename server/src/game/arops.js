@@ -581,6 +581,10 @@ function createAropsGame(sessionId, players, workshopConfig) {
     sessionId, mode: 'ar_ops', subMode,
     polygon, cfg, hitConfig, timings, zones, captains,
     comicMap: ar.comicMap && Array.isArray(ar.comicMap.features) ? ar.comicMap : null,
+    // Forward-prep only: no engine behavior branches on this yet, IR hit
+    // detection isn't implemented. Exposed in the snapshot so clients can
+    // already show/prepare for it.
+    hitTrackingMode: ar.hitTrackingMode === 'ir' ? 'ir' : 'compass',
     players: playerState,
     phase: mode.initialPhase(),
     phaseStartTime: now(),
@@ -1085,6 +1089,7 @@ function getAropsSnapshot(gs, userId) {
     phase: gs.phase, phaseEndsAt, serverTime: t,
     polygon: gs.polygon,
     comicMap: gs.comicMap,
+    hitTrackingMode: gs.hitTrackingMode,
     winner: gs.winner,
     debugMode: !!gs.cfg.debugMode,
     timings: {

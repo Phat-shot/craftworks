@@ -256,6 +256,12 @@ module.exports = function setupSocket(io, db) {
           next.foundMode = arSettings.foundMode;
         }
         if (typeof arSettings?.debugMode === 'boolean') next.debugMode = arSettings.debugMode;
+        // 'ir' is accepted already (forward-prep for IR-based hit tracking
+        // hardware) even though no client can act on it yet — no gameplay
+        // behavior changes until an actual IR mode is implemented.
+        if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {
+          next.hitTrackingMode = arSettings.hitTrackingMode;
+        }
         if (Array.isArray(arSettings?.bots)) {
           next.bots = arSettings.bots
             .filter(b => b && typeof b.id === 'string' && b.id.startsWith('bot_') && typeof b.username === 'string')

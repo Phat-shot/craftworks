@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import {
   destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg, haversineMeters, bearingDeg, angleDeltaDeg,
@@ -24,6 +24,7 @@ interface Snap {
   serverTime: number;
   polygon: { lat: number; lon: number }[];
   comicMap?: { features: ComicFeature[] } | null;
+  hitTrackingMode?: 'compass' | 'ir';
   winner: string | null;
   hidersRemaining: number;
   me: {
@@ -93,6 +94,22 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const [viewMode, setViewMode] = useState<ViewMode>('comic');
   const [showRange, setShowRange] = useState(false);
   const telemetry = useTelemetry(socket, sessionId);
+
+  // First few seconds without a GPS/compass fix are normal and expected — only
+  // treat it as an actual problem (and offer the retry banner) once it's gone
+  // on long enough that it probably isn't just still starting up.
+  const [initGraceOver, setInitGraceOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setInitGraceOver(true), 10_000);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Personal display preference only (never synced/server-authoritative) —
+  // how transparent the hitbox/target overlay renders. Also the groundwork
+  // for a future IR-tracking blend: this is the "hybrid mode" opacity knob
+  // the settings panel below exposes, already wired to the live overlay.
+  const [overlayOpacity, setOverlayOpacity] = useState(0.5);
+  const [overlaySettingsOpen, setOverlaySettingsOpen] = useState(false);
 
   // ── Debug overlay: live stats + enemy distance/hitbox, overlaid on the
   // existing view — not a separate full-screen panel.
@@ -210,29 +227,32 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
 
   const TEAM_COLOR = { a: '#40a0ff', b: '#ff5050' } as const;
 
-  // Debug overlay only: distance + "currently in my shooting cone" per enemy,
-  // using the SAME hitToleranceDeg formula the server validates hits with.
-  // Only ever non-empty while debugOpen — the server only reveals every
-  // opponent's position in debugMode sessions (see arops.js getAropsSnapshot).
-  interface DebugEnemy { userId: string; username: string; distanceM: number; inCone: boolean; }
-  const debugEnemies: DebugEnemy[] = useMemo(() => {
-    if (!debugMode || !debugOpen || !telemetry.sample) return [];
+  // Distance + bearing + "currently in my shooting cone" per opponent whose
+  // position I'm allowed to see (server already enforces the privacy rules —
+  // players simply have no lat/lon here if hidden; debug sessions reveal
+  // everyone). Single source of truth for the debug bar's text listing AND
+  // the hitbox/cross visuals AND the camera target overlay below, so all
+  // three always agree with each other.
+  interface VisibleEnemy { userId: string; username: string; distanceM: number; bearingDeg: number; inCone: boolean; }
+  const visibleEnemies: VisibleEnemy[] = useMemo(() => {
+    if (!telemetry.sample) return [];
     const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
     const heading = telemetry.heading;
-    const out: DebugEnemy[] = [];
+    const out: VisibleEnemy[] = [];
     for (const p of snap?.players || []) {
       if (p.userId === me?.id || typeof p.lat !== 'number' || typeof p.lon !== 'number') continue;
       const target = { lat: p.lat, lon: p.lon };
       const distanceM = haversineMeters(origin, target);
+      const brg = bearingDeg(origin, target);
       let inCone = false;
       if (heading !== null) {
         const accSum = Math.max(4, (telemetry.sample.accuracyM || 0) + (p.accuracyM ?? telemetry.sample.accuracyM ?? 0));
-        inCone = angleDeltaDeg(heading, bearingDeg(origin, target)) <= hitToleranceDeg(distanceM, accSum);
+        inCone = angleDeltaDeg(heading, brg) <= hitToleranceDeg(distanceM, accSum);
       }
-      out.push({ userId: p.userId, username: p.username, distanceM, inCone });
+      out.push({ userId: p.userId, username: p.username, distanceM, bearingDeg: brg, inCone });
     }
     return out.sort((a, b) => a.distanceM - b.distanceM);
-  }, [debugMode, debugOpen, telemetry.sample?.lat, telemetry.sample?.lon, telemetry.sample?.accuracyM,
+  }, [telemetry.sample?.lat, telemetry.sample?.lon, telemetry.sample?.accuracyM,
       telemetry.heading, JSON.stringify(snap?.players), me?.id]);
 
   const actorsGeoJSON = useMemo(() => {
@@ -249,7 +269,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         // Debug: in my current shooting cone right now → bright red, overrides
         // the normal team/enemy color. Team modes: teammates blue, enemies
         // red; frozen = icy tint.
-        const inCone = debugEnemies.find(e => e.userId === p.userId)?.inCone;
+        const inCone = visibleEnemies.find(e => e.userId === p.userId)?.inCone;
         const color = inCone ? '#ff2020'
           : p.frozen ? '#a0d8ff'
           : p.team ? TEAM_COLOR[p.team] : '#ff4040';
@@ -263,7 +283,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         geometry: { type: 'Point', coordinates: [c.lon, c.lat] } });
     }
     return { type: 'FeatureCollection' as const, features };
-  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, debugEnemies]);
+  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies]);
 
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
@@ -332,25 +352,55 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     return { type: 'FeatureCollection' as const, features: feats };
   }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.sites), JSON.stringify(snap?.bases), snap?.zoneRadiusM]);
 
-  // Small per-target hitbox circles (~1.5m physical radius) at each visible
-  // opponent's exact position — a preview of the point-hitbox the planned
-  // IR-based hit detection will use later (fixed physical radius derived from
-  // distance), rather than only the wide GPS-uncertainty cone above. Shows
-  // for whichever opponents are already visible under the normal privacy
-  // rules (teammates/exposed/flag-carrier) or, in debug sessions, everyone.
+  // The real (planned) IR hit zone is a fixed 2x2m physical box, not a wide
+  // angular cone — this previews that exact footprint at each visible
+  // opponent's position, north/east-aligned. Shows for whichever opponents
+  // are already visible under the normal privacy rules (teammates/exposed/
+  // flag-carrier) or, in debug sessions, everyone.
+  const HITBOX_SIZE_M = 2;
+  const hitboxSquare = (lat: number, lon: number, sizeM: number) => {
+    const diag = Math.SQRT2 * (sizeM / 2);
+    return [45, 135, 225, 315, 45].map(brg => {
+      const p = destinationPoint({ lat, lon }, brg, diag);
+      return [p.lon, p.lat] as [number, number];
+    });
+  };
+  const HOT_COLOR = '#ff2fd8';
+  const NORMAL_COLOR = '#ff7828';
   const hitboxGeoJSON = useMemo(() => {
     const feats: any[] = [];
     if (!showRange) return { type: 'FeatureCollection' as const, features: feats };
     for (const p of snap?.players || []) {
       if (p.userId === me?.id || typeof p.lat !== 'number' || typeof p.lon !== 'number') continue;
-      const inCone = debugEnemies.find(e => e.userId === p.userId)?.inCone;
+      const inCone = visibleEnemies.find(e => e.userId === p.userId)?.inCone;
       feats.push({
-        type: 'Feature', properties: { color: inCone ? '#ff2020' : '#ff7828' },
-        geometry: { type: 'Polygon', coordinates: [zoneCircle(p.lat, p.lon, 1.5)] },
+        type: 'Feature',
+        properties: { color: inCone ? HOT_COLOR : NORMAL_COLOR, op: (inCone ? 0.22 : 0.35) * overlayOpacity * 2 },
+        geometry: { type: 'Polygon', coordinates: [hitboxSquare(p.lat, p.lon, HITBOX_SIZE_M)] },
       });
     }
     return { type: 'FeatureCollection' as const, features: feats };
-  }, [showRange, JSON.stringify(snap?.players), me?.id, debugEnemies]);
+  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies, overlayOpacity]);
+
+  // A visible hit-confirmation cross inside the box, only for opponents
+  // currently in the shooting cone — the "hot" feedback the map version and
+  // the camera overlay both draw identically.
+  const hitboxCrossGeoJSON = useMemo(() => {
+    const feats: any[] = [];
+    if (!showRange) return { type: 'FeatureCollection' as const, features: feats };
+    for (const p of snap?.players || []) {
+      if (p.userId === me?.id || typeof p.lat !== 'number' || typeof p.lon !== 'number') continue;
+      if (!visibleEnemies.find(e => e.userId === p.userId)?.inCone) continue;
+      const diag = Math.SQRT2 * (HITBOX_SIZE_M / 2);
+      const a = destinationPoint({ lat: p.lat, lon: p.lon }, 45, diag);
+      const b = destinationPoint({ lat: p.lat, lon: p.lon }, 225, diag);
+      const c = destinationPoint({ lat: p.lat, lon: p.lon }, 135, diag);
+      const d = destinationPoint({ lat: p.lat, lon: p.lon }, 315, diag);
+      feats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[a.lon, a.lat], [b.lon, b.lat]] } });
+      feats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[c.lon, c.lat], [d.lon, d.lat]] } });
+    }
+    return { type: 'FeatureCollection' as const, features: feats };
+  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies]);
 
   const flagsGeoJSON = useMemo(() => {
     const feats: any[] = [];
@@ -447,8 +497,13 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       )}
       {hitboxGeoJSON.features.length > 0 && (
         <ShapeSource id="hitboxes" shape={hitboxGeoJSON as any}>
-          <FillLayer id="hitboxFill" style={{ fillColor: ['get', 'color'] as any, fillOpacity: 0.35 }} />
+          <FillLayer id="hitboxFill" style={{ fillColor: ['get', 'color'] as any, fillOpacity: ['get', 'op'] as any }} />
           <LineLayer id="hitboxLine" style={{ lineColor: ['get', 'color'] as any, lineWidth: 2 }} />
+        </ShapeSource>
+      )}
+      {hitboxCrossGeoJSON.features.length > 0 && (
+        <ShapeSource id="hitboxCross" shape={hitboxCrossGeoJSON as any}>
+          <LineLayer id="hitboxCrossLine" style={{ lineColor: HOT_COLOR, lineWidth: 2.5 }} />
         </ShapeSource>
       )}
       {zonesGeoJSON.features.length > 0 && (
@@ -483,6 +538,51 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     </View>
   );
 
+  // Same hitbox markers as the map view, projected onto the camera preview by
+  // heading offset so both views agree ("muss konsistent sein"). No pitch/
+  // elevation compensation yet (no device data for it) — markers sit on a
+  // fixed horizontal band, correct only while holding the phone level. FOV is
+  // an approximation of the rear camera preview, not read from device
+  // intrinsics.
+  const CAMERA_FOV_DEG = 65;
+  const screenW = Dimensions.get('window').width;
+  const cameraTargets = useMemo(() => {
+    if (!showRange || telemetry.heading === null) return [];
+    const heading = telemetry.heading;
+    return visibleEnemies.map(e => {
+      let delta = e.bearingDeg - heading;
+      delta = ((delta + 540) % 360) - 180; // normalize to -180..180
+      if (Math.abs(delta) > CAMERA_FOV_DEG / 2 + 8) return null; // off-screen
+      const x = screenW * (0.5 + delta / CAMERA_FOV_DEG);
+      const angularSizeDeg = (180 / Math.PI) * (2 * Math.atan(1 / Math.max(2, e.distanceM)));
+      const size = Math.min(110, Math.max(20, (angularSizeDeg / CAMERA_FOV_DEG) * screenW));
+      return { userId: e.userId, distanceM: e.distanceM, inCone: e.inCone, x, size };
+    }).filter((t): t is { userId: string; distanceM: number; inCone: boolean; x: number; size: number } => t !== null);
+  }, [showRange, telemetry.heading, visibleEnemies, screenW]);
+
+  const targetOverlay = (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {cameraTargets.map(t => (
+        <View key={t.userId} style={{
+          position: 'absolute', left: t.x - t.size / 2, top: '48%', width: t.size, height: t.size,
+          marginTop: -t.size / 2, borderRadius: 4, alignItems: 'center', justifyContent: 'center',
+          borderWidth: 2, borderColor: t.inCone ? HOT_COLOR : NORMAL_COLOR,
+          backgroundColor: t.inCone
+            ? `rgba(255,47,216,${(0.22 * overlayOpacity * 2).toFixed(2)})`
+            : `rgba(255,120,40,${(0.35 * overlayOpacity * 2).toFixed(2)})`,
+        }}>
+          {t.inCone && (
+            <>
+              <View style={{ position: 'absolute', width: '150%', height: 2, backgroundColor: HOT_COLOR, transform: [{ rotate: '45deg' }] }} />
+              <View style={{ position: 'absolute', width: '150%', height: 2, backgroundColor: HOT_COLOR, transform: [{ rotate: '-45deg' }] }} />
+            </>
+          )}
+          <Text style={st.targetDist}>{Math.round(t.distanceM)}m</Text>
+        </View>
+      ))}
+    </View>
+  );
+
   const shootButton = canShoot && hasCam && (
     <TouchableOpacity style={[st.shutter, hitCd > 0 && st.shutterCd]} onPress={shoot} disabled={hitCd > 0}>
       {hitCd > 0 ? <Text style={st.shutterTxt}>{Math.ceil(hitCd / 1000) + 's'}</Text> : <Icon name="photo" size={26} color="#f0c840" />}
@@ -508,17 +608,31 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       </View>
 
       {!telemetry.sample && (
-        <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryPosition}>
-          <Icon name="close" size={12} color="#100" />
-          <Text style={st.geoTxt}>Keine Position — antippen zum Neustart</Text>
-        </TouchableOpacity>
+        initGraceOver ? (
+          <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryPosition}>
+            <Icon name="close" size={12} color="#100" />
+            <Text style={st.geoTxt}>Keine Position — antippen zum Neustart</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={st.geoInit}>
+            <Icon name="hourglass" size={12} color="#c0a0f0" />
+            <Text style={st.geoInitTxt}>Initialisiere GPS…</Text>
+          </View>
+        )
       )}
 
       {telemetry.heading === null && (
-        <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryHeading}>
-          <Icon name="compass" size={12} color="#100" />
-          <Text style={st.geoTxt}>Kein Kompass — Handy in einer 8 bewegen · antippen zum Neustart</Text>
-        </TouchableOpacity>
+        initGraceOver ? (
+          <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryHeading}>
+            <Icon name="compass" size={12} color="#100" />
+            <Text style={st.geoTxt}>Kein Kompass — Handy in einer 8 bewegen · antippen zum Neustart</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={st.geoInit}>
+            <Icon name="compass" size={12} color="#c0a0f0" />
+            <Text style={st.geoInitTxt}>Initialisiere Kompass…</Text>
+          </View>
+        )
       )}
 
       {frozenMs > 0 && (
@@ -585,19 +699,22 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
           <CameraLayer>
             {viewMode === 'split' && (
               <View style={{ flex: 1 }}>
-                <View style={{ flex: 1 }}>{crosshair}</View>
+                <View style={{ flex: 1 }}>{crosshair}{targetOverlay}</View>
                 <View style={{ flex: 1 }}>{renderMap(false)}</View>
               </View>
             )}
             {viewMode === 'overlay' && (
               <>
+                {/* The semi-transparent map below already carries the geo-projected
+                    hitbox through — the screen-projected targetOverlay is skipped
+                    here to avoid two non-aligned markers for the same opponent. */}
                 <View style={[StyleSheet.absoluteFill, { opacity: 0.45 }]} pointerEvents="none">
                   {renderMap(false)}
                 </View>
                 {crosshair}
               </>
             )}
-            {viewMode === 'camera' && crosshair}
+            {viewMode === 'camera' && <>{crosshair}{targetOverlay}</>}
           </CameraLayer>
         )}
 
@@ -614,7 +731,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
               <Icon name="bug" size={12} color="#40ff80" />
               <Text style={st.debugBarTxt}>Ping {pingMs ?? '–'}ms · {ticksPerSec}/s</Text>
             </View>
-            {debugEnemies.map(e => (
+            {visibleEnemies.map(e => (
               <View key={e.userId} style={st.iconTextRow}>
                 <Icon name={e.inCone ? 'crosshair' : 'circle'} size={11} color={e.inCone ? '#ff4040' : '#80e0a0'} />
                 <Text style={[st.debugBarTxt, e.inCone && st.debugBarTxtHot]}>
@@ -642,6 +759,29 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         );
       })()}
 
+      {/* Overlay-Transparenz — persönliche Anzeige-Einstellung, nicht
+          serverseitig synchronisiert. Wirkt schon jetzt auf Hitbox/Kreuz auf
+          Karte und Kamera; dieselbe Einstellung soll später auch die
+          Überblendung im Hybrid-Modus (Kompass+Karte + IR) steuern. */}
+      {overlaySettingsOpen && (
+        <View style={st.overlaySettings}>
+          <View style={st.iconTextRow}>
+            <Icon name="settings" size={13} color="#f0c840" />
+            <Text style={st.overlaySettingsTitle}>Overlay-Transparenz</Text>
+          </View>
+          <View style={st.overlaySettingsRow}>
+            {[0.25, 0.5, 0.75, 1].map(v => (
+              <TouchableOpacity key={v}
+                style={[st.overlaySettingsBtn, overlayOpacity === v && st.modeBtnActive]}
+                onPress={() => setOverlayOpacity(v)}>
+                <Text style={[st.overlaySettingsTxt, overlayOpacity === v && { color: '#f0c840' }]}>
+                  {Math.round(v * 100)}%
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
 
       {/* Mode switcher + actions */}
       <View style={st.bottomBar}>
@@ -658,6 +798,13 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
             onPress={() => setShowRange(r => !r)}>
             <Icon name="target" size={18} color={showRange ? '#f0c840' : '#c0a0f0'} />
           </TouchableOpacity>
+          {showRange && (
+            <TouchableOpacity
+              style={[st.modeBtn, overlaySettingsOpen && st.modeBtnActive]}
+              onPress={() => setOverlaySettingsOpen(o => !o)}>
+              <Icon name="settings" size={18} color={overlaySettingsOpen ? '#f0c840' : '#c0a0f0'} />
+            </TouchableOpacity>
+          )}
           {debugMode && (
             <TouchableOpacity
               style={[st.modeBtn, debugOpen && st.modeBtnActive]}
@@ -740,12 +887,15 @@ const st = StyleSheet.create({
   geoWarn: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(240,200,64,.85)', padding: 6, alignItems: 'center' },
   geoOut: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(224,48,32,.95)', padding: 6, alignItems: 'center' },
   geoTxt: { color: '#100', fontWeight: '800', fontSize: 12 },
+  geoInit: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(40,32,64,.85)', padding: 6, alignItems: 'center' },
+  geoInitTxt: { color: '#c0a0f0', fontWeight: '700', fontSize: 12 },
   result: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(20,16,32,.95)', padding: 8, alignItems: 'center' },
   resultTxt: { color: '#f0c840', fontWeight: '800' },
   crosshair: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   chH: { position: 'absolute', width: 50, height: 2, backgroundColor: 'rgba(240,200,64,.8)' },
   chV: { position: 'absolute', width: 2, height: 50, backgroundColor: 'rgba(240,200,64,.8)' },
   chRing: { width: 100, height: 100, borderRadius: 50, borderWidth: 2, borderColor: 'rgba(240,200,64,.5)' },
+  targetDist: { position: 'absolute', bottom: -16, color: '#fff', fontSize: 10, fontWeight: '800' },
   shootWrap: { position: 'absolute', bottom: 16, left: 0, right: 0, alignItems: 'center' },
   shutter: {
     width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(240,200,64,.25)',
@@ -759,6 +909,17 @@ const st = StyleSheet.create({
   },
   endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
+  overlaySettings: {
+    backgroundColor: '#1a1428', borderTopWidth: 1, borderTopColor: '#2a2040',
+    paddingHorizontal: 16, paddingVertical: 10, gap: 8,
+  },
+  overlaySettingsTitle: { color: '#f0c840', fontSize: 12, fontWeight: '800' },
+  overlaySettingsRow: { flexDirection: 'row', gap: 8 },
+  overlaySettingsBtn: {
+    flex: 1, alignItems: 'center', backgroundColor: 'rgba(40,32,64,.6)',
+    borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingVertical: 8,
+  },
+  overlaySettingsTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
   debugBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center',

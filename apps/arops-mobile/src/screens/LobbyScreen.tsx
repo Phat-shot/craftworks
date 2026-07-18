@@ -37,6 +37,7 @@ interface ArSettings {
   bots?: { id: string; username: string }[];
   debugMode?: boolean;
   comicMap?: ComicMap;
+  hitTrackingMode?: 'compass' | 'ir';
 }
 
 const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
@@ -437,6 +438,20 @@ export default function LobbyScreen({
               <Text style={st.err}>{comicMapErr}</Text>
             </View>
           )}
+          {/* Vorbereitung für spätere IR-Hardware: schon jetzt als Einstellung
+              sichtbar, IR ist aber noch nicht wählbar (keine Hardware). */}
+          <View style={st.rowBtns}>
+            <Text style={st.wpCount}>Treffer-Tracking:</Text>
+            <TouchableOpacity style={[st.smallBtnRow, st.smallBtnActive]}
+              onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
+              <Icon name="compass" size={13} color="#f0c840" />
+              <Text style={[st.smallTxt, st.smallTxtActive]}>Kompass + Karte</Text>
+            </TouchableOpacity>
+            <View style={[st.smallBtnRow, st.smallBtnDisabled]}>
+              <Icon name="signalOff" size={13} color="#605850" />
+              <Text style={[st.smallTxt, { color: '#605850' }]}>IR (bald)</Text>
+            </View>
+          </View>
           {subMode === 'hide_and_seek' && (
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Gefunden:</Text>
@@ -629,6 +644,7 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7,
   },
   smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
+  smallBtnDisabled: { opacity: 0.5 },
   smallTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
   smallTxtActive: { color: '#f0c840' },
   wpCount: { color: '#807050', fontSize: 11 },
