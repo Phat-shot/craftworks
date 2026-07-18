@@ -31,17 +31,22 @@ private const val ACTION_USB_PERMISSION = "expo.modules.espbridge.USB_PERMISSION
 private const val ESPRESSIF_VID = 0x303A
 
 /**
- * Wired USB-C link to the AR Ops IR-fire companion (see
- * hardware/esp32-ir/firmware — an ESP32-S3 driving a TSAL6100 IR LED through
- * an AO3400A MOSFET). Talks raw CDC-ACM: the ESP32-S3's native USB already
+ * Wired USB-C bench-test link to an AR Ops IR-ID-beacon board (see
+ * hardware/esp32-ir/firmware/ir_beacon — an ESP32-S3 driving a TSAL6100 IR
+ * LED through an AO3400A MOSFET). NOT part of the gameplay path: the beacon
+ * broadcasts its ID continuously and standalone once flashed, no data
+ * connection needed while worn — this is only for confirming over USB from
+ * a workbench that a given board is alive (see "ping" below) before
+ * flashing/wearing it. Talks raw CDC-ACM: the ESP32-S3's native USB already
  * presents as a standard USB serial device, so this reads/writes its bulk
  * data endpoints directly via Android's built-in USB host API — no
  * third-party USB-serial library/Maven repo needed for that.
  *
  * Protocol is line-based, newline-terminated:
- *  - phone → ESP: "FIRE\n" (drives the IR pulse)
- *  - ESP → phone: periodic heartbeat lines (see firmware), forwarded to JS
- *    as "onStatus" events so the UI can show a connected/last-seen status.
+ *  - phone → ESP: "PING\n"
+ *  - ESP → phone: a boot line at startup and a heartbeat reply to each PING
+ *    (see firmware), forwarded to JS as "onStatus" events so the UI can
+ *    show a connected/last-seen status.
  */
 class EspBridgeModule : Module() {
   private var connection: UsbDeviceConnection? = null
@@ -67,8 +72,13 @@ class EspBridgeModule : Module() {
       teardown()
     }
 
-    AsyncFunction("fire") Coroutine {
-      withContext(Dispatchers.IO) { writeLine("FIRE") }
+    // Bench-test only — the beacon firmware (hardware/esp32-ir/firmware/
+    // ir_beacon) runs standalone off any USB power source and needs no data
+    // connection during actual gameplay; "PING" just confirms over serial
+    // that a given board is alive and reports which ID it's broadcasting,
+    // without needing a second phone's camera nearby to verify.
+    AsyncFunction("ping") Coroutine {
+      withContext(Dispatchers.IO) { writeLine("PING") }
     }
   }
 

@@ -1,0 +1,28 @@
+apply plugin: 'com.android.library'
+
+group = 'one.srz.irscanplugin'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  namespace "expo.modules.irscanplugin"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+dependencies {
+  // react-native-vision-camera autolinks as a classic RN native module, not
+  // an Expo Module — ':react-native-vision-camera' is the Gradle project
+  // name RN's autolinking generates from the npm package name. Untested
+  // assumption (can't build here to confirm): if this project name doesn't
+  // resolve, check settings.gradle after `expo prebuild` for the actual
+  // generated project name.
+  implementation project(':react-native-vision-camera')
+}

@@ -15,12 +15,19 @@ Seek&Destroy) mit Web-Lobby und React-Native-App (Expo).
 - `apps/arops-mobile/` — Expo-App (SDK 52, MapLibre). Nutzt das Shared Package als
   **vendored Tarball** (`vendor/arops-shared.tgz`) — NICHT als file:-Link
 - `apps/arops-wear/` — natives Kotlin/Gradle Wear-OS-Companion (kein Expo/RN)
-- `hardware/esp32-ir/` — IR-Fire-Begleitgerät (ESP32-S3, USB-C, TSAL6100+AO3400A) für
-  den "IR"-Trefferverfolgungsmodus. Firmware, Pinbelegung, Flash-Anleitung (Android/
+- `hardware/esp32-ir/` — IR-ID-Beacon (ESP32-S3, TSAL6100+AO3400A) für den "IR"-
+  Trefferverfolgungsmodus: sendet autark (kein Handy-Tether nötig) dauerhaft die
+  eigene 8-Bit-ID als Blinkmuster. Firmware, Pinbelegung, Flash-Anleitung (Android/
   iOS/Linux/Mac/Windows — iOS technisch nicht möglich, siehe `FLASHING.md`).
-  Phone-Seite: `apps/arops-mobile/modules/esp-bridge` (natives Android-USB-Serial-
-  Modul) + `src/hooks/useEspSync.ts`. Reiner Sender bisher (kein Empfänger vorhanden) —
-  Treffer-Validierung bleibt serverseitig kompassbasiert, IR ist rein physisches Feedback
+  Erkennung läuft über die Handy-KAMERA des Schützen (nicht USB!): natives
+  VisionCamera-Frame-Processor-Plugin `apps/arops-mobile/modules/ir-scan-plugin`
+  dekodiert das Blinkmuster live, `src/hooks/useIrScan.ts` liefert die erkannte ID
+  ans GameScreen. Server validiert bei `hitTrackingMode='ir'` zusätzlich zur
+  bestehenden Kompass/GPS-Kegel-Prüfung, dass die gescannte ID zur in der Lobby
+  zugewiesenen ID (`ar_settings.irIds`) des Ziels passt und aktuell genug ist
+  (`server/src/game/arops.js`, `IR_SCAN_MAX_AGE_MS`). `apps/arops-mobile/modules/
+  esp-bridge` (natives Android-USB-Serial-Modul) + `useEspSync.ts` sind nur noch ein
+  Werkbank-Testwerkzeug (PING-Kommando), kein Teil des Spielablaufs mehr
 - `.github/workflows/` — CI: Docker-Image pro Branch + APK-Build
 
 ## Branch-Regeln (WICHTIG)

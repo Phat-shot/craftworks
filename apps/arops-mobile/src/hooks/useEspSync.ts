@@ -1,9 +1,10 @@
-// Bridges the AR Ops IR-fire ESP32 companion (wired USB-C, see
-// hardware/esp32-ir/) into the app — the phone-side counterpart to
-// useWatchSync.ts, same shape (connected/fire), different transport (USB
-// serial instead of the Wear OS Data Layer).
+// Bridges the AR Ops IR-ID-beacon ESP32 (wired USB-C bench link, see
+// hardware/esp32-ir/) into the app for workbench testing only — the beacon
+// itself runs standalone off any USB power source once flashed, no data
+// connection while it's actually worn/played with (see useIrScan.ts for the
+// real gameplay path: camera-based decoding of the beacon's blink pattern).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { connectEsp, disconnectEsp, fireEsp, addEspStatusListener } from 'esp-bridge';
+import { connectEsp, disconnectEsp, pingEsp, addEspStatusListener } from 'esp-bridge';
 
 export function useEspSync() {
   const [connected, setConnected] = useState(false);
@@ -36,12 +37,10 @@ export function useEspSync() {
     disconnectEsp().catch(() => {});
   }, []);
 
-  // Fire-and-forget, like the watch's push() — a dropped command just means
-  // no physical flash this one time, never worth blocking the shoot action for.
-  const fire = useCallback(() => {
+  const ping = useCallback(() => {
     if (!connected) return;
-    fireEsp().catch(() => {});
+    pingEsp().catch(() => {});
   }, [connected]);
 
-  return { connected, lastHeartbeatAt, connect, disconnect, fire };
+  return { connected, lastHeartbeatAt, connect, disconnect, ping };
 }

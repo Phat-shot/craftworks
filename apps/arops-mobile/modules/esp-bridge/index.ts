@@ -25,9 +25,11 @@ export async function disconnectEsp(): Promise<void> {
   return NativeEspBridge.disconnect();
 }
 
-/** Triggers the physical IR pulse. */
-export async function fireEsp(): Promise<boolean> {
-  return NativeEspBridge.fire();
+/** Bench-test only — asks a USB-connected board to report a heartbeat over
+ *  serial. Not part of the gameplay path (the beacon runs standalone off
+ *  any USB power once flashed, no data connection needed while worn). */
+export async function pingEsp(): Promise<boolean> {
+  return NativeEspBridge.ping();
 }
 
 export function addEspStatusListener(listener: (event: EspStatusEvent) => void): EventSubscription {

@@ -38,6 +38,13 @@
           "cameraPermission": "AR Ops nutzt die Kamera zum Markieren von Gegnern. Fotos verlassen das Gerät nicht."
         }
       ],
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "AR Ops nutzt die Kamera zum Markieren von Gegnern und zum Scannen des IR-Trefferbeacons. Fotos verlassen das Gerät nicht.",
+          "enableFrameProcessors": true
+        }
+      ],
       "@maplibre/maplibre-react-native",
       [
         "expo-build-properties",

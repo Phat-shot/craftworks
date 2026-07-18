@@ -131,7 +131,7 @@ export default function App() {
         <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} />
       )}
       {route.name === 'game' && (
-        <GameScreen sessionId={route.sessionId} watchSync={watchSync} espSync={espSync} onExit={() => setRoute({ name: 'menu' })} />
+        <GameScreen sessionId={route.sessionId} watchSync={watchSync} onExit={() => setRoute({ name: 'menu' })} />
       )}
 
       <WatchPairModal visible={watchPairOpen} onClose={() => setWatchPairOpen(false)} onClaim={watchSync.claim} />

@@ -40,6 +40,7 @@ interface ArSettings {
   debugMode?: boolean;
   comicMap?: ComicMap;
   hitTrackingMode?: 'compass' | 'ir';
+  irIds?: Record<string, number>;
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
   autoScale?: boolean;
 }
@@ -223,6 +224,17 @@ export default function LobbyScreen({
   // Server is the single source of truth for roles/teams
   const roleOf = (uid: string) => ar.roles?.[uid] || 'hider';
   const teamOf = (uid: string) => ar.teams?.[uid] || 'a';
+  // Which numeric ID (0-255) each player's physical ESP32 IR beacon
+  // broadcasts (see hardware/esp32-ir) — only meaningful/shown once IR mode
+  // is selected. Tap-to-cycle rather than a text input, matching the
+  // existing role/team toggle pattern; fine for the small player counts
+  // this is actually used with.
+  const irIdOf = (uid: string) => ar.irIds?.[uid];
+  const cycleIrId = (uid: string) => {
+    if (!isHost) return;
+    const next = ((irIdOf(uid) ?? -1) + 1) % 256;
+    emitUpdate({ irIds: { ...(ar.irIds || {}), [uid]: next } });
+  };
 
   const onMapPress = (feature: any) => {
     if (!isHost) return;
@@ -678,6 +690,12 @@ export default function LobbyScreen({
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleRole(item.id)}>
                 <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color="#c0a0f0" />
                 <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? 'Seeker' : 'Hider'}</Text>
+              </TouchableOpacity>
+            )}
+            {hitTrackingMode === 'ir' && (
+              <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => cycleIrId(item.id)}>
+                <Icon name="flash" size={12} color="#f0c840" />
+                <Text style={st.roleTag}>{irIdOf(item.id) !== undefined ? `IR ${irIdOf(item.id)}` : 'IR –'}</Text>
               </TouchableOpacity>
             )}
             <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}

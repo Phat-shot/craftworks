@@ -2,7 +2,7 @@
 # See ../FLASHING.md for how to get the three .bin files (Arduino IDE:
 # Sketch -> Export Compiled Binary).
 #
-# Usage: .\flash.ps1 -Port COM5 -Bootloader ir_fire.ino.bootloader.bin -Partitions ir_fire.ino.partitions.bin -App ir_fire.ino.bin
+# Usage: .\flash.ps1 -Port COM5 -Bootloader ir_beacon.ino.bootloader.bin -Partitions ir_beacon.ino.partitions.bin -App ir_beacon.ino.bin
 param(
     [Parameter(Mandatory=$true)][string]$Port,
     [Parameter(Mandatory=$true)][string]$Bootloader,

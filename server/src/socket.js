@@ -256,11 +256,17 @@ module.exports = function setupSocket(io, db) {
           next.foundMode = arSettings.foundMode;
         }
         if (typeof arSettings?.debugMode === 'boolean') next.debugMode = arSettings.debugMode;
-        // 'ir' is accepted already (forward-prep for IR-based hit tracking
-        // hardware) even though no client can act on it yet — no gameplay
-        // behavior changes until an actual IR mode is implemented.
         if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {
           next.hitTrackingMode = arSettings.hitTrackingMode;
+        }
+        // Host-assigned mapping of userId -> the numeric ID (0-255) their
+        // physical ESP32 IR beacon broadcasts (see hardware/esp32-ir) —
+        // only consulted server-side when hitTrackingMode is 'ir'.
+        if (arSettings?.irIds && typeof arSettings.irIds === 'object') {
+          next.irIds = {};
+          for (const [uid, id] of Object.entries(arSettings.irIds)) {
+            if (Number.isFinite(id) && id >= 0 && id <= 255) next.irIds[uid] = +id;
+          }
         }
         // Host-configurable shot range/width — merged onto DEFAULT_HIT_CONFIG
         // in createAropsGame, so this genuinely changes hit validation, not

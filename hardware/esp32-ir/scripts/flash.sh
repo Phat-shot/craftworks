@@ -4,8 +4,8 @@
 # Sketch → Export Compiled Binary).
 #
 # Usage: ./flash.sh <port> <bootloader.bin> <partitions.bin> <app.bin>
-# Example (Linux):  ./flash.sh /dev/ttyACM0 ir_fire.ino.bootloader.bin ir_fire.ino.partitions.bin ir_fire.ino.bin
-# Example (macOS):  ./flash.sh /dev/cu.usbmodem1101 ir_fire.ino.bootloader.bin ir_fire.ino.partitions.bin ir_fire.ino.bin
+# Example (Linux):  ./flash.sh /dev/ttyACM0 ir_beacon.ino.bootloader.bin ir_beacon.ino.partitions.bin ir_beacon.ino.bin
+# Example (macOS):  ./flash.sh /dev/cu.usbmodem1101 ir_beacon.ino.bootloader.bin ir_beacon.ino.partitions.bin ir_beacon.ino.bin
 set -euo pipefail
 
 if [ "$#" -ne 4 ]; then

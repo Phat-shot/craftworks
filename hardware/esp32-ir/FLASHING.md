@@ -1,9 +1,8 @@
-# Flashing the IR-Fire firmware onto the ESP32-S3
+# Flashing the IR-ID-beacon firmware onto the ESP32-S3
 
-Flashing is a one-time setup step, done once from a computer (or Android, see
-below) before the board is used with the phone app. You don't need to
-re-flash it every time you use it — plug it into the phone via USB-C
-afterward and it just runs.
+Flashing is a one-time setup step per board, done once before it's worn
+in-game. Afterward it needs no data connection at all — any USB power
+source (battery pack, power bank) keeps it broadcasting its ID.
 
 **Honest platform limit up front: this cannot be done from iOS.** Skip to
 [iOS](#ios) for why, and flash from literally any other device instead — the
@@ -26,8 +25,8 @@ Works identically on **Windows, macOS, and Linux**.
    `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`
 3. `Tools → Board → Boards Manager`, search **esp32**, install **"esp32 by
    Espressif Systems"** — version **3.0.0 or newer** (the firmware's LEDC
-   API is core-3.x-specific, see the comment at the top of `ir_fire.ino`).
-4. Open `firmware/ir_fire/ir_fire.ino`.
+   API is core-3.x-specific, see the comment at the top of `ir_beacon.ino`).
+4. Open `firmware/ir_beacon/ir_beacon.ino`.
 5. `Tools` menu: select your board (or generic **"ESP32S3 Dev Module"** if
    your specific "Mini"/"SuperMini" board isn't listed by name), and set
    **USB CDC On Boot = Enabled** — without this the native USB port never
@@ -46,8 +45,8 @@ You need a compiled `.bin` first (the web tool flashes binaries, not
 source):
 
 - In the Arduino IDE: `Sketch → Export Compiled Binary`, then look in the
-  sketch folder for `ir_fire.ino.bin` (the app image; there'll usually also
-  be `ir_fire.ino.bootloader.bin` and `ir_fire.ino.partitions.bin` next to
+  sketch folder for `ir_beacon.ino.bin` (the app image; there'll usually also
+  be `ir_beacon.ino.bootloader.bin` and `ir_beacon.ino.partitions.bin` next to
   it — the web tool's UI lets you add all three at their respective
   offsets, see below).
 
@@ -82,9 +81,9 @@ Then, with the board plugged in:
 ```bash
 esptool.py --chip esp32s3 --port <PORT> --baud 460800 write_flash -z \
   --flash_mode dio --flash_freq 80m --flash_size 4MB \
-  0x0 ir_fire.ino.bootloader.bin \
-  0x8000 ir_fire.ino.partitions.bin \
-  0x10000 ir_fire.ino.bin
+  0x0 ir_beacon.ino.bootloader.bin \
+  0x8000 ir_beacon.ino.partitions.bin \
+  0x10000 ir_beacon.ino.bin
 ```
 
 `<PORT>` is `/dev/ttyACM0` (or similar) on Linux, `/dev/cu.usbmodemXXXX` on
@@ -111,6 +110,8 @@ serial accessories without Apple's MFi (Made-for-iPhone) certification —
 which this hobby board obviously doesn't have (methods 1 and 3, or any
 custom app, hit the same wall). There's no workaround short of the board
 being MFi-certified hardware. Flash it once from a Windows/Mac/Linux/Android
-device — after that, the board itself doesn't care what flashed it, and
-using it day-to-day is only ever from the Android phone app anyway (the
-`esp-bridge` USB module is Android-only for the same underlying reason).
+device — after that, the board itself doesn't care what flashed it, it just
+needs power to keep broadcasting. Day-to-day detection of the beacon
+happens through an opponent's Android phone *camera* (image analysis, not a
+USB link — see `apps/arops-mobile`'s IR frame-processor plugin), which is
+Android-only for the same underlying reason.

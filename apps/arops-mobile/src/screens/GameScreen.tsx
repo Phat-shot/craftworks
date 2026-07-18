@@ -8,8 +8,8 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { useWatchSync } from '../hooks/useWatchSync';
-import { useEspSync } from '../hooks/useEspSync';
 import CameraLayer from '../components/CameraLayer';
+import { useIrScan } from '../hooks/useIrScan';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
@@ -95,8 +95,8 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
-export default function GameScreen({ sessionId, onExit, watchSync, espSync }: {
-  sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>; espSync: ReturnType<typeof useEspSync>;
+export default function GameScreen({ sessionId, onExit, watchSync }: {
+  sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
 }) {
   useKeepAwake(); // screen lock would stop GPS → target_stale for everyone else
   const socket = getSocket();
@@ -109,6 +109,11 @@ export default function GameScreen({ sessionId, onExit, watchSync, espSync }: {
   const cameraRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
   const telemetry = useTelemetry(socket, sessionId);
+  // Continuously decodes the AR Ops IR-ID beacon (see hardware/esp32-ir)
+  // from the camera feed while a camera-showing view is mounted — "beim
+  // Schuss und davor" means this has to be running before the shot too, not
+  // just triggered at shoot-time, since decoding takes ~2s of aiming.
+  const irScan = useIrScan();
 
   // First few seconds without a GPS/compass fix are normal and expected — only
   // treat it as an actual problem (and offer the retry banner) once it's gone
@@ -192,13 +197,16 @@ export default function GameScreen({ sessionId, onExit, watchSync, espSync }: {
   const shoot = () => {
     const s = telemetry.snapshot();
     if (!s) return setLastResult({ icon: 'close', text: 'Keine Position' });
-    // Cosmetic/physical accompaniment only — hit validation stays exactly
-    // the compass/GPS cone-check it always was (server-side, unchanged).
-    // There's no IR receiver hardware yet to actually detect a physical
-    // hit, so "ir" mode today just fires a real IR pulse alongside the
-    // usual virtual attempt, nothing more.
-    if (snap?.hitTrackingMode === 'ir') espSync.fire();
-    socket.emit('game:action', { sessionId, action: 'ar_hit_attempt', data: { sample: s } });
+    const data: { sample: typeof s; irScan?: { deviceId: number; ts: number } } = { sample: s };
+    // "beim Schuss und davor" — irScan.lastScan is whatever the camera most
+    // recently decoded while aiming (useIrScan runs continuously whenever a
+    // camera-showing view is mounted), not just at this exact instant. The
+    // server (still the sole hit authority) checks it matches the claimed
+    // target's assigned beacon ID and is recent enough — see arops.js.
+    if (snap?.hitTrackingMode === 'ir' && irScan.lastScan) {
+      data.irScan = { deviceId: irScan.lastScan.deviceId, ts: irScan.lastScan.ts };
+    }
+    socket.emit('game:action', { sessionId, action: 'ar_hit_attempt', data });
   };
   const useRadar = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'radar' } });
@@ -929,7 +937,7 @@ export default function GameScreen({ sessionId, onExit, watchSync, espSync }: {
           </TouchableOpacity>
         )}
         {hasCam && (
-          <CameraLayer>
+          <CameraLayer frameProcessor={irScan.frameProcessor}>
             {/* Same crosshair/lane-funnel/target bundle in every camera-showing
                 mode — it used to only render correctly in pure camera mode
                 (split's half-height container broke the lane math, overlay
@@ -1043,12 +1051,14 @@ export default function GameScreen({ sessionId, onExit, watchSync, espSync }: {
         </View>
       )}
 
-      {/* ESP/Uhr-Status, icon-only, oben links — analog dem Kompass-Symbol in
-          der Lobby: reine Statusanzeige, keine Kopplungs-/Verbindungsaktion
-          mehr hier (das passiert nur noch im Hauptmenü). ESP links vom
-          Uhr-Icon. */}
-      <View style={[st.espStatusFab, espSync.connected && st.modeBtnActive]}>
-        <Icon name="usb" size={18} color={espSync.connected ? '#f0c840' : '#605850'} />
+      {/* IR-Scan/Uhr-Status, icon-only, oben links — analog dem Kompass-Symbol
+          in der Lobby: reine Statusanzeige. IR-Icon links vom Uhr-Icon: gold
+          wenn die Kamera gerade (innerhalb der letzten 3s) ein gültiges
+          Beacon decodiert hat, sonst gedimmt. Keine Kopplungs-/
+          Verbindungsaktion mehr hier für die Uhr (läuft nur noch übers
+          Hauptmenü). */}
+      <View style={[st.espStatusFab, irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) && st.modeBtnActive]}>
+        <Icon name="flash" size={18} color={irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) ? '#f0c840' : '#605850'} />
       </View>
       <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
         <Icon name="watch" size={18} color={watchSync.paired ? '#f0c840' : '#605850'} />
