@@ -27,9 +27,10 @@
             </intent-filter>
         </activity>
 
-        <!-- Receives game-state pushes from the phone over the Data Layer
-             API (MessageClient). The phone-side sender is NOT implemented
-             yet (see apps/arops-mobile) — this is the receiving half only. -->
+        <!-- Receives pairing + game-state pushes from the phone over the
+             Data Layer API (MessageClient) — see GameStateListenerService
+             for the "/arops/claim" (pairing) and "/arops/state" (match
+             state) paths, both under this one prefix. -->
         <service
             android:name=".GameStateListenerService"
             android:exported="true">
@@ -38,7 +39,7 @@
                 <data
                     android:scheme="wear"
                     android:host="*"
-                    android:pathPrefix="/arops/state" />
+                    android:pathPrefix="/arops/" />
             </intent-filter>
         </service>
 

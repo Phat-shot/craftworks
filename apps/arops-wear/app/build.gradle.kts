@@ -59,4 +59,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-wearable:18.1.0")
     // OSM tile fallback fetch (no MapLibre-equivalent renderer on Wear OS).
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // QR code generation for the pairing handshake (encode-only — no camera/
+    // scanning on the watch, that happens on the phone).
+    implementation("com.google.zxing:core:3.5.3")
 }

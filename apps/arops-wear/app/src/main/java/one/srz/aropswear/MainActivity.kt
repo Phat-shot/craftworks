@@ -7,6 +7,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.wear.compose.material.MaterialTheme
 import one.srz.aropswear.model.GameStateRepository
+import one.srz.aropswear.model.PairingRepository
+import one.srz.aropswear.ui.PairingScreen
 import one.srz.aropswear.ui.RadarScreen
 
 class MainActivity : ComponentActivity() {
@@ -14,8 +16,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                val state by GameStateRepository.state.collectAsState()
-                RadarScreen(state)
+                val claimed by PairingRepository.claimed.collectAsState()
+                if (claimed) {
+                    val state by GameStateRepository.state.collectAsState()
+                    RadarScreen(state)
+                } else {
+                    PairingScreen()
+                }
             }
         }
     }

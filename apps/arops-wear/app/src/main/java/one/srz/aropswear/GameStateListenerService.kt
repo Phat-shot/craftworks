@@ -5,27 +5,30 @@ import com.google.android.gms.wearable.WearableListenerService
 import one.srz.aropswear.model.ComicFeature
 import one.srz.aropswear.model.GameState
 import one.srz.aropswear.model.GameStateRepository
+import one.srz.aropswear.model.PairingRepository
 import one.srz.aropswear.model.RadarContact
 import org.json.JSONObject
 
 /**
- * Receives game-state pushes from the paired phone's Craftworks app over the
- * Wear OS Data Layer (MessageClient, path "/arops/state"). The phone side
- * (apps/arops-mobile) does not implement the sending half yet — this is
- * only the receiving half, ready to be wired up once it does. Until then
- * this watch app has nothing to show but its blank placeholder state.
- *
- * Expected JSON payload shape (proposal, to be finalized once the phone
- * side is built):
- * {
- *   "phase": "seeking", "remainingS": 245,
- *   "myLat": 48.137, "myLon": 11.575, "headingDeg": 87.4,
- *   "contacts": [{"id":"...", "bearingDeg":120.0, "distanceM":30.0, "hot":false}],
- *   "comicFeatures": [{"kind":"building", "points":[{"lat":...,"lon":...}, ...]}]
- * }
+ * Receives pushes from the paired phone's Craftworks app over the Wear OS
+ * Data Layer (MessageClient), two paths:
+ *  - "/arops/claim": the phone scanned our pairing QR code (see
+ *    ui/PairingScreen.kt) and echoes the token back — {"token": "..."}.
+ *    Confirms the pairing so MainActivity switches to the HUD.
+ *  - "/arops/state": the actual match-state push, JSON shape:
+ *    {
+ *      "phase": "seeking", "remainingS": 245,
+ *      "myLat": 48.137, "myLon": 11.575, "headingDeg": 87.4,
+ *      "contacts": [{"id":"...", "bearingDeg":120.0, "distanceM":30.0, "hot":false}],
+ *      "comicFeatures": [{"kind":"building", "points":[{"lat":...,"lon":...}, ...]}]
+ *    }
  */
 class GameStateListenerService : WearableListenerService() {
     override fun onMessageReceived(event: MessageEvent) {
+        if (event.path == "/arops/claim") {
+            handleClaim(event)
+            return
+        }
         if (event.path != "/arops/state") return
         try {
             val json = JSONObject(String(event.data, Charsets.UTF_8))
@@ -75,6 +78,15 @@ class GameStateListenerService : WearableListenerService() {
         } catch (e: Exception) {
             // Malformed push from the phone — keep showing the last good
             // state rather than crashing the watch app over it.
+        }
+    }
+
+    private fun handleClaim(event: MessageEvent) {
+        try {
+            val json = JSONObject(String(event.data, Charsets.UTF_8))
+            PairingRepository.tryClaim(json.optString("token"))
+        } catch (e: Exception) {
+            // Malformed claim — ignore, stay on the pairing screen.
         }
     }
 }
