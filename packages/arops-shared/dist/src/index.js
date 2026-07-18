@@ -19,3 +19,4 @@ __exportStar(require("./geo"), exports);
 __exportStar(require("./hit"), exports);
 __exportStar(require("./geofence"), exports);
 __exportStar(require("./timings"), exports);
+__exportStar(require("./compass"), exports);
