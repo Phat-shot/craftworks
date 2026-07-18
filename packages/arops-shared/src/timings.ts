@@ -60,6 +60,46 @@ export function scaleDroneRangeM(areaM2: number): number {
   return clamp(L * 0.4, 50, 200);
 }
 
+export interface CoreScaledConfig {
+  hidingDurationMs: number;
+  gameDurationMs: number;
+  hitRangeM: number;
+  radarCooldownMs: number;
+  droneCooldownMs: number;
+  cloakCooldownMs: number;
+  fakeMarkerCooldownMs: number;
+  aufscheuchenCooldownMs: number;
+}
+
+// A "medium" reference field (~50,000 m², L≈224m) roughly matching the
+// fixed defaults these values replace (server/src/game/arops.js DEFAULTS) —
+// cooldowns scale down from their reference value as the field grows past
+// this, never up past it for a smaller field.
+const REF_L_M = 224;
+
+/**
+ * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
+ * straight from the playfield size — an alternative to the host manually
+ * picking presets, useful now that field area has no upper limit (see
+ * DEFAULT_POLYGON_OPTIONS.maxAreaM2). Same L = sqrt(areaM2), ~1.4 m/s
+ * walking-speed philosophy as scaleTimings() above. First-pass numbers, not
+ * tuned by real playtesting yet — expect to revisit the exact constants.
+ */
+export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
+  const L = Math.sqrt(Math.max(1, areaM2));
+  const cooldown = (referenceMs: number) => clamp(referenceMs * (REF_L_M / L), 15_000, referenceMs);
+  return {
+    hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45_000, 600_000),
+    gameDurationMs:   clamp((L / 1.4) * 1000 * 2.5, 300_000, 3_600_000),
+    hitRangeM:        clamp(L * 0.5, 20, 500),
+    radarCooldownMs:        cooldown(15 * 60_000),
+    droneCooldownMs:        cooldown(60_000),
+    cloakCooldownMs:        cooldown(90_000),
+    fakeMarkerCooldownMs:   cooldown(90_000),
+    aufscheuchenCooldownMs: cooldown(45_000),
+  };
+}
+
 // ── Zones (bases, capture points, bomb sites) ───────────────
 import { LatLon } from './types';
 import { haversineMeters } from './geo';

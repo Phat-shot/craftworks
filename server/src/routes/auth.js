@@ -18,6 +18,22 @@ const mailer = nodemailer.createTransport({
   auth:   { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
 });
 
+// Guest accounts are created fresh on every guest login (never reused), so
+// a username picked once is otherwise gone forever — the users.username
+// UNIQUE constraint blocks it for every future guest AND real registration,
+// even after the guest who took it never comes back. After 14 days of
+// inactivity, free the name for reuse by renaming the stale guest's row to
+// a unique placeholder — the account itself (and anything referencing its
+// user_id: game history, leaderboard, etc.) stays intact, only the display
+// name changes. Real (non-guest) usernames are never touched.
+async function freeStaleGuestUsername(db, username) {
+  await db.query(
+    `UPDATE users SET username = left('_expired' || replace(id::text, '-', ''), 32)
+     WHERE username = $1 AND is_guest = true AND last_seen < NOW() - INTERVAL '14 days'`,
+    [username]
+  );
+}
+
 function signAccess(userId) {
   return jwt.sign({ sub: userId }, process.env.JWT_SECRET, { expiresIn: '15m' });
 }
@@ -47,6 +63,7 @@ router.post('/register', authLimiter,
 
     const { email, username, password, language = 'de' } = req.body;
     try {
+      await freeStaleGuestUsername(db, username);
       const hash = await bcrypt.hash(password, 12);
       const { rows } = await db.query(
         `INSERT INTO users (email, username, password_hash, language)
@@ -110,6 +127,7 @@ router.post('/guest', authLimiter,
     const email = `guest_${nanoid(12)}@guest.internal`;
     const hash  = await bcrypt.hash(nanoid(32), 8);
     try {
+      await freeStaleGuestUsername(db, username);
       const { rows } = await db.query(
         `INSERT INTO users (email, username, password_hash, email_verified, is_guest, language)
          VALUES ($1,$2,$3,true,true,$4) RETURNING id, username, avatar_color`,

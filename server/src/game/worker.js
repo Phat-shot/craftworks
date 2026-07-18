@@ -11,6 +11,14 @@ const arops = require('./arops');
 let gs = null;
 let intervalId = null;
 const TICK_RATE = 20;
+// No mode's tick loop ever stopped on its own if every player just left —
+// only a real win/loss condition (gs.gameOver) does. An abandoned session
+// (crashed clients, everyone quit mid-match) would otherwise tick forever,
+// leaking a worker thread until the server restarts. 3 minutes with zero
+// player action (any action — AR Ops telemetry included, which normally
+// arrives every second from at least one connected player) is a safe signal
+// that nobody is left.
+const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 
 // ── Receive messages from main thread ──────────────────────
 parentPort.on('message', (msg) => {
@@ -28,6 +36,7 @@ parentPort.on('message', (msg) => {
       } else {
         gs = engine.createGame(msg.sessionId, msg.difficulty, msg.mode, msg.players, msg.playerRaces, msg.workshopConfig);
       }
+      gs._lastActivityAt = Date.now();
       startLoop();
       break;
 
@@ -44,6 +53,7 @@ parentPort.on('message', (msg) => {
 
 function handleAction({ action, userId, data, reqId }) {
   if (!gs) return;
+  gs._lastActivityAt = Date.now();
   let result;
   switch (action) {
     case 'place_tower':  result = engine.actionPlaceTower(gs, userId, data.type, data.row, data.col); break;
@@ -88,6 +98,11 @@ function stopLoop() {
 }
 
 function tick() {
+  if (gs && !gs.gameOver && Date.now() - gs._lastActivityAt > IDLE_TIMEOUT_MS) {
+    gs.gameOver = true;
+    gs._abandoned = true;
+  }
+
   if (!gs || gs.gameOver) {
     if (gs?.gameOver && !gs._gameOverEmitted) {
       gs._gameOverEmitted = true;
@@ -96,7 +111,7 @@ function tick() {
       for (const [uid, p] of Object.entries(gs.players)) {
         playersOut[uid] = { ...p, wave: gs.wave||0, difficulty: gs.difficulty||'normal', mode: gs.mode||'solo' };
       }
-      parentPort.postMessage({ type:'game_over', win:gs._gameOverWin||false, players:playersOut });
+      parentPort.postMessage({ type:'game_over', win:gs._gameOverWin||false, players:playersOut, abandoned: !!gs._abandoned });
       stopLoop();
     }
     return;

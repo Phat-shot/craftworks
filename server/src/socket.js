@@ -457,7 +457,7 @@ module.exports = function setupSocket(io, db) {
       gameManager.on(sessionId, 'ta_tick',       ({ userId, snap })    => io.to(`user:${userId}`).emit('game:ta_tick', snap));
       gameManager.on(sessionId, 'ar_tick',       ({ userId, snap })    => io.to(`user:${userId}`).emit('game:ar_tick', snap));
       gameManager.on(sessionId, 'ta_round_end',  (msg)                 => io.to(`game:${sessionId}`).emit('game:ta_round_end', msg));
-      gameManager.on(sessionId, 'game_over',     ({ win, players })    => finalizeGameFromWorker(io, db, sessionId, players, win));
+      gameManager.on(sessionId, 'game_over',     ({ win, players, abandoned }) => finalizeGameFromWorker(io, db, sessionId, players, win, abandoned));
 
       await db.query("UPDATE lobbies SET status='in_progress' WHERE id=$1", [lobbyId]);
 
@@ -523,7 +523,7 @@ module.exports = function setupSocket(io, db) {
       gameManager.on(sessionId, 'ta_tick',      ({ userId, snap }) => socket.emit('game:ta_tick', snap));
       gameManager.on(sessionId, 'ar_tick',      ({ userId: uid, snap }) => { if (uid === userId) socket.emit('game:ar_tick', snap); });
       gameManager.on(sessionId, 'ta_round_end', (msg)              => socket.emit('game:ta_round_end', msg));
-      gameManager.on(sessionId, 'game_over',    ({ win, players }) => finalizeGameFromWorker(io, db, sessionId, players, win));
+      gameManager.on(sessionId, 'game_over',    ({ win, players, abandoned }) => finalizeGameFromWorker(io, db, sessionId, players, win, abandoned));
 
       socket.join(`game:${sessionId}`);
       socket.emit('game:solo_started', { sessionId, difficulty: effectiveDifficulty, race, mode: gameMode });
@@ -570,7 +570,7 @@ module.exports.getRacesHandler = (req, res) => {
 };
 
 // ── HELPERS ──────────────────────────────────────────────
-async function finalizeGameFromWorker(io, db, sessionId, players, win) {
+async function finalizeGameFromWorker(io, db, sessionId, players, win, abandoned = false) {
   const all = Object.values(players || {});
   all.sort((a, b) => (b.score||0) - (a.score||0));
 
@@ -581,14 +581,20 @@ async function finalizeGameFromWorker(io, db, sessionId, players, win) {
        WHERE session_id=$5 AND user_id=$6`,
       [p.wave||0, p.score||0, p.kills||0, i+1, sessionId, p.userId]
     ).catch(()=>{});
-    if ((p.wave||0) > 0) {
+    // Abandoned sessions (idle-timeout, see worker.js) never had a genuine
+    // finish — skip the leaderboard entirely rather than record a near-zero
+    // score as if it were a real result.
+    if (!abandoned && (p.wave||0) > 0) {
       await db.query(
         'INSERT INTO leaderboard (user_id, game_type, score, wave, difficulty, mode) VALUES ($1,$2,$3,$4,$5,$6)',
         [p.userId, 'tower_defense', p.score||0, p.wave||0, p.difficulty||'normal', p.mode||'solo']
       ).catch(() => {});
     }
   }
-  await db.query("UPDATE game_sessions SET status='finished', ended_at=NOW() WHERE id=$1", [sessionId]);
+  await db.query(
+    `UPDATE game_sessions SET status=$1, ended_at=NOW() WHERE id=$2`,
+    [abandoned ? 'abandoned' : 'finished', sessionId]
+  );
 
   io.to(`game:${sessionId}`).emit('game:over', {
     win, rankings: all.map((p, i) => ({ ...p, rank: i+1 })),

@@ -106,7 +106,7 @@ export interface PolygonValidationOptions {
 export const DEFAULT_POLYGON_OPTIONS: PolygonValidationOptions = {
   minPoints: 3,
   minAreaM2: 2_000,        // ~45×45 m — smallest sensible playfield
-  maxAreaM2: 3_000_000,    // 3 km² — hard cap for session sanity
+  maxAreaM2: Infinity,     // no upper limit — scaleCoreConfig()/scaleTimings() adapt to any field size
 };
 
 export type PolygonValidationError =

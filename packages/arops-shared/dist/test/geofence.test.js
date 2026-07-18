@@ -40,10 +40,10 @@ function sample(pos, ts) {
     strict_1.default.equal(r.ok, false);
     strict_1.default.ok(r.errors.includes('area_too_small'));
 });
-(0, node_test_1.test)('polygon: 3×3 km square rejected as too large', () => {
+(0, node_test_1.test)('polygon: no upper area limit — a huge field is accepted', () => {
     const r = (0, geofence_1.validatePolygon)(squareAround(MUC, 1500)); // 9 km²
-    strict_1.default.equal(r.ok, false);
-    strict_1.default.ok(r.errors.includes('area_too_large'));
+    strict_1.default.equal(r.ok, true);
+    strict_1.default.ok(!r.errors.includes('area_too_large'));
 });
 (0, node_test_1.test)('polygon: bowtie rejected as self-intersecting', () => {
     const sq = squareAround(MUC, 100);
