@@ -339,7 +339,11 @@ module.exports = function setupSocket(io, db) {
         io.to(`lobby:${lobbyId}`).emit('lobby:comic_map_ready', { reqId, comicMap });
       } catch (e) {
         console.error('lobby:generate_comic_map error:', e.message);
-        socket.emit('lobby:comic_map_error', { reqId, err: 'fetch_failed' });
+        const reason = e.message === 'overpass_rate_limited' ? 'rate_limited'
+          : e.message === 'overpass_timeout' ? 'timeout'
+          : e.message === 'overpass_network_error' ? 'network_error'
+          : 'fetch_failed';
+        socket.emit('lobby:comic_map_error', { reqId, err: reason });
       }
     });
 

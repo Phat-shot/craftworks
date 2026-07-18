@@ -66,16 +66,28 @@ async function fetchComicMapFeatures(polygon) {
     `way["landuse"="grass"](${bbox});` +
     `way["leisure"="park"](${bbox});` +
     `);out geom;`;
-  const res = await fetch(OVERPASS_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': '*/*',
-      'User-Agent': 'craftworks-ar-ops/1.0',
-    },
-    body: 'data=' + encodeURIComponent(query),
-    signal: AbortSignal.timeout(20_000),
-  });
+  let res;
+  try {
+    res = await fetch(OVERPASS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': '*/*',
+        'User-Agent': 'craftworks-ar-ops/1.0',
+      },
+      body: 'data=' + encodeURIComponent(query),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (e) {
+    // Distinguish "Overpass took too long" from "couldn't reach Overpass at all"
+    // — both look identical to the generic catch-all otherwise, and the actual
+    // reason only ever showed up in server logs, never to the host in the lobby.
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') throw new Error('overpass_timeout');
+    throw new Error('overpass_network_error');
+  }
+  // The public instance is shared, free infra with a small (2 concurrent
+  // requests) rate limit — 429/504 under load is expected, not exceptional.
+  if (res.status === 429 || res.status === 504) throw new Error('overpass_rate_limited');
   if (!res.ok) throw new Error(`overpass_http_${res.status}`);
   const data = await res.json();
   return reduceOverpassElements(data.elements);

@@ -13,6 +13,9 @@ const COMIC_MAP_ERR_DE: Record<string, string> = {
   not_host: 'Nur der Host kann das', wrong_mode: 'Falscher Modus',
   no_polygon: 'Erst das Spielfeld zeichnen', invalid_polygon: 'Spielfeld ungültig',
   lobby_not_found: 'Lobby nicht gefunden', fetch_failed: 'Abruf fehlgeschlagen — später erneut versuchen',
+  rate_limited: 'OpenStreetMap ist gerade überlastet (kostenloser Dienst) — kurz warten und erneut versuchen',
+  timeout: 'Zeitüberschreitung beim Abruf — erneut versuchen',
+  network_error: 'Server konnte OpenStreetMap nicht erreichen — kein Problem der App',
 };
 
 interface Member { id: string; username: string; ready: boolean; }
