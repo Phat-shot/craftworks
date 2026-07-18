@@ -275,6 +275,10 @@ module.exports = function setupSocket(io, db) {
             next.hitConfig.baseConeHalfAngleDeg = Math.min(45, Math.max(1, +arSettings.hitConfig.baseConeHalfAngleDeg));
           }
         }
+        // "Auto" mode: hiding/game duration, shot range and perk cooldowns
+        // get derived from field size in createAropsGame instead — overrides
+        // the manual presets above once a match actually starts.
+        if (typeof arSettings?.autoScale === 'boolean') next.autoScale = arSettings.autoScale;
         if (Array.isArray(arSettings?.bots)) {
           next.bots = arSettings.bots
             .filter(b => b && typeof b.id === 'string' && b.id.startsWith('bot_') && typeof b.username === 'string')
