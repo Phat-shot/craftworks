@@ -20,6 +20,8 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
   snapshot: () => TelemetrySample | null;
   /** Manually tear down + recreate the compass subscription (retry button). */
   retryHeading: () => void;
+  /** Manually tear down + recreate the GPS subscription (retry button). */
+  retryPosition: () => void;
 } {
   const [granted, setGranted] = useState<boolean | null>(null);
   const [sample, setSample] = useState<TelemetrySample | null>(null);
@@ -47,6 +49,9 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
   const lastHeadingAt = useRef(0);
   const headingRetries = useRef(0);
   const startHeadingRef = useRef<() => Promise<void>>(async () => {});
+  const lastPosAt = useRef(0);
+  const posRetries = useRef(0);
+  const startPositionRef = useRef<() => Promise<void>>(async () => {});
 
   // Permissions + watchers
   useEffect(() => {
@@ -78,17 +83,13 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
       await startHeading();
     };
 
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (cancelled) return;
-      setGranted(status === 'granted');
-      if (status !== 'granted') return;
-
+    const startPosition = async () => {
+      posSub?.remove();
       // Kickstart with an immediate one-shot fix in parallel — watchPositionAsync's
       // first callback can take a while to arrive, so without this the player's own
       // position (and the map dot) can stay empty for a long stretch after match start.
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-        .then(loc => { if (!cancelled && !posRef.current) posRef.current = loc; })
+        .then(loc => { if (!cancelled) { posRef.current = loc; lastPosAt.current = Date.now(); } })
         .catch(() => {});
 
       // High (not BestForNavigation): comparable few-meter accuracy but noticeably
@@ -96,24 +97,45 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
       // observed to stall for a long time on some devices.
       posSub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 },
-        (loc) => { posRef.current = loc; }
+        (loc) => { posRef.current = loc; lastPosAt.current = Date.now(); }
       );
+    };
+    startPositionRef.current = async () => {
+      posRetries.current = 0;
+      lastPosAt.current = Date.now();
+      await startPosition();
+    };
 
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (cancelled) return;
+      setGranted(status === 'granted');
+      if (status !== 'granted') return;
+
+      lastPosAt.current = Date.now();
       lastHeadingAt.current = Date.now();
-      await startHeading();
+      // Not awaited: if the subscription setup call itself hangs (rather than
+      // just staying silent afterward), the watchdog below must still start —
+      // otherwise a hung setup call would block position AND heading AND the
+      // recovery mechanism forever.
+      startPosition();
+      startHeading();
 
-      // expo-location's heading watcher is known to occasionally never deliver a
-      // single callback on some Android devices (while the OS's own compass, e.g.
-      // in Google Maps, works fine) — a silent, dead subscription rather than an
+      // expo-location's watchers are known to occasionally never deliver a single
+      // callback on some Android devices (while the OS's own GPS/compass, e.g. in
+      // Google Maps, work fine) — a silent, dead subscription rather than an
       // error. Since there's no failure event to react to, we just notice the
       // silence and tear down + recreate the subscription, a few times, instead
-      // of leaving the user stuck on a permanently blank compass.
+      // of leaving the player stuck with no position/compass and no feedback.
       watchdog = setInterval(() => {
         if (cancelled) return;
-        const silentMs = Date.now() - lastHeadingAt.current;
-        if (silentMs > 4000 && headingRetries.current < 5) {
+        if (Date.now() - lastHeadingAt.current > 4000 && headingRetries.current < 5) {
           headingRetries.current += 1;
           startHeading();
+        }
+        if (Date.now() - lastPosAt.current > 4000 && posRetries.current < 5) {
+          posRetries.current += 1;
+          startPosition();
         }
       }, 4000);
     })();
@@ -148,5 +170,6 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
     granted, sample, heading, geofence,
     snapshot: () => sampleRef.current ?? buildSample(),
     retryHeading: () => { startHeadingRef.current(); },
+    retryPosition: () => { startPositionRef.current(); },
   };
 }

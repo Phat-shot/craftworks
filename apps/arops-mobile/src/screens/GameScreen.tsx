@@ -10,7 +10,7 @@ import { useTelemetry } from '../hooks/useTelemetry';
 import CameraLayer from '../components/CameraLayer';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { BLANK_STYLE } from '../mapStyle';
+import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
 
 interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
 interface FlagInfo { team: 'a'|'b'; state: string; carrier: string | null; lat?: number; lon?: number; }
@@ -417,11 +417,16 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     const c = feature?.geometry?.coordinates;
     if (Array.isArray(c)) setBase(c[1], c[0]);
   };
+  // The comic map is a nice-to-have (host-generated, needs OpenStreetMap's rate-
+  // limited Overpass API) — if it was never generated or the fetch failed, fall
+  // back to plain OSM tiles instead of an empty background so the match is still
+  // playable with a real map underneath.
+  const hasComicMap = (snap?.comicMap?.features?.length ?? 0) > 0;
   const renderMap = (interactive: boolean) => (
-    <MapView style={{ flex: 1 }} mapStyle={BLANK_STYLE as any} onPress={onMapPress}
+    <MapView style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
       scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={false}>
       <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading} animationDuration={250} />
-      <ComicMapLayers features={snap?.comicMap?.features ?? []} />
+      {hasComicMap && <ComicMapLayers features={snap!.comicMap!.features} />}
       {(snap?.polygon?.length ?? 0) >= 3 && (
         <ShapeSource id="field" shape={fieldGeoJSON}>
           <FillLayer id="fieldFill" style={{ fillColor: 'rgba(80,208,64,0.08)' }} />
@@ -502,6 +507,13 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         </View>
       </View>
 
+      {!telemetry.sample && (
+        <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryPosition}>
+          <Icon name="close" size={12} color="#100" />
+          <Text style={st.geoTxt}>Keine Position — antippen zum Neustart</Text>
+        </TouchableOpacity>
+      )}
+
       {telemetry.heading === null && (
         <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryHeading}>
           <Icon name="compass" size={12} color="#100" />
@@ -568,16 +580,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         mode <-> map/rotated) unmounts it now.
       */}
       <View style={{ flex: 1 }}>
-        {!hasCam && viewMode === 'comic' && (
-          snap?.comicMap?.features?.length ? renderMap(true) : (
-            <View style={st.comicEmpty}>
-              <Icon name="palette" size={32} color="#807050" />
-              <Text style={st.comicEmptyTxt}>
-                Keine Comic-Karte generiert — das geht in der Lobby, sobald das Spielfeld steht.
-              </Text>
-            </View>
-          )
-        )}
+        {!hasCam && viewMode === 'comic' && renderMap(true)}
         {hasCam && (
           <CameraLayer>
             {viewMode === 'split' && (
@@ -716,8 +719,6 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
 
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810' },
-  comicEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12, backgroundColor: '#f3e9d2' },
-  comicEmptyTxt: { color: '#807050', fontSize: 13, textAlign: 'center' },
   status: {
     flexDirection: 'row', alignItems: 'center', paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
     backgroundColor: '#141020', gap: 14,
