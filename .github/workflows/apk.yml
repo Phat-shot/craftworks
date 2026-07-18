@@ -1,23 +1,75 @@
-name: APK Build (EAS)
-# Manuell triggern: Actions → "APK Build (EAS)" → Run workflow.
-# Bewusst NICHT bei jedem Push (EAS-Free-Tier: begrenzte Builds/Monat).
+name: APK Build
+# Läuft automatisch bei jedem Push auf main/test — analog zu docker.yml:
+# Branch bestimmt den Backend-Endpoint (main = arops.srz.one, test =
+# dev.srz.one), keine manuelle Eingabe mehr nötig. Baut lokal in der CI per
+# Gradle statt in der EAS-Cloud — kein EAS-Kontingent, kein EXPO_TOKEN-Secret.
+#
+# assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
+# laufenden Metro-Dev-Server und fragt beim Start nach dessen URL ("Unable
+# to load script", wenn man dort z.B. eine normale Webseiten-URL einträgt —
+# das ist kein Metro-Server). Release-Builds bündeln das JS dagegen fest in
+# die APK, laufen also eigenständig. Signiert ist das trotzdem nur mit
+# Androids Standard-Debug-Keystore (von Expo's prebuild so vorkonfiguriert,
+# siehe android/app/build.gradle) — für Sideload/internes Testen
+# ausreichend, aber NICHT für einen Play-Store-Release geeignet.
+#
+# Versionsschema (siehe CLAUDE.md): jedes Release (Merge auf main) +1, jeder
+# Bugfix auf test +0.1 — app.json "version" ist die einzige Quelle dafür,
+# vor jedem Push von Hand hochzählen.
 on:
-  workflow_dispatch:
+  push:
+    branches: [main, test]
 jobs:
-  eas-build:
+  gradle-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Install app deps
         working-directory: apps/arops-mobile
         run: npm install --no-audit --no-fund
-      - name: Trigger EAS build
+
+      - name: Backend-Endpoint für den Branch setzen
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "SERVER_URL=https://arops.srz.one" >> "$GITHUB_ENV"
+          else
+            echo "SERVER_URL=https://dev.srz.one" >> "$GITHUB_ENV"
+          fi
+
+      - name: Expo prebuild (generiert das native android/-Projekt)
         working-directory: apps/arops-mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas-cli@latest build -p android --profile preview --non-interactive --no-wait
-      - name: Hinweis
-        run: echo "Build läuft in der EAS-Cloud — Link und Status auf https://expo.dev"
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Gradle-Wrapper ausführbar machen
+        working-directory: apps/arops-mobile/android
+        run: chmod +x gradlew
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Release-APK bauen (JS fest eingebettet, kein Metro nötig)
+        working-directory: apps/arops-mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: APK umbenennen (ar-ops-android-beta-v<Version>.apk)
+        working-directory: apps/arops-mobile
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          FILENAME="ar-ops-android-beta-v${VERSION}.apk"
+          mv android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/$FILENAME"
+          echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_FILENAME }}
+          path: apps/arops-mobile/android/app/build/outputs/apk/release/${{ env.APK_FILENAME }}
+          if-no-files-found: error
