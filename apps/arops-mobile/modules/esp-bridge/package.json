@@ -1,0 +1,6 @@
+{
+  "name": "esp-bridge",
+  "version": "0.1.0",
+  "description": "USB-serial link to the AR Ops IR-fire ESP32 companion (wired, USB-C). Local module, Android-only, not published.",
+  "main": "index.ts"
+}

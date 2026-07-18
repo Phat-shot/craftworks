@@ -8,6 +8,7 @@ import { restoreSession, createArLobby, getUser, logout } from './src/api';
 import { SERVER_URL } from './src/config';
 import Icon from './src/components/Icon';
 import { useWatchSync } from './src/hooks/useWatchSync';
+import { useEspSync } from './src/hooks/useEspSync';
 import WatchPairModal from './src/components/WatchPairModal';
 import LoginScreen from './src/screens/LoginScreen';
 import JoinLobbyScreen from './src/screens/JoinLobbyScreen';
@@ -26,6 +27,7 @@ export default function App() {
   const [route, setRoute] = useState<Route>({ name: 'boot' });
   const [hostErr, setHostErr] = useState('');
   const watchSync = useWatchSync();
+  const espSync = useEspSync();
   const [watchPairOpen, setWatchPairOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -112,6 +114,9 @@ export default function App() {
             <TouchableOpacity style={[st.menuIconBtn, watchSync.paired && st.menuIconBtnActive]} onPress={() => setWatchPairOpen(true)}>
               <Icon name="watch" size={17} color={watchSync.paired ? '#f0c840' : '#c0a0f0'} />
             </TouchableOpacity>
+            <TouchableOpacity style={[st.menuIconBtn, espSync.connected && st.menuIconBtnActive]} onPress={() => espSync.connect()}>
+              <Icon name="usb" size={17} color={espSync.connected ? '#f0c840' : '#c0a0f0'} />
+            </TouchableOpacity>
             <TouchableOpacity style={st.menuIconBtn} onPress={() => setInfoOpen(true)}>
               <Icon name="info" size={17} color="#c0a0f0" />
             </TouchableOpacity>
@@ -126,7 +131,7 @@ export default function App() {
         <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} />
       )}
       {route.name === 'game' && (
-        <GameScreen sessionId={route.sessionId} watchSync={watchSync} onExit={() => setRoute({ name: 'menu' })} />
+        <GameScreen sessionId={route.sessionId} watchSync={watchSync} espSync={espSync} onExit={() => setRoute({ name: 'menu' })} />
       )}
 
       <WatchPairModal visible={watchPairOpen} onClose={() => setWatchPairOpen(false)} onClaim={watchSync.claim} />

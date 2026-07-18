@@ -213,6 +213,7 @@ export default function LobbyScreen({
   const foundMode = ar.foundMode || 'spectator';
   const bots = ar.bots || [];
   const debugMode = ar.debugMode || false;
+  const hitTrackingMode = ar.hitTrackingMode || 'compass';
   // Bots are display-only overlay from ar_settings — never touch the real
   // socket-driven `members` state, which tracks actual joined players.
   const displayMembers = useMemo(
@@ -360,13 +361,14 @@ export default function LobbyScreen({
           <Icon name="satellite" size={19} color="#f0c840" />
           {isHost && (
             <>
-              <TouchableOpacity style={[st.iconBtnLg, st.smallBtnActive]}
+              <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode !== 'ir' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-                <Icon name="compass" size={19} color="#f0c840" />
+                <Icon name="compass" size={19} color={hitTrackingMode !== 'ir' ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
-              <View style={[st.iconBtnLg, st.smallBtnDisabled]}>
-                <Icon name="signalOff" size={19} color="#605850" />
-              </View>
+              <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode === 'ir' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ hitTrackingMode: 'ir' })}>
+                <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? '#f0c840' : '#c0a0f0'} />
+              </TouchableOpacity>
               <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
                 <Icon name="bug" size={19} color={debugMode ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>

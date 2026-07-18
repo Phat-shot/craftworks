@@ -14,6 +14,13 @@ Seek&Destroy) mit Web-Lobby und React-Native-App (Expo).
   rechnen mit identischem Code. `dist/` ist committet (Server/Docker braucht es)
 - `apps/arops-mobile/` — Expo-App (SDK 52, MapLibre). Nutzt das Shared Package als
   **vendored Tarball** (`vendor/arops-shared.tgz`) — NICHT als file:-Link
+- `apps/arops-wear/` — natives Kotlin/Gradle Wear-OS-Companion (kein Expo/RN)
+- `hardware/esp32-ir/` — IR-Fire-Begleitgerät (ESP32-S3, USB-C, TSAL6100+AO3400A) für
+  den "IR"-Trefferverfolgungsmodus. Firmware, Pinbelegung, Flash-Anleitung (Android/
+  iOS/Linux/Mac/Windows — iOS technisch nicht möglich, siehe `FLASHING.md`).
+  Phone-Seite: `apps/arops-mobile/modules/esp-bridge` (natives Android-USB-Serial-
+  Modul) + `src/hooks/useEspSync.ts`. Reiner Sender bisher (kein Empfänger vorhanden) —
+  Treffer-Validierung bleibt serverseitig kompassbasiert, IR ist rein physisches Feedback
 - `.github/workflows/` — CI: Docker-Image pro Branch + APK-Build
 
 ## Branch-Regeln (WICHTIG)

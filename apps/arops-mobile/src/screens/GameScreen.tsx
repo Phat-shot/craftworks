@@ -8,6 +8,7 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { useWatchSync } from '../hooks/useWatchSync';
+import { useEspSync } from '../hooks/useEspSync';
 import CameraLayer from '../components/CameraLayer';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
@@ -94,8 +95,8 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
-export default function GameScreen({ sessionId, onExit, watchSync }: {
-  sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
+export default function GameScreen({ sessionId, onExit, watchSync, espSync }: {
+  sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>; espSync: ReturnType<typeof useEspSync>;
 }) {
   useKeepAwake(); // screen lock would stop GPS → target_stale for everyone else
   const socket = getSocket();
@@ -191,6 +192,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const shoot = () => {
     const s = telemetry.snapshot();
     if (!s) return setLastResult({ icon: 'close', text: 'Keine Position' });
+    // Cosmetic/physical accompaniment only — hit validation stays exactly
+    // the compass/GPS cone-check it always was (server-side, unchanged).
+    // There's no IR receiver hardware yet to actually detect a physical
+    // hit, so "ir" mode today just fires a real IR pulse alongside the
+    // usual virtual attempt, nothing more.
+    if (snap?.hitTrackingMode === 'ir') espSync.fire();
     socket.emit('game:action', { sessionId, action: 'ar_hit_attempt', data: { sample: s } });
   };
   const useRadar = () =>
@@ -1036,9 +1043,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </View>
       )}
 
-      {/* Uhr-Status, icon-only, oben links — analog dem Kompass-Symbol in
-          der Lobby: reine Statusanzeige, keine Kopplungsaktion mehr hier
-          (das passiert nur noch im Hauptmenü). */}
+      {/* ESP/Uhr-Status, icon-only, oben links — analog dem Kompass-Symbol in
+          der Lobby: reine Statusanzeige, keine Kopplungs-/Verbindungsaktion
+          mehr hier (das passiert nur noch im Hauptmenü). ESP links vom
+          Uhr-Icon. */}
+      <View style={[st.espStatusFab, espSync.connected && st.modeBtnActive]}>
+        <Icon name="usb" size={18} color={espSync.connected ? '#f0c840' : '#605850'} />
+      </View>
       <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
         <Icon name="watch" size={18} color={watchSync.paired ? '#f0c840' : '#605850'} />
       </View>
@@ -1162,7 +1173,13 @@ const st = StyleSheet.create({
   },
   watchStatusFab: {
     // Sits just below the status bar, over the map/camera view itself —
-    // analogous to how the Lobby's compass icon sits top-left.
+    // analogous to how the Lobby's compass icon sits top-left. To the
+    // right of espStatusFab.
+    position: 'absolute', left: 58, top: 86, width: 38, height: 38, borderRadius: 8,
+    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    alignItems: 'center', justifyContent: 'center', zIndex: 20,
+  },
+  espStatusFab: {
     position: 'absolute', left: 14, top: 86, width: 38, height: 38, borderRadius: 8,
     backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
