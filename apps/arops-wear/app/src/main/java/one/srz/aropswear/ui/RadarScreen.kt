@@ -1,6 +1,7 @@
 package one.srz.aropswear.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -34,6 +35,7 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RadarScreen(state: GameState) {
     var tileBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
