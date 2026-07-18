@@ -31,6 +31,18 @@ const MUC = { lat: 48.13743, lon: 11.57549 };
     strict_1.default.equal(t.baseSettingMs, 300000);
     strict_1.default.equal(t.zoneRadiusM, 45);
 });
+(0, node_test_1.test)('scaleDroneRangeM: small field hits lower clamp', () => {
+    strict_1.default.equal((0, timings_1.scaleDroneRangeM)(2000), 50);
+});
+(0, node_test_1.test)('scaleDroneRangeM: monotonic with field size', () => {
+    const a = (0, timings_1.scaleDroneRangeM)(40000); // L=200 → 80
+    const b = (0, timings_1.scaleDroneRangeM)(1000000); // L=1000 → 200 (clamped)
+    strict_1.default.ok(b >= a);
+    strict_1.default.equal(a, 80);
+});
+(0, node_test_1.test)('scaleDroneRangeM: huge field hits upper clamp', () => {
+    strict_1.default.equal((0, timings_1.scaleDroneRangeM)(3000000), 200);
+});
 (0, node_test_1.test)('zone: inside / outside', () => {
     const z = { id: 'z1', lat: MUC.lat, lon: MUC.lon, radiusM: 20 };
     strict_1.default.equal((0, timings_1.isInZone)(MUC, z), true);

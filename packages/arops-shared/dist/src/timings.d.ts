@@ -26,6 +26,8 @@ export interface ModeTimings {
 }
 /** Compute all mode timings from the playfield area. */
 export declare function scaleTimings(areaM2: number): ModeTimings;
+/** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
+export declare function scaleDroneRangeM(areaM2: number): number;
 import { LatLon } from './types';
 export interface Zone {
     id: string;

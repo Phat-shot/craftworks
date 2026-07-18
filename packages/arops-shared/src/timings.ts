@@ -54,6 +54,12 @@ export function scaleTimings(areaM2: number): ModeTimings {
   };
 }
 
+/** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
+export function scaleDroneRangeM(areaM2: number): number {
+  const L = Math.sqrt(Math.max(1, areaM2));
+  return clamp(L * 0.4, 50, 200);
+}
+
 // ── Zones (bases, capture points, bomb sites) ───────────────
 import { LatLon } from './types';
 import { haversineMeters } from './geo';

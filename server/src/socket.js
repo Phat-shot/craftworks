@@ -45,7 +45,15 @@ function enrichTaConfig(wc) {
 
 
 
+// AR OPS "comic map" — real geodata processing lives in its own dependency-free
+// module (server/src/game/comic_map.js) so it stays trivially unit-testable
+// without pulling in socket.js's full auth/DB dependency tree.
+const { COMIC_MAP_COOLDOWN_MS, fetchComicMapFeatures } = require('./game/comic_map');
+
 module.exports = function setupSocket(io, db) {
+  // Per-lobby cooldown for comic-map regeneration (module-scope Map: one
+  // setupSocket() call per server process, shared across all connections).
+  const comicMapLastTry = new Map();
 
   // ── Auth middleware ──────────────────────
   io.use(async (socket, next) => {
@@ -200,30 +208,19 @@ module.exports = function setupSocket(io, db) {
           if (!roles[m.user_id]) roles[m.user_id] = m.user_id === m.host_id ? 'seeker' : 'hider';
           if (teams[m.user_id] !== 'a' && teams[m.user_id] !== 'b') teams[m.user_id] = idx % 2 === 0 ? 'a' : 'b';
         });
+        // Bots default the same way, continuing the index sequence after real
+        // members — MUST match the ordering used in lobby:start's member merge,
+        // or the lobby preview and the actual match would disagree on defaults.
+        const bots = Array.isArray(out.bots) ? out.bots : [];
+        bots.forEach((b, i) => {
+          const idx = mem.length + i;
+          if (!roles[b.id]) roles[b.id] = 'hider';
+          if (teams[b.id] !== 'a' && teams[b.id] !== 'b') teams[b.id] = idx % 2 === 0 ? 'a' : 'b';
+        });
         out.roles = roles;
         out.teams = teams;
       } catch (e) { console.error('effectiveArSettings:', e.message); }
       return out;
-    }
-
-    // Effective roles/teams for AR lobbies — SERVER is the single source of
-    // truth so web + app can never disagree on defaults (order = joined_at,
-    // identical to the ordering the game engine receives at start).
-    async function arEffective(lobbyId, ar) {
-      const { rows } = await db.query(
-        `SELECT user_id FROM lobby_members WHERE lobby_id=$1 ORDER BY joined_at ASC`, [lobbyId]);
-      const ids = rows.map(r => r.user_id);
-      const roles = {}, teams = {};
-      const captains = { a: null, b: null };
-      ids.forEach((uid, idx) => {
-        roles[uid] = (ar?.roles?.[uid] === 'seeker' || ar?.roles?.[uid] === 'hider')
-          ? ar.roles[uid] : (idx === 0 ? 'seeker' : 'hider');
-        const t = (ar?.teams?.[uid] === 'a' || ar?.teams?.[uid] === 'b')
-          ? ar.teams[uid] : (idx % 2 === 0 ? 'a' : 'b');
-        teams[uid] = t;
-        if (!captains[t]) captains[t] = uid;
-      });
-      return { roles, teams, captains };
     }
 
     // ── AR OPS: host updates playfield/roles/settings ────
@@ -255,6 +252,35 @@ module.exports = function setupSocket(io, db) {
         // Mode selection + mode-specific settings
         const SUB_MODES = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy'];
         if (SUB_MODES.includes(arSettings?.subMode)) next.subMode = arSettings.subMode;
+        if (arSettings?.foundMode === 'seeker' || arSettings?.foundMode === 'spectator') {
+          next.foundMode = arSettings.foundMode;
+        }
+        if (typeof arSettings?.debugMode === 'boolean') next.debugMode = arSettings.debugMode;
+        // 'ir' is accepted already (forward-prep for IR-based hit tracking
+        // hardware) even though no client can act on it yet — no gameplay
+        // behavior changes until an actual IR mode is implemented.
+        if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {
+          next.hitTrackingMode = arSettings.hitTrackingMode;
+        }
+        // Host-configurable shot range/width — merged onto DEFAULT_HIT_CONFIG
+        // in createAropsGame, so this genuinely changes hit validation, not
+        // just the client-side overlay. Clamped to sane bounds regardless of
+        // what the client sends.
+        if (arSettings?.hitConfig && typeof arSettings.hitConfig === 'object') {
+          next.hitConfig = { ...(next.hitConfig || {}) };
+          if (Number.isFinite(arSettings.hitConfig.maxRangeM)) {
+            next.hitConfig.maxRangeM = Math.min(200, Math.max(10, +arSettings.hitConfig.maxRangeM));
+          }
+          if (Number.isFinite(arSettings.hitConfig.baseConeHalfAngleDeg)) {
+            next.hitConfig.baseConeHalfAngleDeg = Math.min(45, Math.max(1, +arSettings.hitConfig.baseConeHalfAngleDeg));
+          }
+        }
+        if (Array.isArray(arSettings?.bots)) {
+          next.bots = arSettings.bots
+            .filter(b => b && typeof b.id === 'string' && b.id.startsWith('bot_') && typeof b.username === 'string')
+            .slice(0, 12)
+            .map(b => ({ id: b.id, username: b.username.slice(0, 24) }));
+        }
         if (Array.isArray(arSettings?.zones)) {
           next.zones = arSettings.zones
             .filter(z => z && Number.isFinite(z.lat) && Number.isFinite(z.lon))
@@ -300,6 +326,46 @@ module.exports = function setupSocket(io, db) {
       }
     });
 
+    // ── AR OPS: host generates the "comic map" (real geodata for the field) ──
+    socket.on('lobby:generate_comic_map', async ({ lobbyId, reqId }) => {
+      try {
+        const { rows } = await db.query('SELECT host_id, game_mode, workshop_map_config FROM lobbies WHERE id=$1', [lobbyId]);
+        if (!rows[0]) return socket.emit('lobby:comic_map_error', { reqId, err: 'lobby_not_found' });
+        if (rows[0].host_id !== userId) return socket.emit('lobby:comic_map_error', { reqId, err: 'not_host' });
+        if (rows[0].game_mode !== 'ar_ops') return socket.emit('lobby:comic_map_error', { reqId, err: 'wrong_mode' });
+
+        const ar = rows[0].workshop_map_config?.ar_settings || {};
+        const polygon = ar.polygon;
+        if (!Array.isArray(polygon) || polygon.length < 3) {
+          return socket.emit('lobby:comic_map_error', { reqId, err: 'no_polygon' });
+        }
+        if (!aropsShared.validatePolygon(polygon).ok) {
+          return socket.emit('lobby:comic_map_error', { reqId, err: 'invalid_polygon' });
+        }
+
+        const lastTry = comicMapLastTry.get(lobbyId) || 0;
+        const elapsed = Date.now() - lastTry;
+        if (elapsed < COMIC_MAP_COOLDOWN_MS) {
+          return socket.emit('lobby:comic_map_error', { reqId, err: 'cooldown', remainingMs: COMIC_MAP_COOLDOWN_MS - elapsed });
+        }
+        comicMapLastTry.set(lobbyId, Date.now());
+
+        const features = await fetchComicMapFeatures(polygon);
+        const comicMap = { features, polygonSnapshot: JSON.stringify(polygon), fetchedAt: Date.now() };
+        const next = { ...ar, comicMap };
+        const cfg = { ...(rows[0].workshop_map_config || {}), game_mode: 'ar_ops', ar_settings: next };
+        await db.query('UPDATE lobbies SET workshop_map_config=$1 WHERE id=$2', [JSON.stringify(cfg), lobbyId]);
+        io.to(`lobby:${lobbyId}`).emit('lobby:comic_map_ready', { reqId, comicMap });
+      } catch (e) {
+        console.error('lobby:generate_comic_map error:', e.message);
+        const reason = e.message === 'overpass_rate_limited' ? 'rate_limited'
+          : e.message === 'overpass_timeout' ? 'timeout'
+          : e.message === 'overpass_network_error' ? 'network_error'
+          : 'fetch_failed';
+        socket.emit('lobby:comic_map_error', { reqId, err: reason });
+      }
+    });
+
     socket.on('lobby:start', async ({ lobbyId }) => {
       try {
       const { rows } = await db.query('SELECT * FROM lobbies WHERE id=$1', [lobbyId]);
@@ -316,7 +382,10 @@ module.exports = function setupSocket(io, db) {
           return socket.emit('error', { code: 'ar_invalid_polygon', details: polyCheck.errors });
         }
         const { rows: cnt } = await db.query('SELECT COUNT(*) AS n FROM lobby_members WHERE lobby_id=$1', [lobbyId]);
-        if (+cnt[0].n < 2) return socket.emit('error', { code: 'ar_need_two_players' });
+        const botCount = Array.isArray(ar?.bots) ? ar.bots.length : 0;
+        if (!ar?.debugMode && (+cnt[0].n + botCount) < 2) {
+          return socket.emit('error', { code: 'ar_need_two_players' });
+        }
         // Zone preflight for zone-based modes
         const sub = ar?.subMode || 'hide_and_seek';
         if (sub === 'domination' || sub === 'seek_destroy') {
@@ -360,6 +429,14 @@ module.exports = function setupSocket(io, db) {
           [sessionId, m.userId, m.username]);
       }
 
+      // Bots have no `users` row (FK constraint) — appended AFTER persistence,
+      // in-memory only, same order convention as effectiveArSettings' defaulting.
+      if (lobby.game_mode === 'ar_ops' && Array.isArray(lobby.workshop_map_config?.ar_settings?.bots)) {
+        for (const b of lobby.workshop_map_config.ar_settings.bots) {
+          members.push({ userId: b.id, username: b.username, avatar_color: null, isBot: true });
+        }
+      }
+
       // Create game in worker thread
       const playerRaces = {};
       for (const m of members) playerRaces[m.userId] = m.race || 'standard';
@@ -400,6 +477,12 @@ module.exports = function setupSocket(io, db) {
     // ── GAME ACTIONS (server-authoritative) ──
     socket.on('game:join', ({ sessionId }) => {
       socket.join(`game:${sessionId}`);
+    });
+
+    // Debug-mode RTT probe (AR Ops debug overlay) — immediate echo, no cost
+    // to normal play since it's only ever sent when the overlay is open.
+    socket.on('debug:ping', ({ t }) => {
+      if (typeof t === 'number') socket.emit('debug:pong', { t });
     });
 
     socket.on('game:action', async ({ sessionId, action, data }) => {

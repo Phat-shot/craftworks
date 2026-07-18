@@ -34,6 +34,13 @@ const DEFAULTS = {
   maxStrikes: 3,
   targetScore: 300,       // domination: points to win
   targetCaptures: 3,      // ctf: captures to win
+  droneCooldownMs: 60_000,
+  cloakCooldownMs: 90_000,
+  cloakDurationMs: 30_000,
+  fakeMarkerCooldownMs: 90_000,
+  fakeMarkerDurationMs: 45_000,
+  aufscheuchenCooldownMs: 45_000,
+  aufscheuchenDurationMs: 6_000,
 };
 
 function now() { return Date.now(); }
@@ -44,6 +51,7 @@ function pushEvent(gs, type, data) {
 }
 
 function isFrozen(p, t) { return t < (p.frozenUntil || 0); }
+function isCloaked(p, t) { return t < (p.cloakUntil || 0); }
 
 function applyFreeze(gs, target, byUserId, t) {
   target.frozenUntil = t + gs.timings.freezeMs;
@@ -54,6 +62,23 @@ function applyFreeze(gs, target, byUserId, t) {
 }
 
 function isTeamMode(gs) { return gs.subMode !== 'hide_and_seek'; }
+
+/**
+ * Mark a hider as found. Host-configurable fate (ar_settings.foundMode):
+ *  'spectator' (default) — status flips to 'found', excluded from further play.
+ *  'seeker'              — role flips to seeker, status stays 'alive' so they
+ *                           keep flowing through telemetry/geofence/tick and
+ *                           can hunt the remaining hiders themselves.
+ */
+function foundHider(gs, target, t, byUserId) {
+  target.foundBy = byUserId;
+  target.foundAt = t;
+  if (gs.cfg.foundMode === 'seeker') {
+    target.role = 'seeker';
+  } else {
+    target.status = 'found';
+  }
+}
 
 function opponentOf(gs, a, b) {
   return isTeamMode(gs) ? a.team !== b.team : a.role !== b.role;
@@ -104,9 +129,7 @@ const MODES = {
     },
     targetFilter(gs, shooter, c) { return c.role === 'hider'; },
     applyHit(gs, shooter, target, verdict, t) {
-      target.status = 'found';
-      target.foundBy = shooter.userId;
-      target.foundAt = t;
+      foundHider(gs, target, t, shooter.userId);
       shooter.score += 10;
       pushEvent(gs, 'player_found', {
         userId: target.userId, byUserId: shooter.userId,
@@ -116,6 +139,9 @@ const MODES = {
       this.checkWin(gs);
     },
     checkWin(gs) {
+      // Solo debug sessions (host alone, no bots) can't have a winner — never
+      // auto-end them just because there are trivially "0 hiders left".
+      if (Object.keys(gs.players).length < 2) return;
       const hidersLeft = Object.values(gs.players)
         .filter(p => p.role === 'hider' && p.status === 'alive').length;
       if (hidersLeft === 0) endGame(gs, 'seekers');
@@ -134,9 +160,7 @@ const MODES = {
         if (p.status !== 'alive' || p.outsideSince === null) continue;
         const outsideFor = t - p.outsideSince;
         if (p.role === 'hider' && outsideFor >= gs.cfg.geofenceAutoFoundMs) {
-          p.status = 'found';
-          p.foundBy = null;
-          p.foundAt = t;
+          foundHider(gs, p, t, null);
           pushEvent(gs, 'player_found', { userId: p.userId, byUserId: null, reason: 'left_field' });
           this.checkWin(gs);
           if (gs.gameOver) return;
@@ -492,6 +516,8 @@ function createAropsGame(sessionId, players, workshopConfig) {
   for (const k of Object.keys(DEFAULTS)) {
     if (typeof ar[k] === 'number') cfg[k] = ar[k];
   }
+  cfg.foundMode = ar.foundMode === 'seeker' ? 'seeker' : 'spectator';
+  cfg.debugMode = ar.debugMode === true;
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG, ...(ar.hitConfig || {}) };
 
   // Field-size-scaled timings; each key overridable via ar_settings.timings
@@ -530,7 +556,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
     if (team && !captains[team]) captains[team] = p.userId;
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      role, team,
+      role, team, isBot: !!p.isBot,
       status: 'alive',
       foundBy: null, foundAt: null,
       score: 0,
@@ -538,12 +564,15 @@ function createAropsGame(sessionId, players, workshopConfig) {
       strikes: 0, suspicious: false,
       geofence: 'inside', outsideSince: null, exposed: false, exposedAt: null,
       lastHitAttemptAt: 0,
-      perks: { radarLastUsed: 0 },
+      perks: { radarLastUsed: 0, droneLastUsed: 0, cloakLastUsed: 0, fakeMarkerLastUsed: 0, aufscheuchenLastUsed: 0 },
       proximityAlert: false,
+      cloakUntil: 0, fakeMarkers: null, fakeMarkerUntil: 0, fakeProximityUntil: 0,
       frozenUntil: 0, freezeAnchor: null, freezeViolations: 0,
     };
   });
-  if (!mode.usesTeams && seekerCount === 0) {
+  // Every normal match needs at least one seeker — but a solo debug session
+  // (host testing the hider view alone) should be able to explicitly opt out.
+  if (!mode.usesTeams && seekerCount === 0 && !cfg.debugMode) {
     const first = Object.values(playerState)[0];
     if (first) first.role = 'seeker';
   }
@@ -551,6 +580,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
   const gs = {
     sessionId, mode: 'ar_ops', subMode,
     polygon, cfg, hitConfig, timings, zones, captains,
+    comicMap: ar.comicMap && Array.isArray(ar.comicMap.features) ? ar.comicMap : null,
+    // Forward-prep only: no engine behavior branches on this yet, IR hit
+    // detection isn't implemented. Exposed in the snapshot so clients can
+    // already show/prepare for it.
+    hitTrackingMode: ar.hitTrackingMode === 'ir' ? 'ir' : 'compass',
     players: playerState,
     phase: mode.initialPhase(),
     phaseStartTime: now(),
@@ -558,6 +592,8 @@ function createAropsGame(sessionId, players, workshopConfig) {
     events: [], _eventSeq: 0,
     modeState: {},
     _lastModeTick: now(),
+    _hasBots: Object.values(playerState).some(p => p.isBot),
+    _lastBotStep: 0,
   };
   if (mode.initState) mode.initState(gs);
   return gs;
@@ -770,34 +806,194 @@ function actionArSetBase(gs, userId, data) {
 // ═══════════════════════════════════════════════════════════
 //  PERKS (core; opponent = other role/team)
 // ═══════════════════════════════════════════════════════════
+/** Rejection-sample a point inside the field polygon (for Fake-Marker decoys). */
+function randomPointInPolygon(polygon) {
+  if (!polygon || polygon.length < 3) return null;
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const v of polygon) {
+    if (v.lat < minLat) minLat = v.lat;
+    if (v.lat > maxLat) maxLat = v.lat;
+    if (v.lon < minLon) minLon = v.lon;
+    if (v.lon > maxLon) maxLon = v.lon;
+  }
+  for (let i = 0; i < 20; i++) {
+    const cand = { lat: minLat + Math.random() * (maxLat - minLat), lon: minLon + Math.random() * (maxLon - minLon) };
+    if (shared.pointInPolygon(cand, polygon)) return cand;
+  }
+  return null;
+}
+
 function actionArUsePerk(gs, userId, data) {
   const mode = MODES[gs.subMode];
   const p = gs.players[userId];
   if (!p) return { ok: false, err: 'not_in_game' };
   if (gs.gameOver) return { ok: false, err: 'game_over' };
   if (!mode.shootPhases.includes(gs.phase)) return { ok: false, err: 'wrong_phase' };
+  const t = now();
+  const perk = data?.perk;
 
-  if (data?.perk === 'radar') {
-    const t = now();
+  if (perk === 'radar') {
     const elapsed = t - p.perks.radarLastUsed;
     if (p.perks.radarLastUsed && elapsed < gs.cfg.radarCooldownMs) {
       return { ok: false, err: 'cooldown', remainingMs: gs.cfg.radarCooldownMs - elapsed };
     }
     p.perks.radarLastUsed = t;
     const opponents = Object.values(gs.players).filter(c =>
-      c.userId !== userId && c.status === 'alive' && opponentOf(gs, p, c) && c.lastAccepted
+      c.userId !== userId && c.status === 'alive' && opponentOf(gs, p, c) && c.lastAccepted && !isCloaked(c, t)
     );
+    const contacts = opponents.map(c => ({
+      userId: c.userId,
+      lat: c.lastAccepted.lat, lon: c.lastAccepted.lon,
+      ageMs: t - c.lastAccepted.ts,
+    }));
+    // Fake-Marker decoys: mixed into a seeker's contacts, same shape as real
+    // ones — indistinguishable, no separate reveal path.
+    if (p.role === 'seeker') {
+      for (const h of Object.values(gs.players)) {
+        if (h.role !== 'hider' || h.status !== 'alive' || !h.fakeMarkers || t >= (h.fakeMarkerUntil || 0)) continue;
+        h.fakeMarkers.forEach((m, i) => {
+          contacts.push({ userId: `decoy_${h.userId}_${i}`, lat: m.lat, lon: m.lon, ageMs: Math.round(Math.random() * 5000) });
+        });
+      }
+    }
     pushEvent(gs, 'radar_used', { userId });
-    return {
-      ok: true,
-      contacts: opponents.map(c => ({
-        userId: c.userId,
-        lat: c.lastAccepted.lat, lon: c.lastAccepted.lon,
-        ageMs: t - c.lastAccepted.ts,
-      })),
-    };
+    return { ok: true, contacts };
   }
+
+  // Drone / Cloak / Fake-Marker / Aufscheuchen are Hide & Seek's hider/seeker
+  // asymmetry — 'role' is a vestigial field in team modes, so gate explicitly.
+  if (['drone', 'cloak', 'fake_marker', 'aufscheuchen'].includes(perk) && gs.subMode !== 'hide_and_seek') {
+    return { ok: false, err: 'wrong_mode' };
+  }
+
+  if (perk === 'drone') {
+    if (p.role !== 'hider') return { ok: false, err: 'perk_wrong_role' };
+    const elapsed = t - p.perks.droneLastUsed;
+    if (p.perks.droneLastUsed && elapsed < gs.cfg.droneCooldownMs) {
+      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.droneCooldownMs - elapsed };
+    }
+    p.perks.droneLastUsed = t;
+    const range = shared.scaleDroneRangeM(shared.polygonAreaM2(gs.polygon));
+    const alert = !!(p.lastAccepted && Object.values(gs.players).some(c =>
+      c.userId !== userId && c.role === 'seeker' && c.status === 'alive' && c.lastAccepted &&
+      shared.haversineMeters(p.lastAccepted, c.lastAccepted) <= range
+    ));
+    pushEvent(gs, 'drone_used', { userId });
+    return { ok: true, alert };
+  }
+
+  if (perk === 'cloak') {
+    if (p.role !== 'hider') return { ok: false, err: 'perk_wrong_role' };
+    const elapsed = t - p.perks.cloakLastUsed;
+    if (p.perks.cloakLastUsed && elapsed < gs.cfg.cloakCooldownMs) {
+      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.cloakCooldownMs - elapsed };
+    }
+    p.perks.cloakLastUsed = t;
+    p.cloakUntil = t + gs.cfg.cloakDurationMs;
+    pushEvent(gs, 'cloak_used', { userId });
+    return { ok: true };
+  }
+
+  if (perk === 'fake_marker') {
+    if (p.role !== 'hider') return { ok: false, err: 'perk_wrong_role' };
+    const elapsed = t - p.perks.fakeMarkerLastUsed;
+    if (p.perks.fakeMarkerLastUsed && elapsed < gs.cfg.fakeMarkerCooldownMs) {
+      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.fakeMarkerCooldownMs - elapsed };
+    }
+    p.perks.fakeMarkerLastUsed = t;
+    const fallback = p.lastAccepted ? { lat: p.lastAccepted.lat, lon: p.lastAccepted.lon } : null;
+    p.fakeMarkers = [randomPointInPolygon(gs.polygon) || fallback, randomPointInPolygon(gs.polygon) || fallback]
+      .filter(Boolean);
+    p.fakeMarkerUntil = t + gs.cfg.fakeMarkerDurationMs;
+    pushEvent(gs, 'fake_marker_used', { userId });
+    return { ok: true };
+  }
+
+  if (perk === 'aufscheuchen') {
+    if (p.role !== 'seeker') return { ok: false, err: 'perk_wrong_role' };
+    const elapsed = t - p.perks.aufscheuchenLastUsed;
+    if (p.perks.aufscheuchenLastUsed && elapsed < gs.cfg.aufscheuchenCooldownMs) {
+      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.aufscheuchenCooldownMs - elapsed };
+    }
+    p.perks.aufscheuchenLastUsed = t;
+    for (const h of Object.values(gs.players)) {
+      if (h.role === 'hider' && h.status === 'alive') h.fakeProximityUntil = t + gs.cfg.aufscheuchenDurationMs;
+    }
+    pushEvent(gs, 'aufscheuchen_used', { userId });
+    return { ok: true };
+  }
+
   return { ok: false, err: 'unknown_perk' };
+}
+
+// ═══════════════════════════════════════════════════════════
+//  BOTS (debug/testing only — added via LobbyScreen's "+ Bot" button,
+//  never persisted to the users table; see socket.js lobby:ar_update).
+//  Movement is fed through actionArTelemetry like a real client, so
+//  hit/radar/geofence/zone code never needs to special-case bots.
+// ═══════════════════════════════════════════════════════════
+const BOT_STEP_MS = 1200;   // < DEFAULT_PLAUSIBILITY.minGapMs(1500) — every
+                            // step is trivially plausibility-exempt, matching
+                            // a real client's ~1s telemetry cadence.
+const BOT_SPEED_MPS = 1.3;  // brisk walking pace
+
+function nearestAlivePlayer(gs, from, filterFn) {
+  let best = null, bestDist = Infinity;
+  for (const c of Object.values(gs.players)) {
+    if (c.userId === from.userId || c.status !== 'alive' || !c.lastAccepted || !filterFn(c)) continue;
+    const d = shared.haversineMeters(from.lastAccepted, c.lastAccepted);
+    if (d < bestDist) { bestDist = d; best = c; }
+  }
+  return best;
+}
+
+function tickBots(gs, t) {
+  if (!gs._hasBots) return;
+  if (gs._lastBotStep && t - gs._lastBotStep < BOT_STEP_MS) return;
+  gs._lastBotStep = t;
+
+  const stepM = (BOT_STEP_MS / 1000) * BOT_SPEED_MPS;
+  for (const p of Object.values(gs.players)) {
+    if (!p.isBot || p.status !== 'alive') continue;
+
+    if (!p.lastAccepted) {
+      const start = randomPointInPolygon(gs.polygon) || fieldCentroid(gs.polygon);
+      actionArTelemetry(gs, p.userId, {
+        sample: { lat: start.lat, lon: start.lon, ts: t, accuracyM: 4, headingDeg: 0 },
+      });
+      continue;
+    }
+
+    let dest;
+    if (gs.subMode === 'hide_and_seek') {
+      // Hiders sit still once they've picked a spot during 'hiding'; seekers
+      // don't move until 'seeking' starts (mirrors what a real player can do).
+      if (p.role === 'hider' && gs.phase === 'hiding') continue;
+      if (p.role === 'seeker' && gs.phase !== 'seeking') continue;
+      const target = p.role === 'seeker'
+        ? nearestAlivePlayer(gs, p, c => c.role === 'hider')
+        : nearestAlivePlayer(gs, p, c => c.role === 'seeker');
+      if (target) {
+        const brg = shared.bearingDeg(p.lastAccepted, target.lastAccepted);
+        dest = shared.destinationPoint(p.lastAccepted, p.role === 'seeker' ? brg : (brg + 180) % 360, stepM);
+      }
+    }
+    // Team modes (v1 scope) and hide_and_seek bots without a target: wander.
+    if (!dest) {
+      dest = shared.destinationPoint(p.lastAccepted, Math.random() * 360, stepM);
+    }
+    if (!shared.pointInPolygon(dest, gs.polygon)) {
+      // Would leave the field — head back toward the centroid instead.
+      const centroid = fieldCentroid(gs.polygon);
+      dest = shared.destinationPoint(p.lastAccepted, shared.bearingDeg(p.lastAccepted, centroid), stepM);
+    }
+    actionArTelemetry(gs, p.userId, {
+      sample: {
+        lat: dest.lat, lon: dest.lon, ts: t, accuracyM: 4,
+        headingDeg: shared.bearingDeg(p.lastAccepted, dest),
+      },
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -823,17 +1019,22 @@ function tickArops(gs) {
   mode.tick(gs, t, dtMs);
   if (gs.gameOver) return;
 
+  tickBots(gs, t);
+
   // Proximity warner (active shoot phases only)
   for (const p of Object.values(gs.players)) {
     p.proximityAlert = false;
     if (p.status !== 'alive' || !p.lastAccepted || !mode.shootPhases.includes(gs.phase)) continue;
     for (const o of Object.values(gs.players)) {
       if (o.userId === p.userId || o.status !== 'alive' || !opponentOf(gs, p, o) || !o.lastAccepted) continue;
+      if (isCloaked(o, t)) continue; // Cloak defeats detection sensors, not point-blank hits
       if (shared.haversineMeters(p.lastAccepted, o.lastAccepted) <= gs.cfg.proximityRangeM) {
         p.proximityAlert = true;
         break;
       }
     }
+    // Aufscheuchen: seeker-faked alert, indistinguishable from a real one
+    if (t < (p.fakeProximityUntil || 0)) p.proximityAlert = true;
   }
 }
 
@@ -870,12 +1071,14 @@ function getAropsSnapshot(gs, userId) {
       p.userId === userId ||
       (me && !isOpponent) ||                               // teammates see each other
       (p.exposed && isOpponent && p.lastAccepted) ||       // geofence penalty
-      (mode.revealPosition && mode.revealPosition(gs, me, p)); // e.g. flag carrier
+      (mode.revealPosition && mode.revealPosition(gs, me, p)) || // e.g. flag carrier
+      gs.cfg.debugMode; // debug sessions (host-only, never default) skip fog of war entirely
     if (reveal && p.lastAccepted) {
       entry.lat = p.lastAccepted.lat;
       entry.lon = p.lastAccepted.lon;
       entry.positionAgeMs = t - p.lastAccepted.ts;
       entry.exposed = p.exposed;
+      entry.accuracyM = p.lastAccepted.accuracyM;
     }
     return entry;
   });
@@ -885,7 +1088,14 @@ function getAropsSnapshot(gs, userId) {
     sessionId: gs.sessionId,
     phase: gs.phase, phaseEndsAt, serverTime: t,
     polygon: gs.polygon,
+    comicMap: gs.comicMap,
+    hitTrackingMode: gs.hitTrackingMode,
+    // Host-configured shot range/cone width, exposed so the client overlay
+    // matches whatever is actually being validated (see hitConfig above).
+    hitRangeM: gs.hitConfig.maxRangeM,
+    hitConeHalfAngleDeg: gs.hitConfig.baseConeHalfAngleDeg,
     winner: gs.winner,
+    debugMode: !!gs.cfg.debugMode,
     timings: {
       freezeMs: gs.timings.freezeMs,
       captureDwellMs: gs.timings.captureDwellMs,
@@ -906,6 +1116,18 @@ function getAropsSnapshot(gs, userId) {
         gs.cfg.radarCooldownMs - (t - me.perks.radarLastUsed)),
       hitCooldownRemainingMs: Math.max(0,
         gs.cfg.hitCooldownMs - (t - me.lastHitAttemptAt)),
+      droneCooldownRemainingMs: Math.max(0,
+        gs.cfg.droneCooldownMs - (t - me.perks.droneLastUsed)),
+      cloakCooldownRemainingMs: Math.max(0,
+        gs.cfg.cloakCooldownMs - (t - me.perks.cloakLastUsed)),
+      cloakActive: t < (me.cloakUntil || 0),
+      cloakRemainingMs: Math.max(0, (me.cloakUntil || 0) - t),
+      fakeMarkerCooldownRemainingMs: Math.max(0,
+        gs.cfg.fakeMarkerCooldownMs - (t - me.perks.fakeMarkerLastUsed)),
+      fakeMarkerActive: t < (me.fakeMarkerUntil || 0),
+      fakeMarkerRemainingMs: Math.max(0, (me.fakeMarkerUntil || 0) - t),
+      aufscheuchenCooldownRemainingMs: Math.max(0,
+        gs.cfg.aufscheuchenCooldownMs - (t - me.perks.aufscheuchenLastUsed)),
     } : null,
     players: roster,
     events: gs.events.slice(-15),

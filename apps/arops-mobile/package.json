@@ -1,0 +1,38 @@
+{
+  "name": "arops-mobile",
+  "version": "0.1.0",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit",
+    "sync-shared": "npx tsc -p ../../packages/arops-shared && npm pack ../../packages/arops-shared --pack-destination ./vendor && mv ./vendor/craftworks-arops-shared-*.tgz ./vendor/arops-shared.tgz && rm -rf node_modules/@craftworks/arops-shared && npm install"
+  },
+  "dependencies": {
+    "@craftworks/arops-shared": "file:./vendor/arops-shared.tgz",
+    "@expo/vector-icons": "~14.0.4",
+    "@maplibre/maplibre-react-native": "^10.0.0",
+    "@react-native-async-storage/async-storage": "1.23.1",
+    "expo": "~52.0.0",
+    "expo-asset": "~11.0.1",
+    "expo-build-properties": "~0.13.1",
+    "expo-camera": "~16.0.10",
+    "expo-clipboard": "~7.0.1",
+    "expo-dev-client": "~5.0.9",
+    "expo-font": "~13.0.4",
+    "expo-keep-awake": "~14.0.2",
+    "expo-location": "~18.0.5",
+    "expo-sensors": "~14.0.2",
+    "expo-status-bar": "~2.0.1",
+    "react": "18.3.1",
+    "react-native": "0.76.6",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@types/react": "~18.3.12",
+    "typescript": "~5.3.3"
+  }
+}
