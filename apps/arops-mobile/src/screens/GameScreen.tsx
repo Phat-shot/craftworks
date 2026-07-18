@@ -5,14 +5,12 @@ import {
   destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg, haversineMeters, bearingDeg, angleDeltaDeg,
 } from '@craftworks/arops-shared';
 import { useKeepAwake } from 'expo-keep-awake';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { useWatchSync } from '../hooks/useWatchSync';
 import CameraLayer from '../components/CameraLayer';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import WatchPairModal from '../components/WatchPairModal';
 import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
 
 interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
@@ -78,17 +76,23 @@ const ERR_DE: Record<string, Toast> = {
 };
 
 // View modes: free 2D comic map (manual pan/rotate/zoom) → compass-oriented
-// 3D comic map → split cam/comic → transparent comic-over-camera. The shot
-// itself no longer needs a dedicated pure-camera mode — telemetry (position +
-// camera-forward heading) is fused continuously regardless of which view is
-// on screen, so shooting works identically in all four.
-type ViewMode = 'comic2d' | 'comic3d' | 'split' | 'overlay';
+// 3D comic map → split cam/comic → transparent comic-over-camera → pure
+// camera (no map at all). Shooting itself doesn't need the camera preview —
+// telemetry (position + camera-forward heading) is fused continuously
+// regardless of which view is on screen — pure camera is just for players
+// who want an unobstructed viewfinder.
+type ViewMode = 'comic2d' | 'comic3d' | 'split' | 'overlay' | 'camera';
 const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
   { id: 'comic2d', icon: 'map',       label: '2D' },
   { id: 'comic3d', icon: 'palette',   label: '3D' },
   { id: 'split',   icon: 'splitView', label: 'Split' },
   { id: 'overlay', icon: 'ghost',     label: 'Overlay' },
+  { id: 'camera',  icon: 'camera',    label: 'Kamera' },
 ];
+
+// Fixed blend for the hitbox/target overlay and the Overlay-mode map/camera
+// blend — no longer a user-facing setting.
+const OVERLAY_OPACITY = 0.5;
 
 export default function GameScreen({ sessionId, onExit, watchSync }: {
   sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
@@ -114,25 +118,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     return () => clearTimeout(t);
   }, []);
 
-  // Personal display preference only (never synced/server-authoritative) —
-  // how transparent the hitbox/target overlay renders. Also the groundwork
-  // for a future IR-tracking blend: this is the "hybrid mode" opacity knob
-  // the views popup below exposes, already wired to the live overlay.
-  // Persisted locally so the choice survives leaving/rejoining a match.
-  const [overlayOpacity, setOverlayOpacity] = useState(0.5);
   const [viewPopupOpen, setViewPopupOpen] = useState(false);
-  const [watchPairOpen, setWatchPairOpen] = useState(false);
   const [endRecapOpen, setEndRecapOpen] = useState(false);
-  useEffect(() => {
-    AsyncStorage.getItem('ar_overlay_opacity').then(v => {
-      const n = v ? parseFloat(v) : NaN;
-      if (Number.isFinite(n)) setOverlayOpacity(n);
-    }).catch(() => {});
-  }, []);
-  const setOverlayOpacityPersisted = (v: number) => {
-    setOverlayOpacity(v);
-    AsyncStorage.setItem('ar_overlay_opacity', String(v)).catch(() => {});
-  };
 
   // ── Debug overlay: live stats + enemy distance/hitbox, overlaid on the
   // existing view — not a separate full-screen panel.
@@ -237,14 +224,20 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   }, [snap?.polygon, telemetry.sample?.lat, telemetry.sample?.lon]);
 
   // Only the play area itself is shown as "the map" — outside its boundary
-  // the surroundings fade to dark instead of drawing a green line. There's no
-  // general polygon-buffer library in this project (would be a new native-
-  // adjacent dependency for one visual effect), so this approximates a buffer
-  // by scaling the polygon outward from its centroid in concentric steps —
-  // good enough for typical roughly-convex fields, imperfect for very
-  // concave/self-intersecting ones.
-  const FADE_SCALES = [1.15, 1.35, 1.65, 2.2, 3.2];
-  const FADE_OPACITIES = [0.12, 0.22, 0.35, 0.55, 0.85];
+  // the surroundings fade to dark instead of drawing a green line, and the
+  // fade must start exactly AT the boundary (nothing fades away inside the
+  // field) and reach fully opaque black well before it runs out of rings —
+  // the free-pan/zoom 2D mode means the user can zoom/pan arbitrarily far
+  // out, so the last ring is a huge fixed-size box (not scaled off the
+  // field) guaranteeing black stays black however far they scroll. There's
+  // no general polygon-buffer library in this project (would be a new
+  // native-adjacent dependency for one visual effect), so this approximates
+  // a buffer by scaling the polygon outward from its centroid in concentric
+  // steps — good enough for typical roughly-convex fields, imperfect for
+  // very concave/self-intersecting ones.
+  const FADE_RING_COUNT = 16;
+  const FADE_MAX_SCALE = 6;
+  const FADE_HUGE_DEG = 5; // ~550km — covers any realistic pan/zoom
   const fadeGeoJSON = useMemo(() => {
     const poly = snap?.polygon || [];
     if (poly.length < 3) return null;
@@ -253,15 +246,27 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     const scalePoly = (f: number) => poly.map(p => [cx + (p.lon - cx) * f, cy + (p.lat - cy) * f] as [number, number]);
     let prevRing = [...poly.map(p => [p.lon, p.lat] as [number, number]), [poly[0]!.lon, poly[0]!.lat] as [number, number]];
     const feats: any[] = [];
-    for (let i = 0; i < FADE_SCALES.length; i++) {
-      const ring = scalePoly(FADE_SCALES[i]!);
+    // i=0 is the field boundary itself (scale 1, opacity 0) — every ring
+    // after that is strictly outside it, so the very first visible step of
+    // the fade only ever starts past the edge, never inside.
+    for (let i = 1; i <= FADE_RING_COUNT; i++) {
+      const t = i / FADE_RING_COUNT;
+      const scale = 1 + (FADE_MAX_SCALE - 1) * t;
+      const op = Math.min(1, t * t);
+      const ring = scalePoly(scale);
       const closedRing = [...ring, ring[0]!];
       feats.push({
-        type: 'Feature', properties: { op: FADE_OPACITIES[i] },
+        type: 'Feature', properties: { op },
         geometry: { type: 'Polygon', coordinates: [closedRing, prevRing] },
       });
       prevRing = closedRing;
     }
+    const huge: [number, number][] = [
+      [cx - FADE_HUGE_DEG, cy - FADE_HUGE_DEG], [cx + FADE_HUGE_DEG, cy - FADE_HUGE_DEG],
+      [cx + FADE_HUGE_DEG, cy + FADE_HUGE_DEG], [cx - FADE_HUGE_DEG, cy + FADE_HUGE_DEG],
+      [cx - FADE_HUGE_DEG, cy - FADE_HUGE_DEG],
+    ];
+    feats.push({ type: 'Feature', properties: { op: 1 }, geometry: { type: 'Polygon', coordinates: [huge, prevRing] } });
     return { type: 'FeatureCollection' as const, features: feats };
   }, [JSON.stringify(snap?.polygon)]);
 
@@ -442,12 +447,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       const inCone = visibleEnemies.find(e => e.userId === p.userId)?.inCone;
       feats.push({
         type: 'Feature',
-        properties: { color: inCone ? HOT_COLOR : NORMAL_COLOR, op: (inCone ? 0.22 : 0.35) * overlayOpacity * 2 },
+        properties: { color: inCone ? HOT_COLOR : NORMAL_COLOR, op: (inCone ? 0.22 : 0.35) * OVERLAY_OPACITY * 2 },
         geometry: { type: 'Polygon', coordinates: [hitboxSquare(p.lat, p.lon, HITBOX_SIZE_M)] },
       });
     }
     return { type: 'FeatureCollection' as const, features: feats };
-  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies, overlayOpacity, activeRevealIds]);
+  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies, activeRevealIds]);
 
   // A visible hit-confirmation cross inside the box, only for opponents
   // currently in the shooting cone — the "hot" feedback the map version and
@@ -539,7 +544,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
        : (snap.plantPct ? `Plant ${snap.plantPct}%` : (snap?.me?.team === 'a' ? 'Angreifer' : 'Verteidiger')))
     : null;
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
-  const hasCam = viewMode === 'split' || viewMode === 'overlay';
+  const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
   const isFree2D = viewMode === 'comic2d';
   // Whichever heading is actually meaningful for how the phone is currently
   // expected to be held: flat/screen-up in pure map mode (top-edge heading),
@@ -709,7 +714,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       {laneBands.map((b, i) => (
         <View key={i} style={{
           position: 'absolute', top: b.topPx, left: screenW / 2 - b.wPx / 2,
-          width: b.wPx, height: b.heightPx, backgroundColor: `rgba(240,200,64,${(0.35 * overlayOpacity * 2).toFixed(2)})`,
+          width: b.wPx, height: b.heightPx, backgroundColor: `rgba(240,200,64,${(0.35 * OVERLAY_OPACITY * 2).toFixed(2)})`,
         }} />
       ))}
     </View>
@@ -723,8 +728,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           marginTop: -t.size / 2, borderRadius: 4, alignItems: 'center', justifyContent: 'center',
           borderWidth: 2, borderColor: t.inCone ? HOT_COLOR : NORMAL_COLOR,
           backgroundColor: t.inCone
-            ? `rgba(255,47,216,${(0.22 * overlayOpacity * 2).toFixed(2)})`
-            : `rgba(255,120,40,${(0.35 * overlayOpacity * 2).toFixed(2)})`,
+            ? `rgba(255,47,216,${(0.22 * OVERLAY_OPACITY * 2).toFixed(2)})`
+            : `rgba(255,120,40,${(0.35 * OVERLAY_OPACITY * 2).toFixed(2)})`,
         }}>
           {t.inCone && (
             <>
@@ -923,12 +928,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
                     here to avoid two non-aligned markers for the same opponent.
                     Blend amount is the same personal transparency knob the
                     Views popup exposes (also used for hitbox intensity). */}
-                <View style={[StyleSheet.absoluteFill, { opacity: overlayOpacity }]} pointerEvents="none">
+                <View style={[StyleSheet.absoluteFill, { opacity: OVERLAY_OPACITY }]} pointerEvents="none">
                   {renderMap(false)}
                 </View>
                 {crosshair}
               </>
             )}
+            {viewMode === 'camera' && <>{crosshair}{laneOverlay}{targetOverlay}</>}
           </CameraLayer>
         )}
 
@@ -991,11 +997,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         );
       })()}
 
-      {/* Views-Popup: Kartenmodus, Schussbereich, Debug, Overlay-Transparenz.
-          Transparenz ist eine rein geräteseitige Anzeige-Einstellung (nicht
-          serverseitig synchronisiert), wirkt aber schon jetzt live auf
-          Hitbox/Kreuz auf Karte und Kamera — dieselbe Einstellung soll
-          später auch die Überblendung im IR-Hybrid-Modus steuern. */}
+      {/* Views-Popup: Kartenmodus, Schussbereich, Debug. Uhr-Kopplung läuft
+          nur noch übers Hauptmenü — hier nur noch ein reiner Status-Icon
+          oben links (siehe watchStatusFab unten), kein Kopplungs-Einstieg
+          mehr. */}
       {viewPopupOpen && (
         <View style={st.viewPopup}>
           <View style={st.modeRow}>
@@ -1018,40 +1023,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
                 <Icon name="bug" size={18} color={debugOpen ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
             )}
-            <TouchableOpacity
-              style={[st.modeBtn, watchSync.paired && st.modeBtnActive]}
-              onPress={() => setWatchPairOpen(true)}>
-              <Icon name="compass" size={18} color={watchSync.paired ? '#f0c840' : '#c0a0f0'} />
-            </TouchableOpacity>
           </View>
-          <View style={st.iconTextRow}>
-            <Icon name={watchSync.paired ? 'checkCircle' : 'signalOff'} size={12}
-              color={watchSync.paired ? '#80ff40' : '#807050'} />
-            <Text style={st.overlaySettingsTxt}>
-              {watchSync.paired ? 'Uhr gekoppelt' : 'Keine Uhr gekoppelt'}
-            </Text>
-          </View>
-          {showRange && (
-            <>
-              <View style={st.iconTextRow}>
-                <Icon name="settings" size={13} color="#f0c840" />
-                <Text style={st.overlaySettingsTitle}>Overlay-Transparenz</Text>
-              </View>
-              <View style={st.overlaySettingsRow}>
-                {[0.25, 0.5, 0.75, 1].map(v => (
-                  <TouchableOpacity key={v}
-                    style={[st.overlaySettingsBtn, overlayOpacity === v && st.modeBtnActive]}
-                    onPress={() => setOverlayOpacityPersisted(v)}>
-                    <Text style={[st.overlaySettingsTxt, overlayOpacity === v && { color: '#f0c840' }]}>
-                      {Math.round(v * 100)}%
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </>
-          )}
         </View>
       )}
+
+      {/* Uhr-Status, icon-only, oben links — analog dem Kompass-Symbol in
+          der Lobby: reine Statusanzeige, keine Kopplungsaktion mehr hier
+          (das passiert nur noch im Hauptmenü). */}
+      <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
+        <Icon name="watch" size={18} color={watchSync.paired ? '#f0c840' : '#605850'} />
+      </View>
 
       {/* Floating settings toggle — pulled out of the bottom bar so that bar
           can stay exactly Perk1 | Schuss | Perk2, symmetric. */}
@@ -1075,12 +1056,6 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <View style={st.bottomSide}>{perkRight}</View>
         </View>
       </View>
-
-      <WatchPairModal
-        visible={watchPairOpen}
-        onClose={() => setWatchPairOpen(false)}
-        onClaim={watchSync.claim}
-      />
     </View>
   );
 }
@@ -1141,13 +1116,6 @@ const st = StyleSheet.create({
     backgroundColor: '#1a1428', borderTopWidth: 1, borderTopColor: '#2a2040',
     paddingHorizontal: 16, paddingVertical: 10, gap: 8,
   },
-  overlaySettingsTitle: { color: '#f0c840', fontSize: 12, fontWeight: '800' },
-  overlaySettingsRow: { flexDirection: 'row', gap: 8 },
-  overlaySettingsBtn: {
-    flex: 1, alignItems: 'center', backgroundColor: 'rgba(40,32,64,.6)',
-    borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingVertical: 8,
-  },
-  overlaySettingsTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
   debugBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center',
@@ -1174,13 +1142,18 @@ const st = StyleSheet.create({
   actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
   settingsFab: {
-    position: 'absolute', right: 14, top: 62, width: 42, height: 38, borderRadius: 8,
+    position: 'absolute', right: 14, bottom: 14, width: 42, height: 38, borderRadius: 8,
     backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   recenterBtn: {
-    position: 'absolute', right: 14, bottom: 14, width: 46, height: 46, borderRadius: 23,
+    position: 'absolute', right: 14, bottom: 70, width: 46, height: 46, borderRadius: 23,
     backgroundColor: 'rgba(20,16,32,.85)', borderWidth: 2, borderColor: '#f0c840',
+    alignItems: 'center', justifyContent: 'center', zIndex: 20,
+  },
+  watchStatusFab: {
+    position: 'absolute', left: 14, top: 62, width: 38, height: 38, borderRadius: 8,
+    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
 });

@@ -254,6 +254,20 @@ export default function LobbyScreen({
     getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId });
   };
 
+  // Once the field becomes valid, auto-generate the comic map a single time
+  // if the host never has (manual "generate"/"regenerate" button still
+  // covers every later case — staleness after edits, retry after failure).
+  // No extra fallback needed on failure: GameScreen already falls back to
+  // plain OSM tiles whenever no comic map exists (see hasComicMap there).
+  const autoGenTriedRef = useRef(false);
+  useEffect(() => {
+    if (!isHost || autoGenTriedRef.current) return;
+    if (polygon.length >= 3 && polyErrs.length === 0 && !ar.comicMap && !comicMapLoading) {
+      autoGenTriedRef.current = true;
+      generateComicMap();
+    }
+  }, [isHost, polygon.length, polyErrs.length, ar.comicMap, comicMapLoading]);
+
   const toggleReady = () => {
     const next = !ready;
     setReady(next);
@@ -327,18 +341,18 @@ export default function LobbyScreen({
       {/* Oben: Erkennungsmodus + Debug links, Code rechts */}
       <View style={st.topRow}>
         <View style={st.topLeft}>
-          <Icon name="satellite" size={16} color="#f0c840" />
+          <Icon name="satellite" size={19} color="#f0c840" />
           {isHost && (
             <>
-              <TouchableOpacity style={[st.iconBtn, st.smallBtnActive]}
+              <TouchableOpacity style={[st.iconBtnLg, st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-                <Icon name="compass" size={15} color="#f0c840" />
+                <Icon name="compass" size={19} color="#f0c840" />
               </TouchableOpacity>
-              <View style={[st.iconBtn, st.smallBtnDisabled]}>
-                <Icon name="signalOff" size={15} color="#605850" />
+              <View style={[st.iconBtnLg, st.smallBtnDisabled]}>
+                <Icon name="signalOff" size={19} color="#605850" />
               </View>
-              <TouchableOpacity style={[st.iconBtn, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
-                <Icon name="bug" size={15} color={debugMode ? '#f0c840' : '#c0a0f0'} />
+              <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
+                <Icon name="bug" size={19} color={debugMode ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
             </>
           )}
@@ -453,11 +467,11 @@ export default function LobbyScreen({
       {isHost && (
         <>
           <View style={st.rowBtns}>
-            <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
-              <Icon name="undo" size={15} color="#c0a0f0" />
+            <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
+              <Icon name="undo" size={19} color="#c0a0f0" />
             </TouchableOpacity>
-            <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Icon name="close" size={15} color="#c0a0f0" />
+            <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
+              <Icon name="close" size={19} color="#c0a0f0" />
             </TouchableOpacity>
             <Text style={st.wpCount}>{polygon.length}</Text>
             {NEEDS_ZONES[subMode] !== undefined && (
@@ -468,15 +482,15 @@ export default function LobbyScreen({
                 <TouchableOpacity style={[st.smallBtn, tapMode === 'zones' && st.smallBtnActive]} onPress={() => setTapMode('zones')}>
                   <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen {zones.length}/{NEEDS_ZONES[subMode]}+</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                  <Icon name="trash" size={15} color="#c0a0f0" />
+                <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
+                  <Icon name="trash" size={19} color="#c0a0f0" />
                 </TouchableOpacity>
               </>
             )}
-            <TouchableOpacity style={st.iconBtn} onPress={generateComicMap}
+            <TouchableOpacity style={st.iconBtnLg} onPress={generateComicMap}
               disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
               {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={comicMapStale ? 'loop' : 'palette'} size={15} color="#c0a0f0" />
+                <Icon name={comicMapStale ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
               )}
             </TouchableOpacity>
           </View>
@@ -716,8 +730,8 @@ const st = StyleSheet.create({
   },
   smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
   smallBtnDisabled: { opacity: 0.5 },
-  iconBtn: {
-    width: 30, height: 30, borderRadius: 7, alignItems: 'center', justifyContent: 'center',
+  iconBtnLg: {
+    width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
   },
   smallTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },

@@ -31,12 +31,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // A match used to close the whole app on back-press (Android's default
-  // hardwareBackPress behavior with no handler on the root screen). Leaving
-  // a running match now has a deliberate exit path (the endgame recap's
-  // "Beenden" button) — so while a game is open, back is simply swallowed
-  // instead of killing the app.
+  // hardwareBackPress behavior with no handler on the root screen). Back now
+  // ends the match for this player (same as the endgame recap's "Beenden"
+  // button) and returns to the main menu, instead of closing the app.
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => route.name === 'game');
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (route.name === 'game') { setRoute({ name: 'menu' }); return true; }
+      return false;
+    });
     return () => sub.remove();
   }, [route.name]);
   // Icon glyphs otherwise render blank on the first paint of every single
