@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,23 +32,28 @@ import one.srz.aropswear.model.PairingRepository
 @Composable
 fun PairingScreen() {
     val token by PairingRepository.token.collectAsState()
-    val qrBitmap = remember(token) { encodeQr(token, 200) }
+    val qrBitmap = remember(token) { encodeQr(token, 280) }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
+        modifier = Modifier.fillMaxSize().padding(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Image(
             bitmap = qrBitmap.asImageBitmap(),
             contentDescription = null,
-            modifier = Modifier.clickable { PairingRepository.regenerateToken() },
+            modifier = Modifier.size(190.dp).clickable { PairingRepository.regenerateToken() },
         )
         Text(
-            text = "Mit Handy-App scannen · antippen für neuen Code",
+            text = "Scannen zum Koppeln",
             color = ComicPalette.gold,
-            style = MaterialTheme.typography.caption2,
-            modifier = Modifier.padding(top = 8.dp),
+            style = MaterialTheme.typography.caption1,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            text = "Tippen = neuer Code",
+            color = ComicPalette.gold,
+            style = MaterialTheme.typography.caption3,
         )
     }
 }

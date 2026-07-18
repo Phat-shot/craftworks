@@ -3,6 +3,7 @@ package one.srz.aropswear.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -26,6 +27,7 @@ import androidx.wear.compose.material.Text
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import one.srz.aropswear.model.GameState
+import one.srz.aropswear.model.PairingRepository
 import one.srz.aropswear.net.OsmTileFetcher
 import one.srz.aropswear.sensors.WatchCompass
 import kotlin.math.cos
@@ -72,11 +74,16 @@ fun RadarScreen(state: GameState) {
 
         val mm = state.remainingS / 60
         val ss = state.remainingS % 60
+        // Long-press: escape hatch back to the pairing screen. Needed
+        // because `claimed` now persists across app restarts (see
+        // PairingRepository) — without this, re-pairing a new phone or
+        // starting a fresh match would have no way back to the QR code.
         Text(
             text = "${state.phase} · $mm:${ss.toString().padStart(2, '0')}",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
-            modifier = Modifier.align(Alignment.TopCenter),
+            modifier = Modifier.align(Alignment.TopCenter)
+                .combinedClickable(onClick = {}, onLongClick = { PairingRepository.regenerateToken() }),
         )
         if (watchHeading == null) {
             Text(

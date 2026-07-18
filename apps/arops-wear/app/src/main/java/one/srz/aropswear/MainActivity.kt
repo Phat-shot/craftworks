@@ -15,6 +15,7 @@ import one.srz.aropswear.ui.RadarScreen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PairingRepository.init(this)
         setContent {
             MaterialTheme {
                 val claimed by PairingRepository.claimed.collectAsState()

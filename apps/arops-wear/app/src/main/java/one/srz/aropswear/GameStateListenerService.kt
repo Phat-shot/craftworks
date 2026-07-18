@@ -24,6 +24,15 @@ import org.json.JSONObject
  *    }
  */
 class GameStateListenerService : WearableListenerService() {
+    override fun onCreate() {
+        super.onCreate()
+        // The OS can spin up this service in a fresh, Activity-less process
+        // just to deliver one message — PairingRepository.init() must have
+        // run here too, or a "/arops/claim" landing in that short-lived
+        // process would persist nothing and get lost once it dies again.
+        PairingRepository.init(this)
+    }
+
     override fun onMessageReceived(event: MessageEvent) {
         if (event.path == "/arops/claim") {
             handleClaim(event)
