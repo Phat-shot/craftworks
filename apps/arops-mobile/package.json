@@ -8,7 +8,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
-    "sync-shared": "npx tsc -p ../../packages/arops-shared && npm pack ../../packages/arops-shared --pack-destination ./vendor && mv ./vendor/craftworks-arops-shared-*.tgz ./vendor/arops-shared.tgz && npm install"
+    "sync-shared": "npx tsc -p ../../packages/arops-shared && npm pack ../../packages/arops-shared --pack-destination ./vendor && mv ./vendor/craftworks-arops-shared-*.tgz ./vendor/arops-shared.tgz && rm -rf node_modules/@craftworks/arops-shared && npm install"
   },
   "dependencies": {
     "@craftworks/arops-shared": "file:./vendor/arops-shared.tgz",
@@ -24,6 +24,7 @@
     "expo-font": "~13.0.4",
     "expo-keep-awake": "~14.0.2",
     "expo-location": "~18.0.5",
+    "expo-sensors": "~14.0.2",
     "expo-status-bar": "~2.0.1",
     "react": "18.3.1",
     "react-native": "0.76.6",

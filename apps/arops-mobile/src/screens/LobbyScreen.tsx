@@ -38,7 +38,20 @@ interface ArSettings {
   debugMode?: boolean;
   comicMap?: ComicMap;
   hitTrackingMode?: 'compass' | 'ir';
+  hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
 }
+
+// Half-angle presets expressed to the host as an approximate width at a 10m
+// reference distance (halfWidthM = 10 * tan(halfAngleDeg)) — the actual
+// validation stays angle-based (packages/arops-shared hit.ts, untouched),
+// this is just an intuitive framing for the setting.
+const REF_DIST_M = 10;
+const WIDTH_PRESETS = [
+  { halfWidthM: 0.5, label: 'Eng (1m)' },
+  { halfWidthM: 1, label: 'Normal (2m)' },
+  { halfWidthM: 2, label: 'Weit (4m)' },
+];
+const RANGE_PRESETS = [30, 50, 75, 100];
 
 const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
   { id: 'hide_and_seek', icon: 'ghost', label: 'Verstecken' },
@@ -285,14 +298,36 @@ export default function LobbyScreen({
   const dur = ar.gameDurationMs || 1_200_000;
   const HIDING = [{ l: '1m', ms: 60_000 }, { l: '2m', ms: 120_000 }, { l: '3m', ms: 180_000 }];
   const DURATION = [{ l: '10m', ms: 600_000 }, { l: '15m', ms: 900_000 }, { l: '20m', ms: 1_200_000 }, { l: '30m', ms: 1_800_000 }];
+  const hitRangeM = ar.hitConfig?.maxRangeM || 75;
+  const hitHalfAngleDeg = ar.hitConfig?.baseConeHalfAngleDeg;
+  const setHitRange = (maxRangeM: number) => emitUpdate({ hitConfig: { ...ar.hitConfig, maxRangeM } });
+  const setHitWidth = (halfWidthM: number) => emitUpdate({
+    hitConfig: { ...ar.hitConfig, baseConeHalfAngleDeg: Math.atan(halfWidthM / REF_DIST_M) * (180 / Math.PI) },
+  });
 
   const header = (
     <View>
-      {/* Code prominent + tap → QR popup */}
+      {/* Oben: Erkennungsmodus + Debug links, Code rechts */}
       <View style={st.topRow}>
-        <View style={st.titleRow}>
-          <Icon name="satellite" size={18} color="#f0c840" />
-          <Text style={st.title}>Lobby</Text>
+        <View style={st.topLeft}>
+          <Icon name="satellite" size={16} color="#f0c840" />
+          {isHost && (
+            <>
+              <TouchableOpacity style={[st.smallBtnRow, st.smallBtnActive]}
+                onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
+                <Icon name="compass" size={13} color="#f0c840" />
+                <Text style={[st.smallTxt, st.smallTxtActive]}>Kompass+Karte</Text>
+              </TouchableOpacity>
+              <View style={[st.smallBtnRow, st.smallBtnDisabled]}>
+                <Icon name="signalOff" size={13} color="#605850" />
+                <Text style={[st.smallTxt, { color: '#605850' }]}>IR (bald)</Text>
+              </View>
+              <TouchableOpacity style={[st.smallBtnRow, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
+                <Icon name="bug" size={13} color={debugMode ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, debugMode && st.smallTxtActive]}>Debug {debugMode ? 'AN' : 'AUS'}</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
         {lobbyCode && (
           <TouchableOpacity
@@ -310,22 +345,17 @@ export default function LobbyScreen({
           </TouchableOpacity>
         )}
       </View>
+
       {isHost && (
-        <>
-          <View style={st.sectionRow}>
-            <Icon name="target" size={13} color="#e0c080" />
-            <Text style={st.section}>Modus</Text>
-          </View>
-          <View style={st.rowBtns}>
+        <View style={st.modeRowTight}>
           {SUB_MODES.map(m => (
-            <TouchableOpacity key={m.id} style={[st.smallBtnRow, subMode === m.id && st.smallBtnActive]}
+            <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
               onPress={() => emitUpdate({ subMode: m.id })}>
               <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
-              <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]}>{m.label}</Text>
+              <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
             </TouchableOpacity>
           ))}
-          </View>
-        </>
+        </View>
       )}
       <View style={st.divider} />
 
@@ -408,65 +438,17 @@ export default function LobbyScreen({
 
       {isHost && (
         <>
-          <View style={st.divider} />
-          <View style={st.sectionRow}>
-            <Icon name="settings" size={13} color="#e0c080" />
-            <Text style={st.section}>Einstellungen</Text>
-          </View>
           <View style={st.rowBtns}>
-            <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
-              <Icon name="robot" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>Bot hinzufügen</Text>
+            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
+              <Icon name="undo" size={13} color="#c0a0f0" />
+              <Text style={st.smallTxt}>Punkt zurück</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[st.smallBtnRow, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
-              <Icon name="bug" size={13} color={debugMode ? '#f0c840' : '#c0a0f0'} />
-              <Text style={[st.smallTxt, debugMode && st.smallTxtActive]}>Debug-Modus {debugMode ? 'AN' : 'AUS'}</Text>
+            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
+              <Icon name="trash" size={13} color="#c0a0f0" />
+              <Text style={st.smallTxt}>Feld leeren</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={st.smallBtnRow} onPress={generateComicMap}
-              disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
-              {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={comicMapStale ? 'loop' : 'palette'} size={13} color="#c0a0f0" />
-              )}
-              <Text style={st.smallTxt}>
-                {comicMapLoading ? 'Lädt…' : ar.comicMap ? (comicMapStale ? 'Comic-Karte neu generieren' : 'Comic-Karte aktualisieren') : 'Comic-Karte generieren'}
-              </Text>
-            </TouchableOpacity>
+            <Text style={st.wpCount}>{polygon.length} Punkte</Text>
           </View>
-          {!!comicMapErr && (
-            <View style={st.errRow}>
-              <Icon name="warning" size={13} color="#ff6040" />
-              <Text style={st.err}>{comicMapErr}</Text>
-            </View>
-          )}
-          {/* Vorbereitung für spätere IR-Hardware: schon jetzt als Einstellung
-              sichtbar, IR ist aber noch nicht wählbar (keine Hardware). */}
-          <View style={st.rowBtns}>
-            <Text style={st.wpCount}>Treffer-Tracking:</Text>
-            <TouchableOpacity style={[st.smallBtnRow, st.smallBtnActive]}
-              onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-              <Icon name="compass" size={13} color="#f0c840" />
-              <Text style={[st.smallTxt, st.smallTxtActive]}>Kompass + Karte</Text>
-            </TouchableOpacity>
-            <View style={[st.smallBtnRow, st.smallBtnDisabled]}>
-              <Icon name="signalOff" size={13} color="#605850" />
-              <Text style={[st.smallTxt, { color: '#605850' }]}>IR (bald)</Text>
-            </View>
-          </View>
-          {subMode === 'hide_and_seek' && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Gefunden:</Text>
-              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'spectator' })}>
-                <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'seeker' })}>
-                <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
-              </TouchableOpacity>
-            </View>
-          )}
           {NEEDS_ZONES[subMode] !== undefined && (
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Tippen setzt:</Text>
@@ -483,16 +465,47 @@ export default function LobbyScreen({
             </View>
           )}
           <View style={st.rowBtns}>
-            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
-              <Icon name="undo" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>Punkt zurück</Text>
+            <TouchableOpacity style={st.smallBtnRow} onPress={generateComicMap}
+              disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
+              {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
+                <Icon name={comicMapStale ? 'loop' : 'palette'} size={13} color="#c0a0f0" />
+              )}
+              <Text style={st.smallTxt}>
+                {comicMapLoading ? 'Lädt…' : ar.comicMap ? (comicMapStale ? 'Comic-Karte neu generieren' : 'Comic-Karte aktualisieren') : 'Comic-Karte generieren'}
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={st.smallBtnRow} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Icon name="trash" size={13} color="#c0a0f0" />
-              <Text style={st.smallTxt}>Feld leeren</Text>
-            </TouchableOpacity>
-            <Text style={st.wpCount}>{polygon.length} Punkte</Text>
           </View>
+          {!!comicMapErr && (
+            <View style={st.errRow}>
+              <Icon name="warning" size={13} color="#ff6040" />
+              <Text style={st.err}>{comicMapErr}</Text>
+            </View>
+          )}
+
+          <View style={st.divider} />
+          <View style={st.rowBtns}>
+            <Text style={st.wpCount}>Reichweite:</Text>
+            {RANGE_PRESETS.map(m => (
+              <TouchableOpacity key={m} style={[st.smallBtn, hitRangeM === m && st.smallBtnActive]}
+                onPress={() => setHitRange(m)}>
+                <Text style={[st.smallTxt, hitRangeM === m && st.smallTxtActive]}>{m}m</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={st.rowBtns}>
+            <Text style={st.wpCount}>Breite:</Text>
+            {WIDTH_PRESETS.map(w => {
+              const active = hitHalfAngleDeg !== undefined
+                && Math.abs(hitHalfAngleDeg - Math.atan(w.halfWidthM / REF_DIST_M) * (180 / Math.PI)) < 0.5;
+              return (
+                <TouchableOpacity key={w.label} style={[st.smallBtn, active && st.smallBtnActive]}
+                  onPress={() => setHitWidth(w.halfWidthM)}>
+                  <Text style={[st.smallTxt, active && st.smallTxtActive]}>{w.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={st.divider} />
           <View style={st.rowBtns}>
             <Text style={st.wpCount}>Versteckzeit:</Text>
             {HIDING.map(o => (
@@ -510,6 +523,29 @@ export default function LobbyScreen({
                 <Text style={[st.smallTxt, dur === o.ms && st.smallTxtActive]}>{o.l}</Text>
               </TouchableOpacity>
             ))}
+          </View>
+          {subMode === 'hide_and_seek' && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Gefunden:</Text>
+              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: 'spectator' })}>
+                <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: 'seeker' })}>
+                <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={st.divider} />
+          <View style={st.rowBtns}>
+            <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
+              <Icon name="robot" size={13} color="#c0a0f0" />
+              <Text style={st.smallTxt}>Bot hinzufügen</Text>
+            </TouchableOpacity>
           </View>
         </>
       )}
@@ -617,9 +653,14 @@ export default function LobbyScreen({
 
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810', padding: 16, paddingTop: 52 },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  title: { fontSize: 20, fontWeight: '900', color: '#f0c840' },
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 },
+  topLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  modeRowTight: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  smallBtnTight: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
+    borderRadius: 7, paddingHorizontal: 4, paddingVertical: 7,
+  },
   codeChip: { backgroundColor: 'rgba(240,200,64,.12)', borderWidth: 1.5, borderColor: '#f0c840', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6, alignItems: 'center' },
   codeTxt: { color: '#f0c840', fontSize: 18, fontWeight: '900', letterSpacing: 2, fontFamily: 'monospace' as any },
   codeSubRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },

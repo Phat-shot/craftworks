@@ -5,6 +5,7 @@ import {
   destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg, haversineMeters, bearingDeg, angleDeltaDeg,
 } from '@craftworks/arops-shared';
 import { useKeepAwake } from 'expo-keep-awake';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import CameraLayer from '../components/CameraLayer';
@@ -25,6 +26,8 @@ interface Snap {
   polygon: { lat: number; lon: number }[];
   comicMap?: { features: ComicFeature[] } | null;
   hitTrackingMode?: 'compass' | 'ir';
+  hitRangeM?: number;
+  hitConeHalfAngleDeg?: number;
   winner: string | null;
   hidersRemaining: number;
   me: {
@@ -89,6 +92,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const socket = getSocket();
   const me = getUser();
   const [snap, setSnap] = useState<Snap | null>(null);
+  const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
   const [lastResult, setLastResult] = useState<Toast | null>(null);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('comic');
@@ -107,9 +111,20 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   // Personal display preference only (never synced/server-authoritative) —
   // how transparent the hitbox/target overlay renders. Also the groundwork
   // for a future IR-tracking blend: this is the "hybrid mode" opacity knob
-  // the settings panel below exposes, already wired to the live overlay.
+  // the views popup below exposes, already wired to the live overlay.
+  // Persisted locally so the choice survives leaving/rejoining a match.
   const [overlayOpacity, setOverlayOpacity] = useState(0.5);
-  const [overlaySettingsOpen, setOverlaySettingsOpen] = useState(false);
+  const [viewPopupOpen, setViewPopupOpen] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem('ar_overlay_opacity').then(v => {
+      const n = v ? parseFloat(v) : NaN;
+      if (Number.isFinite(n)) setOverlayOpacity(n);
+    }).catch(() => {});
+  }, []);
+  const setOverlayOpacityPersisted = (v: number) => {
+    setOverlayOpacity(v);
+    AsyncStorage.setItem('ar_overlay_opacity', String(v)).catch(() => {});
+  };
 
   // ── Debug overlay: live stats + enemy distance/hitbox, overlaid on the
   // existing view — not a separate full-screen panel.
@@ -140,6 +155,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     const onTick = (s: Snap) => {
       if (s.sessionId && s.sessionId !== sessionId) return; // stale session
       tickCounterRef.current++;
+      if (s.hitRangeM) hitRangeRef.current = s.hitRangeM;
       setSnap(s);
     };
     const onResult = (r: any) => {
@@ -151,7 +167,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         else if (r.reason === 'no_candidates') toast = { icon: 'close', text: 'Kein gültiges Ziel (Team? Eingefroren? Keine Daten?)' };
         else if (r.reason === 'target_stale') toast = { icon: 'signalOff', text: 'Gegner-Position veraltet — dessen App/Display muss aktiv sein!' };
         else if (r.reason === 'low_confidence') toast = { icon: 'signal', text: 'Im Kegel, aber Datenqualität zu niedrig (GPS/Aktualität)' };
-        else if (r.reason === 'out_of_range') toast = { icon: 'ruler', text: 'Außer Reichweite (max. 75 m)' };
+        else if (r.reason === 'out_of_range') toast = { icon: 'ruler', text: `Außer Reichweite (max. ${hitRangeRef.current} m)` };
         else toast = { icon: 'windy', text: 'Daneben — kein Ziel im Kegel' };
         setLastResult(toast);
         setTimeout(() => setLastResult(null), 4500);
@@ -285,45 +301,56 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     return { type: 'FeatureCollection' as const, features };
   }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies]);
 
+  // Host-configurable in the Lobby (Reichweite/Breite) — falls back to the
+  // shared defaults until the snapshot carries a per-lobby override. "Breite"
+  // is stored server-side as an angle (baseConeHalfAngleDeg, same formula
+  // hit.ts validates with), translated back to a meters-wide lane here using
+  // the same 10m reference distance the Lobby setting uses.
+  const REF_DIST_M = 10;
+  const effectiveMaxRangeM = snap?.hitRangeM ?? DEFAULT_HIT_CONFIG.maxRangeM;
+  const effectiveLaneWidthM = snap?.hitConeHalfAngleDeg !== undefined
+    ? 2 * REF_DIST_M * Math.tan(snap.hitConeHalfAngleDeg * Math.PI / 180)
+    : 2;
+
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
     if (!showRange || !telemetry.sample) return null;
     const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
     const pts: [number, number][] = [];
     for (let i = 0; i <= 48; i++) {
-      const p = destinationPoint(origin, (i / 48) * 360, DEFAULT_HIT_CONFIG.maxRangeM);
+      const p = destinationPoint(origin, (i / 48) * 360, effectiveMaxRangeM);
       pts.push([p.lon, p.lat]);
     }
     return {
       type: 'Feature' as const, properties: {},
       geometry: { type: 'Polygon' as const, coordinates: [pts] },
     };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon]);
+  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, effectiveMaxRangeM]);
 
-  // HIT-ZONE CONE: the honest shape of the validation. Wide at close range
-  // (GPS error dominates direction), narrowing to the base cone at max range.
-  // Uses the SAME shared tolerance function the server validates with.
+  // HIT LANE: a corridor straight ahead, host-configured width (see above) —
+  // not the wider GPS-tolerance cone the server actually validates with
+  // (hitToleranceDeg still widens at close range for the real inCone check
+  // above; this is deliberately the simpler, honest-about-the-target-size
+  // preview, and previews the fixed-width IR lane too).
   const coneGeoJSON = useMemo(() => {
     if (!showRange || !telemetry.sample || telemetry.heading === null) return null;
     const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
-    // accSum estimate: own accuracy + assumed similar target accuracy
-    const accSum = Math.max(4, telemetry.sample.accuracyM * 2);
     const h = telemetry.heading;
-    const left: [number, number][] = [];
-    const right: [number, number][] = [];
-    for (let d = 6; d <= DEFAULT_HIT_CONFIG.maxRangeM; d += 6) {
-      const tol = hitToleranceDeg(d, accSum);
-      const pl = destinationPoint(origin, h - tol, d);
-      const pr = destinationPoint(origin, h + tol, d);
-      left.push([pl.lon, pl.lat]);
-      right.push([pr.lon, pr.lat]);
-    }
-    const ring = [[origin.lon, origin.lat], ...left, ...right.reverse(), [origin.lon, origin.lat]];
+    const halfW = effectiveLaneWidthM / 2;
+    const nearLeft = destinationPoint(origin, h - 90, halfW);
+    const nearRight = destinationPoint(origin, h + 90, halfW);
+    const farLeft = destinationPoint(nearLeft, h, effectiveMaxRangeM);
+    const farRight = destinationPoint(nearRight, h, effectiveMaxRangeM);
+    const ring = [
+      [nearLeft.lon, nearLeft.lat], [farLeft.lon, farLeft.lat],
+      [farRight.lon, farRight.lat], [nearRight.lon, nearRight.lat],
+      [nearLeft.lon, nearLeft.lat],
+    ];
     return {
       type: 'Feature' as const, properties: {},
       geometry: { type: 'Polygon' as const, coordinates: [ring] },
     };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, telemetry.sample?.accuracyM, telemetry.heading]);
+  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, telemetry.heading, effectiveLaneWidthM, effectiveMaxRangeM]);
 
   // Zones (domination), sites (S&D), bases (CTF) as circles
   const zoneCircle = (lat: number, lon: number, radiusM: number) => {
@@ -352,11 +379,26 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     return { type: 'FeatureCollection' as const, features: feats };
   }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.sites), JSON.stringify(snap?.bases), snap?.zoneRadiusM]);
 
+  // The hitbox/cross/camera-target overlay is a strong aim-assist — showing it
+  // just because a position happens to be visible (teammate, flag-carrier)
+  // would be too strong. It appears for opponents currently pinged by an
+  // active detection means: a radar contact, a geofence exposure (they left
+  // the field — visible to everyone, so the aim-assist is fair game too), or
+  // (once a future perk actually reveals a position — drone currently only
+  // gives a boolean proximity alert, no position, so it can't drive this yet)
+  // another perk, or a debug session with the debug overlay open.
+  const activeRevealIds = useMemo(() => {
+    const ids = new Set(radarContacts.map(c => c.userId));
+    for (const p of snap?.players || []) if (p.exposed) ids.add(p.userId);
+    if (debugMode && debugOpen) {
+      for (const p of snap?.players || []) if (p.userId !== me?.id) ids.add(p.userId);
+    }
+    return ids;
+  }, [radarContacts, debugMode, debugOpen, JSON.stringify(snap?.players), me?.id]);
+
   // The real (planned) IR hit zone is a fixed 2x2m physical box, not a wide
   // angular cone — this previews that exact footprint at each visible
-  // opponent's position, north/east-aligned. Shows for whichever opponents
-  // are already visible under the normal privacy rules (teammates/exposed/
-  // flag-carrier) or, in debug sessions, everyone.
+  // opponent's position, north/east-aligned.
   const HITBOX_SIZE_M = 2;
   const hitboxSquare = (lat: number, lon: number, sizeM: number) => {
     const diag = Math.SQRT2 * (sizeM / 2);
@@ -372,6 +414,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     if (!showRange) return { type: 'FeatureCollection' as const, features: feats };
     for (const p of snap?.players || []) {
       if (p.userId === me?.id || typeof p.lat !== 'number' || typeof p.lon !== 'number') continue;
+      if (!activeRevealIds.has(p.userId)) continue;
       const inCone = visibleEnemies.find(e => e.userId === p.userId)?.inCone;
       feats.push({
         type: 'Feature',
@@ -380,7 +423,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       });
     }
     return { type: 'FeatureCollection' as const, features: feats };
-  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies, overlayOpacity]);
+  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies, overlayOpacity, activeRevealIds]);
 
   // A visible hit-confirmation cross inside the box, only for opponents
   // currently in the shooting cone — the "hot" feedback the map version and
@@ -390,6 +433,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     if (!showRange) return { type: 'FeatureCollection' as const, features: feats };
     for (const p of snap?.players || []) {
       if (p.userId === me?.id || typeof p.lat !== 'number' || typeof p.lon !== 'number') continue;
+      if (!activeRevealIds.has(p.userId)) continue;
       if (!visibleEnemies.find(e => e.userId === p.userId)?.inCone) continue;
       const diag = Math.SQRT2 * (HITBOX_SIZE_M / 2);
       const a = destinationPoint({ lat: p.lat, lon: p.lon }, 45, diag);
@@ -400,7 +444,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       feats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[c.lon, c.lat], [d.lon, d.lat]] } });
     }
     return { type: 'FeatureCollection' as const, features: feats };
-  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies]);
+  }, [showRange, JSON.stringify(snap?.players), me?.id, visibleEnemies, activeRevealIds]);
 
   const flagsGeoJSON = useMemo(() => {
     const feats: any[] = [];
@@ -448,9 +492,14 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
        : (snap.plantPct ? `Plant ${snap.plantPct}%` : (snap?.me?.team === 'a' ? 'Angreifer' : 'Verteidiger')))
     : null;
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
-  // Every map-showing mode is compass-oriented (heading-up); pure camera has no map to rotate.
-  const mapHeading = viewMode === 'camera' ? 0 : (telemetry.heading ?? 0);
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
+  // Whichever heading is actually meaningful for how the phone is currently
+  // expected to be held: flat/screen-up in pure map mode (top-edge heading),
+  // upright/screen-towards-you once the camera is showing (camera-forward
+  // heading — the same one used for aiming/hit-validation).
+  const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
+  // Every map-showing mode is compass-oriented (heading-up); pure camera has no map to rotate.
+  const mapHeading = viewMode === 'camera' ? 0 : (activeHeadingDeg ?? 0);
 
   if (telemetry.granted === false) {
     return (
@@ -475,7 +524,10 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const renderMap = (interactive: boolean) => (
     <MapView style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
       scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={false}>
-      <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading} animationDuration={250} />
+      {/* Pitch only once the compass is actually driving the rotation — a
+          tilted-but-static (non-rotating) map reads as broken, not "3D". */}
+      <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading}
+        pitch={activeHeadingDeg !== null ? 45 : 0} animationDuration={250} />
       {hasComicMap && <ComicMapLayers features={snap!.comicMap!.features} />}
       {(snap?.polygon?.length ?? 0) >= 3 && (
         <ShapeSource id="field" shape={fieldGeoJSON}>
@@ -549,7 +601,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const cameraTargets = useMemo(() => {
     if (!showRange || telemetry.heading === null) return [];
     const heading = telemetry.heading;
-    return visibleEnemies.map(e => {
+    return visibleEnemies.filter(e => activeRevealIds.has(e.userId)).map(e => {
       let delta = e.bearingDeg - heading;
       delta = ((delta + 540) % 360) - 180; // normalize to -180..180
       if (Math.abs(delta) > CAMERA_FOV_DEG / 2 + 8) return null; // off-screen
@@ -558,7 +610,40 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       const size = Math.min(110, Math.max(20, (angularSizeDeg / CAMERA_FOV_DEG) * screenW));
       return { userId: e.userId, distanceM: e.distanceM, inCone: e.inCone, x, size };
     }).filter((t): t is { userId: string; distanceM: number; inCone: boolean; x: number; size: number } => t !== null);
-  }, [showRange, telemetry.heading, visibleEnemies, screenW]);
+  }, [showRange, telemetry.heading, visibleEnemies, screenW, activeRevealIds]);
+
+  // Camera preview of the 2m lane: honest perspective would need device pitch
+  // (how far down the phone is tilted) to place near/far correctly, which we
+  // don't read yet — so this fakes a converging "alley" using fixed vertical
+  // anchors instead of real elevation, valid mainly when holding the phone
+  // roughly level. Rungs narrow from bottom (near) to top (near the crosshair,
+  // far away), same width math as the target markers.
+  const LANE_NEAR_M = 6;
+  const LANE_BANDS = 7;
+  const laneRungs = useMemo(() => {
+    if (!showRange || telemetry.heading === null) return [];
+    const out: { yFrac: number; wPx: number }[] = [];
+    for (let i = 0; i < LANE_BANDS; i++) {
+      const t = i / (LANE_BANDS - 1); // 0 = near/bottom, 1 = far/top
+      const d = LANE_NEAR_M + t * (effectiveMaxRangeM - LANE_NEAR_M);
+      const angDeg = (180 / Math.PI) * 2 * Math.atan((effectiveLaneWidthM / 2) / d);
+      const wPx = Math.max(3, (angDeg / CAMERA_FOV_DEG) * screenW);
+      const yFrac = 0.85 - t * (0.85 - 0.42);
+      out.push({ yFrac, wPx });
+    }
+    return out;
+  }, [showRange, telemetry.heading, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
+
+  const laneOverlay = (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {laneRungs.map((r, i) => (
+        <View key={i} style={{
+          position: 'absolute', top: `${r.yFrac * 100}%`, left: screenW / 2 - r.wPx / 2,
+          width: r.wPx, height: 2, backgroundColor: `rgba(240,200,64,${(0.5 * overlayOpacity * 2).toFixed(2)})`,
+        }} />
+      ))}
+    </View>
+  );
 
   const targetOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -583,11 +668,15 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     </View>
   );
 
-  const shootButton = canShoot && hasCam && (
+  const centerButton = canShoot && (hasCam ? (
     <TouchableOpacity style={[st.shutter, hitCd > 0 && st.shutterCd]} onPress={shoot} disabled={hitCd > 0}>
       {hitCd > 0 ? <Text style={st.shutterTxt}>{Math.ceil(hitCd / 1000) + 's'}</Text> : <Icon name="photo" size={26} color="#f0c840" />}
     </TouchableOpacity>
-  );
+  ) : (
+    <TouchableOpacity style={st.camBtn} onPress={() => setViewMode('camera')}>
+      <Icon name="photo" size={24} color="#f0c840" />
+    </TouchableOpacity>
+  ));
 
   return (
     <View style={st.wrap}>
@@ -621,11 +710,14 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         )
       )}
 
-      {telemetry.heading === null && (
+      {activeHeadingDeg === null && (
         initGraceOver ? (
           <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryHeading}>
             <Icon name="compass" size={12} color="#100" />
-            <Text style={st.geoTxt}>Kein Kompass — Handy in einer 8 bewegen · antippen zum Neustart</Text>
+            <Text style={st.geoTxt}>
+              {hasCam ? 'Kein Kompass — Handy aufrecht halten (Bildschirm zu dir)' : 'Kein Kompass — Handy flach halten'}
+              {' · antippen zum Neustart'}
+            </Text>
           </TouchableOpacity>
         ) : (
           <View style={st.geoInit}>
@@ -699,7 +791,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
           <CameraLayer>
             {viewMode === 'split' && (
               <View style={{ flex: 1 }}>
-                <View style={{ flex: 1 }}>{crosshair}{targetOverlay}</View>
+                <View style={{ flex: 1 }}>{crosshair}{laneOverlay}{targetOverlay}</View>
                 <View style={{ flex: 1 }}>{renderMap(false)}</View>
               </View>
             )}
@@ -714,17 +806,14 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
                 {crosshair}
               </>
             )}
-            {viewMode === 'camera' && <>{crosshair}{targetOverlay}</>}
+            {viewMode === 'camera' && <>{crosshair}{laneOverlay}{targetOverlay}</>}
           </CameraLayer>
         )}
 
-        {/* Shoot button floats over camera modes */}
-        {shootButton && <View style={st.shootWrap}>{shootButton}</View>}
-
         {/* Debug overlay: floats directly over whichever view is active —
-            rendered last (like shootWrap above) so it actually paints on top
-            of the native MapView/CameraView instead of underneath it; text
-            only, doesn't push any other layout down or intercept taps. */}
+            rendered last so it actually paints on top of the native
+            MapView/CameraView instead of underneath it; text only, doesn't
+            push any other layout down or intercept taps. */}
         {debugMode && debugOpen && (
           <View style={st.debugBar} pointerEvents="none">
             <View style={st.iconTextRow}>
@@ -759,105 +848,108 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         );
       })()}
 
-      {/* Overlay-Transparenz — persönliche Anzeige-Einstellung, nicht
-          serverseitig synchronisiert. Wirkt schon jetzt auf Hitbox/Kreuz auf
-          Karte und Kamera; dieselbe Einstellung soll später auch die
-          Überblendung im Hybrid-Modus (Kompass+Karte + IR) steuern. */}
-      {overlaySettingsOpen && (
-        <View style={st.overlaySettings}>
-          <View style={st.iconTextRow}>
-            <Icon name="settings" size={13} color="#f0c840" />
-            <Text style={st.overlaySettingsTitle}>Overlay-Transparenz</Text>
-          </View>
-          <View style={st.overlaySettingsRow}>
-            {[0.25, 0.5, 0.75, 1].map(v => (
-              <TouchableOpacity key={v}
-                style={[st.overlaySettingsBtn, overlayOpacity === v && st.modeBtnActive]}
-                onPress={() => setOverlayOpacity(v)}>
-                <Text style={[st.overlaySettingsTxt, overlayOpacity === v && { color: '#f0c840' }]}>
-                  {Math.round(v * 100)}%
-                </Text>
+      {/* Views-Popup: Kartenmodus, Schussbereich, Debug, Overlay-Transparenz.
+          Transparenz ist eine rein geräteseitige Anzeige-Einstellung (nicht
+          serverseitig synchronisiert), wirkt aber schon jetzt live auf
+          Hitbox/Kreuz auf Karte und Kamera — dieselbe Einstellung soll
+          später auch die Überblendung im IR-Hybrid-Modus steuern. */}
+      {viewPopupOpen && (
+        <View style={st.viewPopup}>
+          <View style={st.modeRow}>
+            {MODES.map(m => (
+              <TouchableOpacity key={m.id}
+                style={[st.modeBtn, viewMode === m.id && st.modeBtnActive]}
+                onPress={() => setViewMode(m.id)}>
+                <Icon name={m.icon} size={18} color={viewMode === m.id ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
             ))}
+            <TouchableOpacity
+              style={[st.modeBtn, showRange && st.modeBtnActive]}
+              onPress={() => setShowRange(r => !r)}>
+              <Icon name="target" size={18} color={showRange ? '#f0c840' : '#c0a0f0'} />
+            </TouchableOpacity>
+            {debugMode && (
+              <TouchableOpacity
+                style={[st.modeBtn, debugOpen && st.modeBtnActive]}
+                onPress={() => setDebugOpen(o => !o)}>
+                <Icon name="bug" size={18} color={debugOpen ? '#f0c840' : '#c0a0f0'} />
+              </TouchableOpacity>
+            )}
           </View>
+          {showRange && (
+            <>
+              <View style={st.iconTextRow}>
+                <Icon name="settings" size={13} color="#f0c840" />
+                <Text style={st.overlaySettingsTitle}>Overlay-Transparenz</Text>
+              </View>
+              <View style={st.overlaySettingsRow}>
+                {[0.25, 0.5, 0.75, 1].map(v => (
+                  <TouchableOpacity key={v}
+                    style={[st.overlaySettingsBtn, overlayOpacity === v && st.modeBtnActive]}
+                    onPress={() => setOverlayOpacityPersisted(v)}>
+                    <Text style={[st.overlaySettingsTxt, overlayOpacity === v && { color: '#f0c840' }]}>
+                      {Math.round(v * 100)}%
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
         </View>
       )}
 
-      {/* Mode switcher + actions */}
+      {/* Bottom bar: Aktionen links, Schuss/Kamera-Wechsel mittig, Views-Popup rechts */}
       <View style={st.bottomBar}>
-        <View style={st.modeRow}>
-          {MODES.map(m => (
-            <TouchableOpacity key={m.id}
-              style={[st.modeBtn, viewMode === m.id && st.modeBtnActive]}
-              onPress={() => setViewMode(m.id)}>
-              <Icon name={m.icon} size={18} color={viewMode === m.id ? '#f0c840' : '#c0a0f0'} />
+        <View style={st.bottomRow}>
+          <View style={st.bottomLeft}>
+            {isCaptainSetup && (
+              <TouchableOpacity style={[st.baseBtn, st.btnRow]} onPress={() => setBase()}>
+                <Icon name="flag" size={14} color="#f0c840" />
+                <Text style={st.baseTxt}>Base HIER setzen</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useRadar}
+              disabled={radarCd > 0 || snap?.phase !== 'seeking'}>
+              <Icon name="radar" size={15} color="#c0a0f0" />
+              <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
             </TouchableOpacity>
-          ))}
-          <TouchableOpacity
-            style={[st.modeBtn, showRange && st.modeBtnActive]}
-            onPress={() => setShowRange(r => !r)}>
-            <Icon name="target" size={18} color={showRange ? '#f0c840' : '#c0a0f0'} />
-          </TouchableOpacity>
-          {showRange && (
+            {snap?.subMode === 'hide_and_seek' && isHider && (
+              <>
+                <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useDrone}
+                  disabled={droneCd > 0 || snap?.phase !== 'seeking'}>
+                  <Icon name="drone" size={15} color="#c0a0f0" />
+                  <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useCloak}
+                  disabled={cloakCd > 0 || cloakActive || snap?.phase !== 'seeking'}>
+                  <Icon name="ghost" size={15} color="#c0a0f0" />
+                  <Text style={st.actTxt}>
+                    {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
+                  disabled={fakeMarkerCd > 0 || snap?.phase !== 'seeking'}>
+                  <Icon name="mask" size={15} color="#c0a0f0" />
+                  <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            {snap?.subMode === 'hide_and_seek' && isSeeker && (
+              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
+                disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
+                <Icon name="scare" size={15} color="#c0a0f0" />
+                <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <View style={st.bottomCenter}>{centerButton}</View>
+          <View style={st.bottomRight}>
             <TouchableOpacity
-              style={[st.modeBtn, overlaySettingsOpen && st.modeBtnActive]}
-              onPress={() => setOverlaySettingsOpen(o => !o)}>
-              <Icon name="settings" size={18} color={overlaySettingsOpen ? '#f0c840' : '#c0a0f0'} />
+              style={[st.modeBtn, viewPopupOpen && st.modeBtnActive]}
+              onPress={() => setViewPopupOpen(o => !o)}>
+              <Icon name="settings" size={20} color={viewPopupOpen ? '#f0c840' : '#c0a0f0'} />
             </TouchableOpacity>
-          )}
-          {debugMode && (
-            <TouchableOpacity
-              style={[st.modeBtn, debugOpen && st.modeBtnActive]}
-              onPress={() => setDebugOpen(o => !o)}>
-              <Icon name="bug" size={18} color={debugOpen ? '#f0c840' : '#c0a0f0'} />
-            </TouchableOpacity>
-          )}
-        </View>
-        <View style={st.actionRow}>
-          {isCaptainSetup && (
-            <TouchableOpacity style={[st.baseBtn, st.btnRow]} onPress={() => setBase()}>
-              <Icon name="flag" size={14} color="#f0c840" />
-              <Text style={st.baseTxt}>Base HIER setzen</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useRadar}
-            disabled={radarCd > 0 || snap?.phase !== 'seeking'}>
-            <Icon name="radar" size={15} color="#c0a0f0" />
-            <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
-          </TouchableOpacity>
-          {snap?.subMode === 'hide_and_seek' && isHider && (
-            <>
-              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useDrone}
-                disabled={droneCd > 0 || snap?.phase !== 'seeking'}>
-                <Icon name="drone" size={15} color="#c0a0f0" />
-                <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useCloak}
-                disabled={cloakCd > 0 || cloakActive || snap?.phase !== 'seeking'}>
-                <Icon name="ghost" size={15} color="#c0a0f0" />
-                <Text style={st.actTxt}>
-                  {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
-                disabled={fakeMarkerCd > 0 || snap?.phase !== 'seeking'}>
-                <Icon name="mask" size={15} color="#c0a0f0" />
-                <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
-              </TouchableOpacity>
-            </>
-          )}
-          {snap?.subMode === 'hide_and_seek' && isSeeker && (
-            <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
-              disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
-              <Icon name="scare" size={15} color="#c0a0f0" />
-              <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
-            </TouchableOpacity>
-          )}
-          {canShoot && !hasCam && (
-            <TouchableOpacity style={st.camBtn} onPress={() => setViewMode('camera')}>
-              <Icon name="photo" size={24} color="#f0c840" />
-            </TouchableOpacity>
-          )}
+          </View>
         </View>
       </View>
     </View>
@@ -896,7 +988,6 @@ const st = StyleSheet.create({
   chV: { position: 'absolute', width: 2, height: 50, backgroundColor: 'rgba(240,200,64,.8)' },
   chRing: { width: 100, height: 100, borderRadius: 50, borderWidth: 2, borderColor: 'rgba(240,200,64,.5)' },
   targetDist: { position: 'absolute', bottom: -16, color: '#fff', fontSize: 10, fontWeight: '800' },
-  shootWrap: { position: 'absolute', bottom: 16, left: 0, right: 0, alignItems: 'center' },
   shutter: {
     width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(240,200,64,.25)',
     borderWidth: 4, borderColor: '#f0c840', alignItems: 'center', justifyContent: 'center',
@@ -909,7 +1000,7 @@ const st = StyleSheet.create({
   },
   endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
-  overlaySettings: {
+  viewPopup: {
     backgroundColor: '#1a1428', borderTopWidth: 1, borderTopColor: '#2a2040',
     paddingHorizontal: 16, paddingVertical: 10, gap: 8,
   },
@@ -935,7 +1026,10 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
   },
   modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 10 },
+  bottomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
+  bottomLeft: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  bottomCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  bottomRight: { alignItems: 'center', justifyContent: 'center' },
   btnRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   radarBtn: {
     backgroundColor: 'rgba(40,32,64,.9)', borderWidth: 2, borderColor: '#4a3a70',

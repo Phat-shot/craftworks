@@ -4,7 +4,7 @@
 // shared by LobbyScreen (preview) and GameScreen (in-match 'comic' view) so
 // restyling it later only means editing this file.
 import React, { useMemo } from 'react';
-import { ShapeSource, FillLayer, LineLayer } from '@maplibre/maplibre-react-native';
+import { ShapeSource, FillLayer, LineLayer, FillExtrusionLayer } from '@maplibre/maplibre-react-native';
 
 export interface ComicFeature {
   type: 'building' | 'road' | 'path' | 'forest' | 'water' | 'grass';
@@ -32,8 +32,14 @@ export default function ComicMapLayers({ features }: { features: ComicFeature[] 
       if (FILL_TYPES.has(f.type)) {
         const first = coords[0]!, last = coords[coords.length - 1]!;
         const ring = (first[0] === last[0] && first[1] === last[1]) ? coords : [...coords, first];
+        // No real OSM height data (not fetched) — a small deterministic
+        // pseudo-random height per building (seeded from its own footprint,
+        // so it's stable across re-renders) gives the pitched 3D view a
+        // varied "toy city" look instead of uniform slabs.
+        const seed = coords.reduce((s, [lon, lat]) => s + Math.abs(lon * 1e5 % 1) + Math.abs(lat * 1e5 % 1), 0);
+        const height = f.type === 'building' ? 6 + (seed % 1) * 10 : 0;
         fills.push({
-          type: 'Feature', properties: { fill: style.fill, line: style.line, width: style.width },
+          type: 'Feature', properties: { fill: style.fill, line: style.line, width: style.width, kind: f.type, height },
           geometry: { type: 'Polygon', coordinates: [ring] },
         });
       } else {
@@ -55,6 +61,16 @@ export default function ComicMapLayers({ features }: { features: ComicFeature[] 
         <ShapeSource id="comicFills" shape={fillsGeoJSON as any}>
           <FillLayer id="comicFillLayer" style={{ fillColor: ['get', 'fill'] as any, fillOpacity: 0.85 }} />
           <LineLayer id="comicFillOutline" style={{ lineColor: ['get', 'line'] as any, lineWidth: ['get', 'width'] as any }} />
+          {/* 3D pop-up for buildings only (height 0 for forest/water/grass —
+              filtered out entirely so ground cover never extrudes) — needs
+              the map's Camera to have a pitch to actually read as 3D. */}
+          <FillExtrusionLayer id="comicBuildingExtrusion"
+            filter={['==', ['get', 'kind'], 'building']}
+            style={{
+              fillExtrusionColor: ['get', 'fill'] as any,
+              fillExtrusionHeight: ['get', 'height'] as any,
+              fillExtrusionOpacity: 0.9,
+            }} />
         </ShapeSource>
       )}
       {linesGeoJSON.features.length > 0 && (
