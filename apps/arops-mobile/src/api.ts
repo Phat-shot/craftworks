@@ -124,3 +124,9 @@ export function resetSocket(): void {
   socket?.disconnect();
   socket = null;
 }
+
+export async function logout(): Promise<void> {
+  await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
+  accessToken = null; refreshToken = null; currentUser = null;
+  resetSocket();
+}

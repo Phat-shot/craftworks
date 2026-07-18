@@ -77,19 +77,22 @@ const ERR_DE: Record<string, Toast> = {
   perk_wrong_role: { icon: 'close', text: 'Für deine Rolle nicht verfügbar' },
 };
 
-// View modes: compass-oriented comic map → split cam/comic → transparent
-// comic-over-camera → pure camera. (Plain OSM map/rotated views were dropped
-// in-game — the comic map replaces them everywhere except the Lobby's field
-// editor, which still needs real-world OSM context to draw the polygon.)
-type ViewMode = 'comic' | 'split' | 'overlay' | 'camera';
+// View modes: free 2D comic map (manual pan/rotate/zoom) → compass-oriented
+// 3D comic map → split cam/comic → transparent comic-over-camera. The shot
+// itself no longer needs a dedicated pure-camera mode — telemetry (position +
+// camera-forward heading) is fused continuously regardless of which view is
+// on screen, so shooting works identically in all four.
+type ViewMode = 'comic2d' | 'comic3d' | 'split' | 'overlay';
 const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
-  { id: 'comic',   icon: 'palette',   label: 'Karte' },
+  { id: 'comic2d', icon: 'map',       label: '2D' },
+  { id: 'comic3d', icon: 'palette',   label: '3D' },
   { id: 'split',   icon: 'splitView', label: 'Split' },
   { id: 'overlay', icon: 'ghost',     label: 'Overlay' },
-  { id: 'camera',  icon: 'camera',    label: 'Kamera' },
 ];
 
-export default function GameScreen({ sessionId }: { sessionId: string }) {
+export default function GameScreen({ sessionId, onExit, watchSync }: {
+  sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
+}) {
   useKeepAwake(); // screen lock would stop GPS → target_stale for everyone else
   const socket = getSocket();
   const me = getUser();
@@ -97,7 +100,8 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
   const [lastResult, setLastResult] = useState<Toast | null>(null);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
-  const [viewMode, setViewMode] = useState<ViewMode>('comic');
+  const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
+  const cameraRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
   const telemetry = useTelemetry(socket, sessionId);
 
@@ -117,8 +121,8 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   // Persisted locally so the choice survives leaving/rejoining a match.
   const [overlayOpacity, setOverlayOpacity] = useState(0.5);
   const [viewPopupOpen, setViewPopupOpen] = useState(false);
-  const watchSync = useWatchSync();
   const [watchPairOpen, setWatchPairOpen] = useState(false);
+  const [endRecapOpen, setEndRecapOpen] = useState(false);
   useEffect(() => {
     AsyncStorage.getItem('ar_overlay_opacity').then(v => {
       const n = v ? parseFloat(v) : NaN;
@@ -232,17 +236,33 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     return [11.5755, 48.1374];
   }, [snap?.polygon, telemetry.sample?.lat, telemetry.sample?.lon]);
 
-  const fieldGeoJSON = useMemo(() => {
+  // Only the play area itself is shown as "the map" — outside its boundary
+  // the surroundings fade to dark instead of drawing a green line. There's no
+  // general polygon-buffer library in this project (would be a new native-
+  // adjacent dependency for one visual effect), so this approximates a buffer
+  // by scaling the polygon outward from its centroid in concentric steps —
+  // good enough for typical roughly-convex fields, imperfect for very
+  // concave/self-intersecting ones.
+  const FADE_SCALES = [1.15, 1.35, 1.65, 2.2, 3.2];
+  const FADE_OPACITIES = [0.12, 0.22, 0.35, 0.55, 0.85];
+  const fadeGeoJSON = useMemo(() => {
     const poly = snap?.polygon || [];
-    return {
-      type: 'Feature' as const, properties: {},
-      geometry: {
-        type: 'Polygon' as const,
-        coordinates: poly.length >= 3
-          ? [[...poly.map(p => [p.lon, p.lat]), [poly[0]!.lon, poly[0]!.lat]]]
-          : [[]],
-      },
-    };
+    if (poly.length < 3) return null;
+    const cx = poly.reduce((s, p) => s + p.lon, 0) / poly.length;
+    const cy = poly.reduce((s, p) => s + p.lat, 0) / poly.length;
+    const scalePoly = (f: number) => poly.map(p => [cx + (p.lon - cx) * f, cy + (p.lat - cy) * f] as [number, number]);
+    let prevRing = [...poly.map(p => [p.lon, p.lat] as [number, number]), [poly[0]!.lon, poly[0]!.lat] as [number, number]];
+    const feats: any[] = [];
+    for (let i = 0; i < FADE_SCALES.length; i++) {
+      const ring = scalePoly(FADE_SCALES[i]!);
+      const closedRing = [...ring, ring[0]!];
+      feats.push({
+        type: 'Feature', properties: { op: FADE_OPACITIES[i] },
+        geometry: { type: 'Polygon', coordinates: [closedRing, prevRing] },
+      });
+      prevRing = closedRing;
+    }
+    return { type: 'FeatureCollection' as const, features: feats };
   }, [JSON.stringify(snap?.polygon)]);
 
   const TEAM_COLOR = { a: '#40a0ff', b: '#ff5050' } as const;
@@ -519,14 +539,25 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
        : (snap.plantPct ? `Plant ${snap.plantPct}%` : (snap?.me?.team === 'a' ? 'Angreifer' : 'Verteidiger')))
     : null;
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
-  const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
+  const hasCam = viewMode === 'split' || viewMode === 'overlay';
+  const isFree2D = viewMode === 'comic2d';
   // Whichever heading is actually meaningful for how the phone is currently
   // expected to be held: flat/screen-up in pure map mode (top-edge heading),
   // upright/screen-towards-you once the camera is showing (camera-forward
   // heading — the same one used for aiming/hit-validation).
   const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
-  // Every map-showing mode is compass-oriented (heading-up); pure camera has no map to rotate.
-  const mapHeading = viewMode === 'camera' ? 0 : (activeHeadingDeg ?? 0);
+  // 2D free mode is manually rotated by the user (MapLibre's rotate gesture)
+  // — never fight that with a compass-driven heading. Every other map-showing
+  // mode is compass-oriented (heading-up).
+  const mapHeading = isFree2D ? 0 : (activeHeadingDeg ?? 0);
+  const mapPitch = isFree2D ? 0 : (activeHeadingDeg !== null ? 45 : 0);
+  const recenterMap = () => {
+    if (!telemetry.sample) return;
+    cameraRef.current?.setCamera({
+      centerCoordinate: [telemetry.sample.lon, telemetry.sample.lat],
+      zoomLevel: 16.5, heading: 0, pitch: 0, animationDuration: 300,
+    });
+  };
 
   if (telemetry.granted === false) {
     return (
@@ -548,18 +579,26 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   // back to plain OSM tiles instead of an empty background so the match is still
   // playable with a real map underneath.
   const hasComicMap = (snap?.comicMap?.features?.length ?? 0) > 0;
-  const renderMap = (interactive: boolean) => (
+  const renderMap = (interactive: boolean, free2d: boolean = false) => (
     <MapView style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
-      scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={false}>
+      scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}>
       {/* Pitch only once the compass is actually driving the rotation — a
-          tilted-but-static (non-rotating) map reads as broken, not "3D". */}
-      <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading}
-        pitch={activeHeadingDeg !== null ? 45 : 0} animationDuration={250} />
+          tilted-but-static (non-rotating) map reads as broken, not "3D".
+          The free-2D mode is uncontrolled (defaultSettings, no ref-less
+          re-render fighting the user's own pan/rotate/zoom gestures) — only
+          the re-center button below moves it imperatively after that. */}
+      {free2d ? (
+        <Camera ref={cameraRef}
+          defaultSettings={{ centerCoordinate: center, zoomLevel: 16.5, heading: 0, pitch: 0 }}
+          animationDuration={250} />
+      ) : (
+        <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading}
+          pitch={mapPitch} animationDuration={250} />
+      )}
       {hasComicMap && <ComicMapLayers features={snap!.comicMap!.features} />}
-      {(snap?.polygon?.length ?? 0) >= 3 && (
-        <ShapeSource id="field" shape={fieldGeoJSON}>
-          <FillLayer id="fieldFill" style={{ fillColor: 'rgba(80,208,64,0.08)' }} />
-          <LineLayer id="fieldLine" style={{ lineColor: '#50d040', lineWidth: 2 }} />
+      {fadeGeoJSON && (
+        <ShapeSource id="fade" shape={fadeGeoJSON as any}>
+          <FillLayer id="fadeFill" style={{ fillColor: '#05040a', fillOpacity: ['get', 'op'] as any }} />
         </ShapeSource>
       )}
       {rangeGeoJSON && (
@@ -643,30 +682,34 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   // (how far down the phone is tilted) to place near/far correctly, which we
   // don't read yet — so this fakes a converging "alley" using fixed vertical
   // anchors instead of real elevation, valid mainly when holding the phone
-  // roughly level. Rungs narrow from bottom (near) to top (near the crosshair,
-  // far away), same width math as the target markers.
+  // roughly level. Rendered as one continuous tapering bar (dense stacked
+  // bands, no gaps) rather than discrete rungs — same distance-based width
+  // math the map's ground-projected cone polygon uses, just screen-projected.
+  const screenH = Dimensions.get('window').height;
   const LANE_NEAR_M = 6;
-  const LANE_BANDS = 7;
-  const laneRungs = useMemo(() => {
+  const LANE_BANDS = 40;
+  const laneBands = useMemo(() => {
     if (!showRange || telemetry.heading === null) return [];
-    const out: { yFrac: number; wPx: number }[] = [];
+    const yTopFrac = 0.42, yBotFrac = 0.85;
+    const out: { topPx: number; heightPx: number; wPx: number }[] = [];
     for (let i = 0; i < LANE_BANDS; i++) {
-      const t = i / (LANE_BANDS - 1); // 0 = near/bottom, 1 = far/top
-      const d = LANE_NEAR_M + t * (effectiveMaxRangeM - LANE_NEAR_M);
+      const t0 = i / LANE_BANDS, t1 = (i + 1) / LANE_BANDS, tMid = (t0 + t1) / 2;
+      const d = LANE_NEAR_M + tMid * (effectiveMaxRangeM - LANE_NEAR_M);
       const angDeg = (180 / Math.PI) * 2 * Math.atan((effectiveLaneWidthM / 2) / d);
       const wPx = Math.max(3, (angDeg / CAMERA_FOV_DEG) * screenW);
-      const yFrac = 0.85 - t * (0.85 - 0.42);
-      out.push({ yFrac, wPx });
+      const yFrac0 = yBotFrac - t0 * (yBotFrac - yTopFrac);
+      const yFrac1 = yBotFrac - t1 * (yBotFrac - yTopFrac);
+      out.push({ topPx: yFrac1 * screenH, heightPx: (yFrac0 - yFrac1) * screenH + 1, wPx });
     }
     return out;
-  }, [showRange, telemetry.heading, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
+  }, [showRange, telemetry.heading, screenW, screenH, effectiveMaxRangeM, effectiveLaneWidthM]);
 
   const laneOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {laneRungs.map((r, i) => (
+      {laneBands.map((b, i) => (
         <View key={i} style={{
-          position: 'absolute', top: `${r.yFrac * 100}%`, left: screenW / 2 - r.wPx / 2,
-          width: r.wPx, height: 2, backgroundColor: `rgba(240,200,64,${(0.5 * overlayOpacity * 2).toFixed(2)})`,
+          position: 'absolute', top: b.topPx, left: screenW / 2 - b.wPx / 2,
+          width: b.wPx, height: b.heightPx, backgroundColor: `rgba(240,200,64,${(0.35 * overlayOpacity * 2).toFixed(2)})`,
         }} />
       ))}
     </View>
@@ -695,15 +738,59 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     </View>
   );
 
-  const centerButton = canShoot && (hasCam ? (
+  // Shooting works identically in every view mode now — no more "switch to
+  // camera to shoot" fallback button.
+  const centerButton = canShoot && (
     <TouchableOpacity style={[st.shutter, hitCd > 0 && st.shutterCd]} onPress={shoot} disabled={hitCd > 0}>
       {hitCd > 0 ? <Text style={st.shutterTxt}>{Math.ceil(hitCd / 1000) + 's'}</Text> : <Icon name="photo" size={26} color="#f0c840" />}
     </TouchableOpacity>
-  ) : (
-    <TouchableOpacity style={st.camBtn} onPress={() => setViewMode('camera')}>
-      <Icon name="photo" size={24} color="#f0c840" />
-    </TouchableOpacity>
-  ));
+  );
+
+  // Bottom bar layout: exactly Perk1 | Schuss | Perk2, symmetric around the
+  // shutter — role-specific perks are split evenly across the two side
+  // columns (stacked vertically if more than one lands on a side) instead of
+  // all crowding onto the left like before. Base-setup has its own row above
+  // the bar since it's a rare phase-gated action, not a regular perk.
+  const perkEls: React.ReactNode[] = [
+    <TouchableOpacity key="radar" style={[st.radarBtn, st.btnRow]} onPress={useRadar}
+      disabled={radarCd > 0 || snap?.phase !== 'seeking'}>
+      <Icon name="radar" size={15} color="#c0a0f0" />
+      <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
+    </TouchableOpacity>,
+  ];
+  if (snap?.subMode === 'hide_and_seek' && isHider) {
+    perkEls.push(
+      <TouchableOpacity key="drone" style={[st.radarBtn, st.btnRow]} onPress={useDrone}
+        disabled={droneCd > 0 || snap?.phase !== 'seeking'}>
+        <Icon name="drone" size={15} color="#c0a0f0" />
+        <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
+      </TouchableOpacity>,
+      <TouchableOpacity key="cloak" style={[st.radarBtn, st.btnRow]} onPress={useCloak}
+        disabled={cloakCd > 0 || cloakActive || snap?.phase !== 'seeking'}>
+        <Icon name="ghost" size={15} color="#c0a0f0" />
+        <Text style={st.actTxt}>
+          {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
+        </Text>
+      </TouchableOpacity>,
+      <TouchableOpacity key="fake" style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
+        disabled={fakeMarkerCd > 0 || snap?.phase !== 'seeking'}>
+        <Icon name="mask" size={15} color="#c0a0f0" />
+        <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
+      </TouchableOpacity>,
+    );
+  }
+  if (snap?.subMode === 'hide_and_seek' && isSeeker) {
+    perkEls.push(
+      <TouchableOpacity key="scare" style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
+        disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
+        <Icon name="scare" size={15} color="#c0a0f0" />
+        <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
+      </TouchableOpacity>,
+    );
+  }
+  const perkHalf = Math.ceil(perkEls.length / 2);
+  const perkLeft = perkEls.slice(0, perkHalf);
+  const perkRight = perkEls.slice(perkHalf);
 
   return (
     <View style={st.wrap}>
@@ -807,13 +894,20 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       {/*
         Single CameraLayer instance, gated on `hasCam` rather than mounted
         separately per viewMode: switching directly between two camera-using
-        modes (split/overlay/camera) used to unmount + remount CameraView in
-        the same React commit, racing its native session teardown on Android
-        and hanging the camera. Only crossing hasCam's own boundary (camera
-        mode <-> map/rotated) unmounts it now.
+        modes (split/overlay) used to unmount + remount CameraView in the
+        same React commit, racing its native session teardown on Android and
+        hanging the camera. Only crossing hasCam's own boundary (camera <->
+        pure map) unmounts it now. The shot itself works in every mode — the
+        camera preview is only ever a visual backdrop for split/overlay.
       */}
       <View style={{ flex: 1 }}>
-        {!hasCam && viewMode === 'comic' && renderMap(true)}
+        {!hasCam && viewMode === 'comic2d' && renderMap(true, true)}
+        {!hasCam && viewMode === 'comic3d' && renderMap(true, false)}
+        {!hasCam && viewMode === 'comic2d' && (
+          <TouchableOpacity style={st.recenterBtn} onPress={recenterMap}>
+            <Icon name="crosshair" size={20} color="#f0c840" />
+          </TouchableOpacity>
+        )}
         {hasCam && (
           <CameraLayer>
             {viewMode === 'split' && (
@@ -826,14 +920,15 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
               <>
                 {/* The semi-transparent map below already carries the geo-projected
                     hitbox through — the screen-projected targetOverlay is skipped
-                    here to avoid two non-aligned markers for the same opponent. */}
-                <View style={[StyleSheet.absoluteFill, { opacity: 0.45 }]} pointerEvents="none">
+                    here to avoid two non-aligned markers for the same opponent.
+                    Blend amount is the same personal transparency knob the
+                    Views popup exposes (also used for hitbox intensity). */}
+                <View style={[StyleSheet.absoluteFill, { opacity: overlayOpacity }]} pointerEvents="none">
                   {renderMap(false)}
                 </View>
                 {crosshair}
               </>
             )}
-            {viewMode === 'camera' && <>{crosshair}{laneOverlay}{targetOverlay}</>}
           </CameraLayer>
         )}
 
@@ -868,9 +963,30 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
           : { icon: 'skull', text: 'Gegner-Team gewinnt' };
         return (
           <View style={st.endOverlay}>
-            <Icon name={end.icon} size={32} color="#f0c840" style={{ marginBottom: 8 }} />
-            <Text style={st.endTitle}>{end.text}</Text>
-            <Text style={st.endScore}>Deine Punkte: {snap.me?.score ?? 0}</Text>
+            <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => setEndRecapOpen(o => !o)}>
+              <Icon name={end.icon} size={32} color="#f0c840" style={{ marginBottom: 8 }} />
+              <Text style={st.endTitle}>{end.text}</Text>
+              <Text style={st.endScore}>Deine Punkte: {snap.me?.score ?? 0}</Text>
+              {!endRecapOpen && <Text style={st.endHint}>Antippen für Recap</Text>}
+            </TouchableOpacity>
+            {endRecapOpen && (
+              <View style={st.endRecap}>
+                {!!scoreLine && (
+                  <View style={st.iconTextRow}>
+                    <Icon name={scoreIcon} size={13} color="#f0c840" />
+                    <Text style={st.endRecapTxt}>{scoreLine}</Text>
+                  </View>
+                )}
+                <View style={st.iconTextRow}>
+                  <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color="#a090c0" />
+                  <Text style={st.endRecapTxt}>Verbleibende Hider: {snap.hidersRemaining}</Text>
+                </View>
+                <TouchableOpacity style={st.endExitBtn} onPress={onExit}>
+                  <Icon name="home" size={16} color="#0a0810" />
+                  <Text style={st.endExitTxt}>Beenden</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         );
       })()}
@@ -937,58 +1053,26 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         </View>
       )}
 
-      {/* Bottom bar: Aktionen links, Schuss/Kamera-Wechsel mittig, Views-Popup rechts */}
+      {/* Floating settings toggle — pulled out of the bottom bar so that bar
+          can stay exactly Perk1 | Schuss | Perk2, symmetric. */}
+      <TouchableOpacity
+        style={[st.settingsFab, viewPopupOpen && st.modeBtnActive]}
+        onPress={() => setViewPopupOpen(o => !o)}>
+        <Icon name="settings" size={20} color={viewPopupOpen ? '#f0c840' : '#c0a0f0'} />
+      </TouchableOpacity>
+
+      {/* Bottom bar: Perk1 | Schuss | Perk2 */}
       <View style={st.bottomBar}>
+        {isCaptainSetup && (
+          <TouchableOpacity style={[st.baseBtn, st.btnRow, st.baseBtnRow]} onPress={() => setBase()}>
+            <Icon name="flag" size={14} color="#f0c840" />
+            <Text style={st.baseTxt}>Base HIER setzen</Text>
+          </TouchableOpacity>
+        )}
         <View style={st.bottomRow}>
-          <View style={st.bottomLeft}>
-            {isCaptainSetup && (
-              <TouchableOpacity style={[st.baseBtn, st.btnRow]} onPress={() => setBase()}>
-                <Icon name="flag" size={14} color="#f0c840" />
-                <Text style={st.baseTxt}>Base HIER setzen</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useRadar}
-              disabled={radarCd > 0 || snap?.phase !== 'seeking'}>
-              <Icon name="radar" size={15} color="#c0a0f0" />
-              <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
-            </TouchableOpacity>
-            {snap?.subMode === 'hide_and_seek' && isHider && (
-              <>
-                <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useDrone}
-                  disabled={droneCd > 0 || snap?.phase !== 'seeking'}>
-                  <Icon name="drone" size={15} color="#c0a0f0" />
-                  <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useCloak}
-                  disabled={cloakCd > 0 || cloakActive || snap?.phase !== 'seeking'}>
-                  <Icon name="ghost" size={15} color="#c0a0f0" />
-                  <Text style={st.actTxt}>
-                    {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
-                  disabled={fakeMarkerCd > 0 || snap?.phase !== 'seeking'}>
-                  <Icon name="mask" size={15} color="#c0a0f0" />
-                  <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
-                </TouchableOpacity>
-              </>
-            )}
-            {snap?.subMode === 'hide_and_seek' && isSeeker && (
-              <TouchableOpacity style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
-                disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
-                <Icon name="scare" size={15} color="#c0a0f0" />
-                <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          <View style={st.bottomSide}>{perkLeft}</View>
           <View style={st.bottomCenter}>{centerButton}</View>
-          <View style={st.bottomRight}>
-            <TouchableOpacity
-              style={[st.modeBtn, viewPopupOpen && st.modeBtnActive]}
-              onPress={() => setViewPopupOpen(o => !o)}>
-              <Icon name="settings" size={20} color={viewPopupOpen ? '#f0c840' : '#c0a0f0'} />
-            </TouchableOpacity>
-          </View>
+          <View style={st.bottomSide}>{perkRight}</View>
         </View>
       </View>
 
@@ -1045,6 +1129,14 @@ const st = StyleSheet.create({
   },
   endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
+  endHint: { color: '#807050', fontSize: 11, marginTop: 8 },
+  endRecap: { marginTop: 16, width: '100%', gap: 8, alignItems: 'center' },
+  endRecapTxt: { color: '#c0a0f0', fontSize: 13, fontWeight: '700' },
+  endExitBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
+    backgroundColor: '#f0c840', borderRadius: 12, paddingHorizontal: 22, paddingVertical: 12,
+  },
+  endExitTxt: { color: '#0a0810', fontWeight: '900', fontSize: 15 },
   viewPopup: {
     backgroundColor: '#1a1428', borderTopWidth: 1, borderTopColor: '#2a2040',
     paddingHorizontal: 16, paddingVertical: 10, gap: 8,
@@ -1072,17 +1164,23 @@ const st = StyleSheet.create({
   },
   modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
   bottomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
-  bottomLeft: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  bottomSide: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   bottomCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  bottomRight: { alignItems: 'center', justifyContent: 'center' },
   btnRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   radarBtn: {
     backgroundColor: 'rgba(40,32,64,.9)', borderWidth: 2, borderColor: '#4a3a70',
     borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
   },
   actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
-  camBtn: {
-    width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(240,200,64,.25)',
-    borderWidth: 3, borderColor: '#f0c840', alignItems: 'center', justifyContent: 'center',
+  baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
+  settingsFab: {
+    position: 'absolute', right: 14, top: 62, width: 42, height: 38, borderRadius: 8,
+    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    alignItems: 'center', justifyContent: 'center', zIndex: 20,
+  },
+  recenterBtn: {
+    position: 'absolute', right: 14, bottom: 14, width: 46, height: 46, borderRadius: 23,
+    backgroundColor: 'rgba(20,16,32,.85)', borderWidth: 2, borderColor: '#f0c840',
+    alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
 });
