@@ -63,23 +63,33 @@ class EspBridgeModule : Module() {
       teardown()
     }
 
-    AsyncFunction("connect") Coroutine {
+    // Explicitly-typed `suspend () -> R` locals below, rather than passing a
+    // bare `{ ... }` lambda straight to the Coroutine infix: AsyncFunctionBuilder
+    // .Coroutine has 9 overloads (0 through 8 lambda parameters), and a plain
+    // lambda that never references/declares any parameters is syntactically
+    // valid for ALL of them at once — a genuine "overload resolution
+    // ambiguity" compile error, not just a style nit. Pinning the type first
+    // rules out every non-zero-arity overload outright (different arities
+    // are simply incompatible function types in Kotlin, so once the type is
+    // fixed there's nothing left to be ambiguous about).
+    val connectBody: suspend () -> Boolean = {
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       withContext(Dispatchers.IO) { connectToDevice(context) }
     }
+    AsyncFunction("connect") Coroutine connectBody
 
-    AsyncFunction("disconnect") Coroutine {
-      teardown()
-    }
+    val disconnectBody: suspend () -> Unit = { teardown() }
+    AsyncFunction("disconnect") Coroutine disconnectBody
 
     // Bench-test only — the beacon firmware (hardware/esp32-ir/firmware/
     // ir_beacon) runs standalone off any USB power source and needs no data
     // connection during actual gameplay; "PING" just confirms over serial
     // that a given board is alive and reports which ID it's broadcasting,
     // without needing a second phone's camera nearby to verify.
-    AsyncFunction("ping") Coroutine {
+    val pingBody: suspend () -> Boolean = {
       withContext(Dispatchers.IO) { writeLine("PING") }
     }
+    AsyncFunction("ping") Coroutine pingBody
   }
 
   private fun findEspDevice(manager: UsbManager): UsbDevice? =
