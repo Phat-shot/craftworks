@@ -1,0 +1,6 @@
+{
+  "name": "wear-bridge",
+  "version": "0.1.0",
+  "description": "Sends AR Ops match state to a paired Wear OS watch via the Data Layer API. Local module, Android-only, not published.",
+  "main": "index.ts"
+}

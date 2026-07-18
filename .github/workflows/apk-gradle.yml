@@ -2,8 +2,15 @@ name: APK Build (Gradle)
 # Manuell triggern: Actions → "APK Build (Gradle)" → Run workflow.
 # Baut lokal in der CI per Gradle statt in der EAS-Cloud — kein EAS-
 # Build-Kontingent nötig, dafür langsamer (kompletter Android-Build läuft
-# hier statt in Expos Cloud-Buildfarm). Ergebnis ist ein Debug-APK (mit
-# Androids Standard-Debug-Keystore signiert) — für Sideload/internes Testen
+# hier statt in Expos Cloud-Buildfarm).
+#
+# assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
+# laufenden Metro-Dev-Server und fragt beim Start nach dessen URL ("Unable
+# to load script", wenn man dort z.B. eine normale Webseiten-URL einträgt —
+# das ist kein Metro-Server). Release-Builds bündeln das JS dagegen fest in
+# die APK, laufen also eigenständig. Signiert ist das trotzdem nur mit
+# Androids Standard-Debug-Keystore (von Expo's prebuild so vorkonfiguriert,
+# siehe android/app/build.gradle) — für Sideload/internes Testen
 # ausreichend, aber NICHT für einen Play-Store-Release geeignet (dafür
 # bräuchte es einen echten Signing-Key + Secrets, siehe apk.yml/EAS dafür).
 on:
@@ -37,12 +44,12 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Debug-APK bauen
+      - name: Release-APK bauen (JS fest eingebettet, kein Metro nötig)
         working-directory: apps/arops-mobile/android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleRelease --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
-          name: arops-debug-apk
-          path: apps/arops-mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          name: arops-release-apk
+          path: apps/arops-mobile/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
