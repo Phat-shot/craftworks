@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as Location from 'expo-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { getSocket, getUser, fetchLobbyQr } from '../api';
 import Icon, { IconName } from '../components/Icon';
@@ -15,7 +16,6 @@ const COMIC_MAP_ERR_DE: Record<string, string> = {
 };
 
 interface Member { id: string; username: string; ready: boolean; }
-interface Effective { roles: Record<string, 'seeker' | 'hider'>; teams: Record<string, 'a' | 'b'>; captains: { a: string | null; b: string | null }; }
 interface ArSettings {
   polygon?: { lat: number; lon: number }[];
   roles?: Record<string, 'seeker' | 'hider'>;
@@ -69,7 +69,6 @@ export default function LobbyScreen({
 }: { lobbyId: string; isHost?: boolean; lobbyCode?: string; onGameStart: (sessionId: string) => void }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [ar, setAr] = useState<ArSettings>({});
-  const [effective, setEffective] = useState<Effective | null>(null);
   const [polyErrs, setPolyErrs] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [startErr, setStartErr] = useState('');
@@ -80,10 +79,26 @@ export default function LobbyScreen({
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
+  const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(null);
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
   const comicMapReqRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // One-shot fetch (not a live watch) — this is just a reference point for
+    // drawing the field, not gameplay telemetry, so no need to keep polling.
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (perm.status !== 'granted' || cancelled) return;
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (!cancelled) setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      } catch { /* no location available — map just keeps its default center */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const socket = getSocket();
@@ -97,10 +112,9 @@ export default function LobbyScreen({
     if (isHost) fetchLobbyQr(lobbyId).then(r => { setQr(r?.qr ?? null); setQrUrl(r?.url ?? null); });
 
     const onState = ({ members: m }: any) => setMembers(m || []);
-    const onArUpdated = ({ arSettings, polygonCheck, effective: eff }: any) => {
+    const onArUpdated = ({ arSettings, polygonCheck }: any) => {
       setAr(arSettings || {});
       setPolyErrs(polygonCheck && !polygonCheck.ok ? polygonCheck.errors : []);
-      if (eff) setEffective(eff);
     };
     const onJoined = (p: any) => setMembers(m => [...m.filter(x => x.id !== p.userId), { id: p.userId, username: p.username, ready: false }]);
     const onLeft = ({ userId }: any) => setMembers(m => m.filter(x => x.id !== userId));
@@ -163,8 +177,8 @@ export default function LobbyScreen({
     [members, bots]
   );
   // Server is the single source of truth for roles/teams
-  const roleOf = (uid: string) => effective?.roles?.[uid] || 'hider';
-  const teamOf = (uid: string) => effective?.teams?.[uid] || 'a';
+  const roleOf = (uid: string) => ar.roles?.[uid] || 'hider';
+  const teamOf = (uid: string) => ar.teams?.[uid] || 'a';
 
   const onMapPress = (feature: any) => {
     if (!isHost) return;
@@ -229,7 +243,7 @@ export default function LobbyScreen({
   const center: [number, number] = polygon.length
     ? [polygon.reduce((s, p) => s + p.lon, 0) / polygon.length,
        polygon.reduce((s, p) => s + p.lat, 0) / polygon.length]
-    : [11.5755, 48.1374];
+    : myPos ? [myPos.lon, myPos.lat] : [11.5755, 48.1374];
 
   const fieldGeoJSON = useMemo(() => ({
     type: 'Feature' as const, properties: {},
@@ -285,6 +299,17 @@ export default function LobbyScreen({
         )}
       </View>
       {isHost && (
+        <View style={st.rowBtns}>
+          {SUB_MODES.map(m => (
+            <TouchableOpacity key={m.id} style={[st.smallBtnRow, subMode === m.id && st.smallBtnActive]}
+              onPress={() => emitUpdate({ subMode: m.id })}>
+              <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
+              <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]}>{m.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+      {isHost && (
         <Text style={st.hostHint}>
           Auf die Karte tippen: {tapMode === 'zones' ? 'Zone setzen' : 'Wegpunkt setzen'} — Punkte der Reihe nach im Kreis
         </Text>
@@ -292,7 +317,22 @@ export default function LobbyScreen({
 
       <View style={st.mapBox}>
         <MapView style={{ flex: 1 }} mapStyle={OSM_STYLE as any} onPress={onMapPress}>
-          <Camera key={polygon.length >= 3 ? 'f' : 'e'} defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
+          {/* key changes force MapLibre to re-apply defaultSettings: once when
+              our own position resolves (async, arrives after mount), again
+              once the field polygon is complete enough to re-center on it. */}
+          <Camera key={polygon.length >= 3 ? 'f' : myPos ? 'me' : 'e'}
+            defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
+          {myPos && (
+            <ShapeSource id="myPos" shape={{
+              type: 'Feature', properties: {},
+              geometry: { type: 'Point', coordinates: [myPos.lon, myPos.lat] },
+            }}>
+              <CircleLayer id="myPosDot" style={{
+                circleRadius: 8, circleColor: '#40a0ff', circleOpacity: 0.85,
+                circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
+              }} />
+            </ShapeSource>
+          )}
           {polygon.length >= 3 && (
             <ShapeSource id="field" shape={fieldGeoJSON}>
               <FillLayer id="fieldFill" style={{ fillColor: polyErrs.length ? 'rgba(224,48,32,0.12)' : 'rgba(80,208,64,0.12)' }} />
@@ -343,14 +383,9 @@ export default function LobbyScreen({
 
       {isHost && (
         <>
-          <View style={st.rowBtns}>
-            {SUB_MODES.map(m => (
-              <TouchableOpacity key={m.id} style={[st.smallBtnRow, subMode === m.id && st.smallBtnActive]}
-                onPress={() => emitUpdate({ subMode: m.id })}>
-                <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]}>{m.label}</Text>
-              </TouchableOpacity>
-            ))}
+          <View style={st.sectionRow}>
+            <Icon name="settings" size={13} color="#e0c080" />
+            <Text style={st.section}>Einstellungen</Text>
           </View>
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>

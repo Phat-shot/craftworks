@@ -1067,12 +1067,14 @@ function getAropsSnapshot(gs, userId) {
       p.userId === userId ||
       (me && !isOpponent) ||                               // teammates see each other
       (p.exposed && isOpponent && p.lastAccepted) ||       // geofence penalty
-      (mode.revealPosition && mode.revealPosition(gs, me, p)); // e.g. flag carrier
+      (mode.revealPosition && mode.revealPosition(gs, me, p)) || // e.g. flag carrier
+      gs.cfg.debugMode; // debug sessions (host-only, never default) skip fog of war entirely
     if (reveal && p.lastAccepted) {
       entry.lat = p.lastAccepted.lat;
       entry.lon = p.lastAccepted.lon;
       entry.positionAgeMs = t - p.lastAccepted.ts;
       entry.exposed = p.exposed;
+      entry.accuracyM = p.lastAccepted.accuracyM;
     }
     return entry;
   });

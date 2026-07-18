@@ -1,14 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
-import { destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg } from '@craftworks/arops-shared';
+import {
+  destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg, haversineMeters, bearingDeg, angleDeltaDeg,
+} from '@craftworks/arops-shared';
 import { useKeepAwake } from 'expo-keep-awake';
 import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import CameraLayer from '../components/CameraLayer';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
+import { BLANK_STYLE } from '../mapStyle';
 
 interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
 interface FlagInfo { team: 'a'|'b'; state: string; carrier: string | null; lat?: number; lon?: number; }
@@ -35,7 +37,7 @@ interface Snap {
     fakeMarkerCooldownRemainingMs?: number; fakeMarkerActive?: boolean; fakeMarkerRemainingMs?: number;
     aufscheuchenCooldownRemainingMs?: number;
   } | null;
-  players: { userId: string; username: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; status: string }[];
+  players: { userId: string; username: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; accuracyM?: number; status: string }[];
   // Mode extras
   teamScore?: { a: number; b: number };
   targetScore?: number;
@@ -69,13 +71,13 @@ const ERR_DE: Record<string, Toast> = {
   perk_wrong_role: { icon: 'close', text: 'Für deine Rolle nicht verfügbar' },
 };
 
-// View modes: 2D map (default) → heading-rotated map → split cam/map →
-// transparent map over camera → pure camera.
-type ViewMode = 'map' | 'rotated' | 'comic' | 'split' | 'overlay' | 'camera';
+// View modes: compass-oriented comic map → split cam/comic → transparent
+// comic-over-camera → pure camera. (Plain OSM map/rotated views were dropped
+// in-game — the comic map replaces them everywhere except the Lobby's field
+// editor, which still needs real-world OSM context to draw the polygon.)
+type ViewMode = 'comic' | 'split' | 'overlay' | 'camera';
 const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
-  { id: 'map',     icon: 'map',       label: 'Karte' },
-  { id: 'rotated', icon: 'compass',   label: 'Gedreht' },
-  { id: 'comic',   icon: 'palette',   label: 'Comic' },
+  { id: 'comic',   icon: 'palette',   label: 'Karte' },
   { id: 'split',   icon: 'splitView', label: 'Split' },
   { id: 'overlay', icon: 'ghost',     label: 'Overlay' },
   { id: 'camera',  icon: 'camera',    label: 'Kamera' },
@@ -88,13 +90,13 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   const [snap, setSnap] = useState<Snap | null>(null);
   const [lastResult, setLastResult] = useState<Toast | null>(null);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
-  const [viewMode, setViewMode] = useState<ViewMode>('map');
+  const [viewMode, setViewMode] = useState<ViewMode>('comic');
   const [showRange, setShowRange] = useState(false);
   const telemetry = useTelemetry(socket, sessionId);
 
-  // ── Debug overlay (raw hits/perks, opponent state, ping, throughput) ──
+  // ── Debug overlay: live stats + enemy distance/hitbox, overlaid on the
+  // existing view — not a separate full-screen panel.
   const [debugOpen, setDebugOpen] = useState(false);
-  const [debugLog, setDebugLog] = useState<any[]>([]);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [ticksPerSec, setTicksPerSec] = useState(0);
   const tickCounterRef = useRef(0);
@@ -124,7 +126,6 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
       setSnap(s);
     };
     const onResult = (r: any) => {
-      setDebugLog(log => [{ t: Date.now(), ...r }, ...log].slice(0, 30));
       if (r.action === 'ar_hit_attempt') {
         let toast: Toast;
         if (r.hit) toast = { icon: 'crosshair', text: `Treffer! (${Math.round((r.confidence || 0) * 100)}%)` };
@@ -208,6 +209,32 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   }, [JSON.stringify(snap?.polygon)]);
 
   const TEAM_COLOR = { a: '#40a0ff', b: '#ff5050' } as const;
+
+  // Debug overlay only: distance + "currently in my shooting cone" per enemy,
+  // using the SAME hitToleranceDeg formula the server validates hits with.
+  // Only ever non-empty while debugOpen — the server only reveals every
+  // opponent's position in debugMode sessions (see arops.js getAropsSnapshot).
+  interface DebugEnemy { userId: string; username: string; distanceM: number; inCone: boolean; }
+  const debugEnemies: DebugEnemy[] = useMemo(() => {
+    if (!debugMode || !debugOpen || !telemetry.sample) return [];
+    const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
+    const heading = telemetry.heading;
+    const out: DebugEnemy[] = [];
+    for (const p of snap?.players || []) {
+      if (p.userId === me?.id || typeof p.lat !== 'number' || typeof p.lon !== 'number') continue;
+      const target = { lat: p.lat, lon: p.lon };
+      const distanceM = haversineMeters(origin, target);
+      let inCone = false;
+      if (heading !== null) {
+        const accSum = Math.max(4, (telemetry.sample.accuracyM || 0) + (p.accuracyM ?? telemetry.sample.accuracyM ?? 0));
+        inCone = angleDeltaDeg(heading, bearingDeg(origin, target)) <= hitToleranceDeg(distanceM, accSum);
+      }
+      out.push({ userId: p.userId, username: p.username, distanceM, inCone });
+    }
+    return out.sort((a, b) => a.distanceM - b.distanceM);
+  }, [debugMode, debugOpen, telemetry.sample?.lat, telemetry.sample?.lon, telemetry.sample?.accuracyM,
+      telemetry.heading, JSON.stringify(snap?.players), me?.id]);
+
   const actorsGeoJSON = useMemo(() => {
     const features: any[] = [];
     if (telemetry.sample) {
@@ -219,8 +246,12 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         // Fade with position age: fresh = solid, ≥30s old = barely visible ghost
         const age = p.positionAgeMs ?? 0;
         const op = Math.max(0.25, 0.95 - (age / 30_000) * 0.7);
-        // Team modes: teammates blue, enemies red; frozen = icy tint
-        const color = p.frozen ? '#a0d8ff'
+        // Debug: in my current shooting cone right now → bright red, overrides
+        // the normal team/enemy color. Team modes: teammates blue, enemies
+        // red; frozen = icy tint.
+        const inCone = debugEnemies.find(e => e.userId === p.userId)?.inCone;
+        const color = inCone ? '#ff2020'
+          : p.frozen ? '#a0d8ff'
           : p.team ? TEAM_COLOR[p.team] : '#ff4040';
         features.push({ type: 'Feature', properties: { color, op },
           geometry: { type: 'Point', coordinates: [p.lon!, p.lat!] } });
@@ -232,7 +263,7 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         geometry: { type: 'Point', coordinates: [c.lon, c.lat] } });
     }
     return { type: 'FeatureCollection' as const, features };
-  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts]);
+  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, debugEnemies]);
 
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
@@ -347,9 +378,8 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
        : (snap.plantPct ? `Plant ${snap.plantPct}%` : (snap?.me?.team === 'a' ? 'Angreifer' : 'Verteidiger')))
     : null;
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
-  // Rotated modes align the map to the compass (heading-up)
-  const mapHeading = (viewMode === 'rotated' || viewMode === 'split' || viewMode === 'overlay')
-    ? (telemetry.heading ?? 0) : 0;
+  // Every map-showing mode is compass-oriented (heading-up); pure camera has no map to rotate.
+  const mapHeading = viewMode === 'camera' ? 0 : (telemetry.heading ?? 0);
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
 
   if (telemetry.granted === false) {
@@ -367,11 +397,11 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     const c = feature?.geometry?.coordinates;
     if (Array.isArray(c)) setBase(c[1], c[0]);
   };
-  const renderMap = (interactive: boolean, comic = false) => (
-    <MapView style={{ flex: 1 }} mapStyle={(comic ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
+  const renderMap = (interactive: boolean) => (
+    <MapView style={{ flex: 1 }} mapStyle={BLANK_STYLE as any} onPress={onMapPress}
       scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={false}>
       <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading} animationDuration={250} />
-      {comic && <ComicMapLayers features={snap?.comicMap?.features ?? []} />}
+      <ComicMapLayers features={snap?.comicMap?.features ?? []} />
       {(snap?.polygon?.length ?? 0) >= 3 && (
         <ShapeSource id="field" shape={fieldGeoJSON}>
           <FillLayer id="fieldFill" style={{ fillColor: 'rgba(80,208,64,0.08)' }} />
@@ -446,6 +476,25 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         </View>
       </View>
 
+      {/* Debug overlay: live ping/throughput + per-enemy distance & shooting-cone
+          status, laid directly over the existing view — not a separate screen. */}
+      {debugMode && debugOpen && (
+        <View style={st.debugBar}>
+          <View style={st.iconTextRow}>
+            <Icon name="bug" size={12} color="#40ff80" />
+            <Text style={st.debugBarTxt}>Ping {pingMs ?? '–'}ms · {ticksPerSec}/s</Text>
+          </View>
+          {debugEnemies.map(e => (
+            <View key={e.userId} style={st.iconTextRow}>
+              <Icon name={e.inCone ? 'crosshair' : 'circle'} size={11} color={e.inCone ? '#ff4040' : '#80e0a0'} />
+              <Text style={[st.debugBarTxt, e.inCone && st.debugBarTxtHot]}>
+                {e.username}: {Math.round(e.distanceM)}m
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       {frozenMs > 0 && (
         <View style={st.frozenBanner}>
           <Icon name="snowflake" size={13} color="#04121f" />
@@ -505,10 +554,8 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         mode <-> map/rotated) unmounts it now.
       */}
       <View style={{ flex: 1 }}>
-        {!hasCam && viewMode === 'map' && renderMap(true)}
-        {!hasCam && viewMode === 'rotated' && renderMap(false)}
         {!hasCam && viewMode === 'comic' && (
-          snap?.comicMap?.features?.length ? renderMap(true, true) : (
+          snap?.comicMap?.features?.length ? renderMap(true) : (
             <View style={st.comicEmpty}>
               <Icon name="palette" size={32} color="#807050" />
               <Text style={st.comicEmptyTxt}>
@@ -557,25 +604,6 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         );
       })()}
 
-      {/* Debug overlay: raw hits/perks, ping, throughput — debugMode only */}
-      {debugMode && debugOpen && (
-        <View style={st.debugPanel}>
-          <View style={st.iconTextRow}>
-            <Icon name="bug" size={13} color="#40ff80" />
-            <Text style={st.debugHead}>Debug · Ping {pingMs ?? '–'}ms · {ticksPerSec} ticks/s</Text>
-          </View>
-          <ScrollView style={{ flex: 1 }}>
-            <Text style={st.debugSub}>Events (server, letzte 15)</Text>
-            {(snap?.events ?? []).slice().reverse().map(e => (
-              <Text key={e.seq} style={st.debugLine}>{JSON.stringify(e)}</Text>
-            ))}
-            <Text style={st.debugSub}>Action-Results (Client, letzte 30)</Text>
-            {debugLog.map((e, i) => (
-              <Text key={i} style={st.debugLine}>{JSON.stringify(e)}</Text>
-            ))}
-          </ScrollView>
-        </View>
-      )}
 
       {/* Mode switcher + actions */}
       <View style={st.bottomBar}>
@@ -695,14 +723,13 @@ const st = StyleSheet.create({
   },
   endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
-  debugPanel: {
-    position: 'absolute', top: 90, left: 8, right: 8, bottom: 100,
-    backgroundColor: 'rgba(5,5,10,.94)', borderWidth: 1, borderColor: '#40ff80',
-    borderRadius: 10, padding: 8, zIndex: 60,
+  debugBar: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center',
+    backgroundColor: 'rgba(8,16,8,.9)', borderBottomWidth: 1, borderBottomColor: '#40ff80',
+    paddingHorizontal: 12, paddingVertical: 6,
   },
-  debugHead: { color: '#40ff80', fontSize: 12, fontWeight: '800', marginBottom: 6 },
-  debugSub: { color: '#f0c840', fontSize: 11, fontWeight: '700', marginTop: 8, marginBottom: 2 },
-  debugLine: { color: '#a0e0a0', fontSize: 9, fontFamily: 'monospace' as any, marginBottom: 1 },
+  debugBarTxt: { color: '#a0e0a0', fontSize: 11, fontWeight: '700' },
+  debugBarTxtHot: { color: '#ff4040', fontWeight: '900' },
   bottomBar: { backgroundColor: '#141020', paddingBottom: 24, paddingTop: 8 },
   modeRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 },
   modeBtn: {

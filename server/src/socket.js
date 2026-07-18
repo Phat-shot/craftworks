@@ -223,26 +223,6 @@ module.exports = function setupSocket(io, db) {
       return out;
     }
 
-    // Effective roles/teams for AR lobbies — SERVER is the single source of
-    // truth so web + app can never disagree on defaults (order = joined_at,
-    // identical to the ordering the game engine receives at start).
-    async function arEffective(lobbyId, ar) {
-      const { rows } = await db.query(
-        `SELECT user_id FROM lobby_members WHERE lobby_id=$1 ORDER BY joined_at ASC`, [lobbyId]);
-      const ids = rows.map(r => r.user_id);
-      const roles = {}, teams = {};
-      const captains = { a: null, b: null };
-      ids.forEach((uid, idx) => {
-        roles[uid] = (ar?.roles?.[uid] === 'seeker' || ar?.roles?.[uid] === 'hider')
-          ? ar.roles[uid] : (idx === 0 ? 'seeker' : 'hider');
-        const t = (ar?.teams?.[uid] === 'a' || ar?.teams?.[uid] === 'b')
-          ? ar.teams[uid] : (idx % 2 === 0 ? 'a' : 'b');
-        teams[uid] = t;
-        if (!captains[t]) captains[t] = uid;
-      });
-      return { roles, teams, captains };
-    }
-
     // ── AR OPS: host updates playfield/roles/settings ────
     socket.on('lobby:ar_update', async ({ lobbyId, arSettings }) => {
       try {

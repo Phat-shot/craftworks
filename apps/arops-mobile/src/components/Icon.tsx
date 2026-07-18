@@ -55,6 +55,7 @@ const REGISTRY = {
   qrcode: [MaterialCommunityIcons, 'qrcode-scan'],
   clock: [MaterialCommunityIcons, 'clock-outline'],
   palette: [MaterialCommunityIcons, 'palette'],
+  settings: [MaterialCommunityIcons, 'tune-variant'],
 } as const satisfies Record<string, readonly [IconSet, string]>;
 
 export type IconName = keyof typeof REGISTRY;

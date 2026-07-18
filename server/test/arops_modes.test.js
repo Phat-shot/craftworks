@@ -610,6 +610,42 @@ console.log('\n═══ BOTS & DEBUG MODE ═══');
   });
 }
 
+// ═══ DEBUG-MODE REVEAL ═══════════════════════════════════════
+console.log('\n═══ DEBUG-MODE REVEAL ═══');
+{
+  const mk = (debugMode) => {
+    const gs = arops.createAropsGame('debugreveal' + Math.random(),
+      [{ userId: 'S1', username: 'S1' }, { userId: 'H1', username: 'H1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { S1: 'seeker', H1: 'hider' }, debugMode,
+        hidingDurationMs: 0, gameDurationMs: 600_000 } });
+    gs._lastModeTick = Date.now() - 100;
+    arops.tickArops(gs); // hiding → seeking
+    return gs;
+  };
+
+  check('without debugMode: seeker never sees a non-exposed hider position', () => {
+    const gs = mk(false);
+    tel(gs, 'H1', shared.destinationPoint(MUC, 0, 40), { accuracyM: 6 });
+    tel(gs, 'S1', MUC);
+    const snap = arops.getAropsSnapshot(gs, 'S1');
+    const h1 = snap.players.find(p => p.userId === 'H1');
+    assert.equal(h1.lat, undefined, 'position must stay hidden');
+    assert.equal(h1.accuracyM, undefined);
+  });
+
+  check('with debugMode: seeker sees the hider position and accuracyM regardless of exposure', () => {
+    const gs = mk(true);
+    tel(gs, 'H1', shared.destinationPoint(MUC, 0, 40), { accuracyM: 6 });
+    tel(gs, 'S1', MUC);
+    const snap = arops.getAropsSnapshot(gs, 'S1');
+    const h1 = snap.players.find(p => p.userId === 'H1');
+    assert.equal(typeof h1.lat, 'number', 'debugMode must reveal the position');
+    assert.equal(typeof h1.lon, 'number');
+    assert.equal(h1.accuracyM, 6, 'accuracy must be revealed too, for client-side hitToleranceDeg math');
+  });
+}
+
 // ═══ MISS DIAGNOSTICS ═══════════════════════════════════════
 console.log('\n═══ MISS-DIAGNOSE ═══');
 {
