@@ -92,6 +92,7 @@ export default function App() {
         <View style={st.center}>
           <Icon name="satellite" size={56} color="#f0c840" style={{ marginBottom: 6 }} />
           <Text style={st.title}>AR Ops</Text>
+          <Text style={st.version}>v{Constants.expoConfig?.version || '–'}</Text>
           <View style={st.subRow}>
             <Text style={st.sub}>Hallo {getUser()?.username}</Text>
             <Icon name="wave" size={14} color="#807050" />
@@ -168,7 +169,8 @@ export default function App() {
 
 const st = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  title: { fontSize: 30, fontWeight: '900', color: '#f0c840', marginBottom: 4 },
+  title: { fontSize: 30, fontWeight: '900', color: '#f0c840', marginBottom: 2 },
+  version: { fontSize: 10, color: '#605850', marginBottom: 4 },
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 32 },
   sub: { fontSize: 13, color: '#807050' },
   hostBtn: {

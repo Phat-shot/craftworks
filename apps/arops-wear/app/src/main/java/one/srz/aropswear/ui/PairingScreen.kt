@@ -21,6 +21,7 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import one.srz.aropswear.BuildConfig
 import one.srz.aropswear.model.PairingRepository
 
 /**
@@ -54,6 +55,12 @@ fun PairingScreen() {
             text = "Tippen = neuer Code",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption3,
+        )
+        Text(
+            text = "v${BuildConfig.VERSION_NAME}",
+            color = ComicPalette.gold.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.caption3,
+            modifier = Modifier.padding(top = 2.dp),
         )
     }
 }
