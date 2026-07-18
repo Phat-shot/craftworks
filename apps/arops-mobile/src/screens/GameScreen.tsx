@@ -690,31 +690,39 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // roughly level. Rendered as one continuous tapering bar (dense stacked
   // bands, no gaps) rather than discrete rungs — same distance-based width
   // math the map's ground-projected cone polygon uses, just screen-projected.
-  const screenH = Dimensions.get('window').height;
+  // top/height are percentages of whatever container this renders into
+  // (not the device's full height) — split mode shows this in a half-height
+  // box, and a fixed-pixel calc against the full screen made the bands land
+  // outside that box's actual bounds there.
   const LANE_NEAR_M = 6;
   const LANE_BANDS = 40;
   const laneBands = useMemo(() => {
     if (!showRange || telemetry.heading === null) return [];
-    const yTopFrac = 0.42, yBotFrac = 0.85;
-    const out: { topPx: number; heightPx: number; wPx: number }[] = [];
+    const yTopPct = 42, yBotPct = 99;
+    const out: { topPct: number; heightPct: number; wPx: number }[] = [];
     for (let i = 0; i < LANE_BANDS; i++) {
       const t0 = i / LANE_BANDS, t1 = (i + 1) / LANE_BANDS, tMid = (t0 + t1) / 2;
       const d = LANE_NEAR_M + tMid * (effectiveMaxRangeM - LANE_NEAR_M);
       const angDeg = (180 / Math.PI) * 2 * Math.atan((effectiveLaneWidthM / 2) / d);
-      const wPx = Math.max(3, (angDeg / CAMERA_FOV_DEG) * screenW);
-      const yFrac0 = yBotFrac - t0 * (yBotFrac - yTopFrac);
-      const yFrac1 = yBotFrac - t1 * (yBotFrac - yTopFrac);
-      out.push({ topPx: yFrac1 * screenH, heightPx: (yFrac0 - yFrac1) * screenH + 1, wPx });
+      const physicalWpx = Math.max(3, (angDeg / CAMERA_FOV_DEG) * screenW);
+      // The bottom edge spans the full screen width (an obvious, dramatic
+      // "gun-sight" funnel) and narrows to the physically-accurate lane
+      // width right at the crosshair/vanishing point — accuracy matters
+      // most exactly there, not at the near edge.
+      const wPx = screenW * (1 - tMid) + physicalWpx * tMid;
+      const pct0 = yBotPct - t0 * (yBotPct - yTopPct);
+      const pct1 = yBotPct - t1 * (yBotPct - yTopPct);
+      out.push({ topPct: pct1, heightPct: pct0 - pct1 + 0.3, wPx });
     }
     return out;
-  }, [showRange, telemetry.heading, screenW, screenH, effectiveMaxRangeM, effectiveLaneWidthM]);
+  }, [showRange, telemetry.heading, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
 
   const laneOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       {laneBands.map((b, i) => (
         <View key={i} style={{
-          position: 'absolute', top: b.topPx, left: screenW / 2 - b.wPx / 2,
-          width: b.wPx, height: b.heightPx, backgroundColor: `rgba(240,200,64,${(0.35 * OVERLAY_OPACITY * 2).toFixed(2)})`,
+          position: 'absolute', top: `${b.topPct}%`, left: '50%', marginLeft: -b.wPx / 2,
+          width: b.wPx, height: `${b.heightPct}%`, backgroundColor: `rgba(240,200,64,${(0.35 * OVERLAY_OPACITY * 2).toFixed(2)})`,
         }} />
       ))}
     </View>
@@ -789,7 +797,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       <TouchableOpacity key="scare" style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
         disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
         <Icon name="scare" size={15} color="#c0a0f0" />
-        <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Aufscheuchen'}</Text>
+        <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Scheuchen'}</Text>
       </TouchableOpacity>,
     );
   }
@@ -915,6 +923,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         )}
         {hasCam && (
           <CameraLayer>
+            {/* Same crosshair/lane-funnel/target bundle in every camera-showing
+                mode — it used to only render correctly in pure camera mode
+                (split's half-height container broke the lane math, overlay
+                skipped it entirely); consistency matters more here than the
+                theoretical double-marker risk the old overlay-mode comment
+                worried about. */}
             {viewMode === 'split' && (
               <View style={{ flex: 1 }}>
                 <View style={{ flex: 1 }}>{crosshair}{laneOverlay}{targetOverlay}</View>
@@ -923,15 +937,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             )}
             {viewMode === 'overlay' && (
               <>
-                {/* The semi-transparent map below already carries the geo-projected
-                    hitbox through — the screen-projected targetOverlay is skipped
-                    here to avoid two non-aligned markers for the same opponent.
-                    Blend amount is the same personal transparency knob the
-                    Views popup exposes (also used for hitbox intensity). */}
                 <View style={[StyleSheet.absoluteFill, { opacity: OVERLAY_OPACITY }]} pointerEvents="none">
                   {renderMap(false)}
                 </View>
-                {crosshair}
+                {crosshair}{laneOverlay}{targetOverlay}
               </>
             )}
             {viewMode === 'camera' && <>{crosshair}{laneOverlay}{targetOverlay}</>}
@@ -1152,7 +1161,9 @@ const st = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   watchStatusFab: {
-    position: 'absolute', left: 14, top: 62, width: 38, height: 38, borderRadius: 8,
+    // Sits just below the status bar, over the map/camera view itself —
+    // analogous to how the Lobby's compass icon sits top-left.
+    position: 'absolute', left: 14, top: 86, width: 38, height: 38, borderRadius: 8,
     backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
