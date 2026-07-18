@@ -7,6 +7,7 @@ import { getSocket, getUser, fetchLobbyQr } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
+import { polygonAreaM2, scaleCoreConfig } from '@craftworks/arops-shared';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -39,6 +40,7 @@ interface ArSettings {
   comicMap?: ComicMap;
   hitTrackingMode?: 'compass' | 'ir';
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
+  autoScale?: boolean;
 }
 
 // Half-angle presets expressed to the host as an approximate width at a 10m
@@ -305,6 +307,18 @@ export default function LobbyScreen({
     hitConfig: { ...ar.hitConfig, baseConeHalfAngleDeg: Math.atan(halfWidthM / REF_DIST_M) * (180 / Math.PI) },
   });
 
+  // "Auto": derive hiding/game duration, shot range and perk cooldowns from
+  // the field size instead of manual presets — the field has no upper size
+  // limit anymore, so fixed presets stop making sense once it's much bigger
+  // than what they were tuned for. Same scaleCoreConfig() the server uses
+  // once the match actually starts, so this preview matches reality.
+  const autoScale = !!ar.autoScale;
+  const autoPreview = useMemo(
+    () => (polygon.length >= 3 ? scaleCoreConfig(polygonAreaM2(polygon)) : null),
+    [autoScale, JSON.stringify(polygon)]
+  );
+  const fmtMin = (ms: number) => `${Math.round(ms / 60_000)}min`;
+
   const header = (
     <View>
       {/* Oben: Erkennungsmodus + Debug links, Code rechts */}
@@ -484,14 +498,33 @@ export default function LobbyScreen({
 
           <View style={st.divider} />
           <View style={st.rowBtns}>
-            <Text style={st.wpCount}>Reichweite:</Text>
-            {RANGE_PRESETS.map(m => (
-              <TouchableOpacity key={m} style={[st.smallBtn, hitRangeM === m && st.smallBtnActive]}
-                onPress={() => setHitRange(m)}>
-                <Text style={[st.smallTxt, hitRangeM === m && st.smallTxtActive]}>{m}m</Text>
-              </TouchableOpacity>
-            ))}
+            <TouchableOpacity style={[st.smallBtnRow, autoScale && st.smallBtnActive]}
+              onPress={() => emitUpdate({ autoScale: !autoScale })}>
+              <Icon name="loop" size={13} color={autoScale ? '#f0c840' : '#c0a0f0'} />
+              <Text style={[st.smallTxt, autoScale && st.smallTxtActive]}>
+                Auto (nach Feldgröße) {autoScale ? 'AN' : 'AUS'}
+              </Text>
+            </TouchableOpacity>
           </View>
+          {autoScale ? (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>
+                {autoPreview
+                  ? `Reichweite ~${Math.round(autoPreview.hitRangeM)}m · Versteckzeit ${fmtMin(autoPreview.hidingDurationMs)} · Spielzeit ${fmtMin(autoPreview.gameDurationMs)}`
+                  : 'Erst das Spielfeld zeichnen, um die Auto-Werte zu sehen'}
+              </Text>
+            </View>
+          ) : (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Reichweite:</Text>
+              {RANGE_PRESETS.map(m => (
+                <TouchableOpacity key={m} style={[st.smallBtn, hitRangeM === m && st.smallBtnActive]}
+                  onPress={() => setHitRange(m)}>
+                  <Text style={[st.smallTxt, hitRangeM === m && st.smallTxtActive]}>{m}m</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           <View style={st.rowBtns}>
             <Text style={st.wpCount}>Breite:</Text>
             {WIDTH_PRESETS.map(w => {
@@ -506,24 +539,28 @@ export default function LobbyScreen({
             })}
           </View>
           <View style={st.divider} />
-          <View style={st.rowBtns}>
-            <Text style={st.wpCount}>Versteckzeit:</Text>
-            {HIDING.map(o => (
-              <TouchableOpacity key={o.ms} style={[st.smallBtn, hid === o.ms && st.smallBtnActive]}
-                onPress={() => emitUpdate({ hidingDurationMs: o.ms })}>
-                <Text style={[st.smallTxt, hid === o.ms && st.smallTxtActive]}>{o.l}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={st.rowBtns}>
-            <Text style={st.wpCount}>Spielzeit:</Text>
-            {DURATION.map(o => (
-              <TouchableOpacity key={o.ms} style={[st.smallBtn, dur === o.ms && st.smallBtnActive]}
-                onPress={() => emitUpdate({ gameDurationMs: o.ms })}>
-                <Text style={[st.smallTxt, dur === o.ms && st.smallTxtActive]}>{o.l}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          {!autoScale && (
+            <>
+              <View style={st.rowBtns}>
+                <Text style={st.wpCount}>Versteckzeit:</Text>
+                {HIDING.map(o => (
+                  <TouchableOpacity key={o.ms} style={[st.smallBtn, hid === o.ms && st.smallBtnActive]}
+                    onPress={() => emitUpdate({ hidingDurationMs: o.ms })}>
+                    <Text style={[st.smallTxt, hid === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={st.rowBtns}>
+                <Text style={st.wpCount}>Spielzeit:</Text>
+                {DURATION.map(o => (
+                  <TouchableOpacity key={o.ms} style={[st.smallBtn, dur === o.ms && st.smallBtnActive]}
+                    onPress={() => emitUpdate({ gameDurationMs: o.ms })}>
+                    <Text style={[st.smallTxt, dur === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
           {subMode === 'hide_and_seek' && (
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Gefunden:</Text>

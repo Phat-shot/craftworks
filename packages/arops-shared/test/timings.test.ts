@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scaleTimings, isInZone, scaleDroneRangeM } from '../src/timings';
+import { scaleTimings, isInZone, scaleDroneRangeM, scaleCoreConfig } from '../src/timings';
 import { destinationPoint } from '../src/geo';
 
 const MUC = { lat: 48.13743, lon: 11.57549 };
+const REF_AREA_M2 = 224 * 224; // matches scaleCoreConfig's internal REF_L_M
 
 test('timings: small field hits lower clamps', () => {
   const t = scaleTimings(10_000); // 100×100m → L=100
@@ -44,6 +45,37 @@ test('scaleDroneRangeM: monotonic with field size', () => {
 
 test('scaleDroneRangeM: huge field hits upper clamp', () => {
   assert.equal(scaleDroneRangeM(3_000_000), 200);
+});
+
+test('scaleCoreConfig: small field hits lower clamps', () => {
+  const c = scaleCoreConfig(2_000); // ~45x45m, L≈45
+  assert.equal(c.hidingDurationMs, 45_000);
+  assert.ok(c.hitRangeM >= 20);
+});
+
+test('scaleCoreConfig: monotonic hiding/game duration + range with field size', () => {
+  const a = scaleCoreConfig(40_000);     // L=200
+  const b = scaleCoreConfig(4_000_000);  // L=2000
+  assert.ok(b.hidingDurationMs >= a.hidingDurationMs);
+  assert.ok(b.gameDurationMs >= a.gameDurationMs);
+  assert.ok(b.hitRangeM >= a.hitRangeM);
+});
+
+test('scaleCoreConfig: cooldowns shrink (never grow past the reference) as the field grows', () => {
+  const ref = scaleCoreConfig(REF_AREA_M2);
+  const bigger = scaleCoreConfig(REF_AREA_M2 * 25); // 5x the reference length
+  assert.ok(bigger.radarCooldownMs <= ref.radarCooldownMs);
+  assert.ok(bigger.droneCooldownMs <= ref.droneCooldownMs);
+  assert.ok(bigger.cloakCooldownMs <= ref.cloakCooldownMs);
+  // Never below the 15s floor even for an enormous field.
+  const huge = scaleCoreConfig(1_000_000_000);
+  assert.ok(huge.radarCooldownMs >= 15_000);
+  assert.ok(huge.aufscheuchenCooldownMs >= 15_000);
+});
+
+test('scaleCoreConfig: a smaller-than-reference field never exceeds the reference cooldown', () => {
+  const tiny = scaleCoreConfig(2_000);
+  assert.ok(tiny.droneCooldownMs <= 60_000);
 });
 
 test('zone: inside / outside', () => {

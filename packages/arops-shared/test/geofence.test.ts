@@ -46,10 +46,10 @@ test('polygon: tiny 10×10m square rejected as too small', () => {
   assert.ok(r.errors.includes('area_too_small'));
 });
 
-test('polygon: 3×3 km square rejected as too large', () => {
+test('polygon: no upper area limit — a huge field is accepted', () => {
   const r = validatePolygon(squareAround(MUC, 1500)); // 9 km²
-  assert.equal(r.ok, false);
-  assert.ok(r.errors.includes('area_too_large'));
+  assert.equal(r.ok, true);
+  assert.ok(!r.errors.includes('area_too_large'));
 });
 
 test('polygon: bowtie rejected as self-intersecting', () => {

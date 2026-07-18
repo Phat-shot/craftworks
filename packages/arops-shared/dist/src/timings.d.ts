@@ -28,6 +28,25 @@ export interface ModeTimings {
 export declare function scaleTimings(areaM2: number): ModeTimings;
 /** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
 export declare function scaleDroneRangeM(areaM2: number): number;
+export interface CoreScaledConfig {
+    hidingDurationMs: number;
+    gameDurationMs: number;
+    hitRangeM: number;
+    radarCooldownMs: number;
+    droneCooldownMs: number;
+    cloakCooldownMs: number;
+    fakeMarkerCooldownMs: number;
+    aufscheuchenCooldownMs: number;
+}
+/**
+ * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
+ * straight from the playfield size — an alternative to the host manually
+ * picking presets, useful now that field area has no upper limit (see
+ * DEFAULT_POLYGON_OPTIONS.maxAreaM2). Same L = sqrt(areaM2), ~1.4 m/s
+ * walking-speed philosophy as scaleTimings() above. First-pass numbers, not
+ * tuned by real playtesting yet — expect to revisit the exact constants.
+ */
+export declare function scaleCoreConfig(areaM2: number): CoreScaledConfig;
 import { LatLon } from './types';
 export interface Zone {
     id: string;

@@ -520,12 +520,33 @@ function createAropsGame(sessionId, players, workshopConfig) {
   cfg.debugMode = ar.debugMode === true;
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG, ...(ar.hitConfig || {}) };
 
+  const areaM2 = shared.polygonAreaM2(polygon);
+
   // Field-size-scaled timings; each key overridable via ar_settings.timings
-  const timings = shared.scaleTimings(shared.polygonAreaM2(polygon));
+  const timings = shared.scaleTimings(areaM2);
   if (ar.timings && typeof ar.timings === 'object') {
     for (const k of Object.keys(timings)) {
       if (typeof ar.timings[k] === 'number') timings[k] = ar.timings[k];
     }
+  }
+
+  // "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
+  // from the field size instead of the host's manual presets — takes
+  // precedence over any manual ar[k]/ar.hitConfig values above. Field area
+  // no longer has an upper limit (DEFAULT_POLYGON_OPTIONS.maxAreaM2), so
+  // fixed presets stop making sense once a field gets much bigger than what
+  // they were tuned for.
+  cfg.autoScale = ar.autoScale === true;
+  if (cfg.autoScale) {
+    const auto = shared.scaleCoreConfig(areaM2);
+    cfg.hidingDurationMs = auto.hidingDurationMs;
+    cfg.gameDurationMs = auto.gameDurationMs;
+    cfg.radarCooldownMs = auto.radarCooldownMs;
+    cfg.droneCooldownMs = auto.droneCooldownMs;
+    cfg.cloakCooldownMs = auto.cloakCooldownMs;
+    cfg.fakeMarkerCooldownMs = auto.fakeMarkerCooldownMs;
+    cfg.aufscheuchenCooldownMs = auto.aufscheuchenCooldownMs;
+    hitConfig.maxRangeM = auto.hitRangeM;
   }
 
   // Zones (domination points / bomb sites), host-placed
@@ -1096,6 +1117,7 @@ function getAropsSnapshot(gs, userId) {
     hitConeHalfAngleDeg: gs.hitConfig.baseConeHalfAngleDeg,
     winner: gs.winner,
     debugMode: !!gs.cfg.debugMode,
+    autoScale: !!gs.cfg.autoScale,
     timings: {
       freezeMs: gs.timings.freezeMs,
       captureDwellMs: gs.timings.captureDwellMs,

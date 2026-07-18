@@ -7,7 +7,7 @@
 //  sane bounds. Every value can be overridden via ar_settings.
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.validateZones = exports.distanceToZoneM = exports.isInZone = exports.scaleDroneRangeM = exports.scaleTimings = void 0;
+exports.validateZones = exports.distanceToZoneM = exports.isInZone = exports.scaleCoreConfig = exports.scaleDroneRangeM = exports.scaleTimings = void 0;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 /** Compute all mode timings from the playfield area. */
 function scaleTimings(areaM2) {
@@ -34,6 +34,34 @@ function scaleDroneRangeM(areaM2) {
     return clamp(L * 0.4, 50, 200);
 }
 exports.scaleDroneRangeM = scaleDroneRangeM;
+// A "medium" reference field (~50,000 m², L≈224m) roughly matching the
+// fixed defaults these values replace (server/src/game/arops.js DEFAULTS) —
+// cooldowns scale down from their reference value as the field grows past
+// this, never up past it for a smaller field.
+const REF_L_M = 224;
+/**
+ * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
+ * straight from the playfield size — an alternative to the host manually
+ * picking presets, useful now that field area has no upper limit (see
+ * DEFAULT_POLYGON_OPTIONS.maxAreaM2). Same L = sqrt(areaM2), ~1.4 m/s
+ * walking-speed philosophy as scaleTimings() above. First-pass numbers, not
+ * tuned by real playtesting yet — expect to revisit the exact constants.
+ */
+function scaleCoreConfig(areaM2) {
+    const L = Math.sqrt(Math.max(1, areaM2));
+    const cooldown = (referenceMs) => clamp(referenceMs * (REF_L_M / L), 15000, referenceMs);
+    return {
+        hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45000, 600000),
+        gameDurationMs: clamp((L / 1.4) * 1000 * 2.5, 300000, 3600000),
+        hitRangeM: clamp(L * 0.5, 20, 500),
+        radarCooldownMs: cooldown(15 * 60000),
+        droneCooldownMs: cooldown(60000),
+        cloakCooldownMs: cooldown(90000),
+        fakeMarkerCooldownMs: cooldown(90000),
+        aufscheuchenCooldownMs: cooldown(45000),
+    };
+}
+exports.scaleCoreConfig = scaleCoreConfig;
 const geo_1 = require("./geo");
 function isInZone(p, z) {
     return (0, geo_1.haversineMeters)(p, { lat: z.lat, lon: z.lon }) <= z.radiusM;

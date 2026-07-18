@@ -8,9 +8,11 @@ import { useKeepAwake } from 'expo-keep-awake';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSocket, getUser } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
+import { useWatchSync } from '../hooks/useWatchSync';
 import CameraLayer from '../components/CameraLayer';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
+import WatchPairModal from '../components/WatchPairModal';
 import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
 
 interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
@@ -115,6 +117,8 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
   // Persisted locally so the choice survives leaving/rejoining a match.
   const [overlayOpacity, setOverlayOpacity] = useState(0.5);
   const [viewPopupOpen, setViewPopupOpen] = useState(false);
+  const watchSync = useWatchSync();
+  const [watchPairOpen, setWatchPairOpen] = useState(false);
   useEffect(() => {
     AsyncStorage.getItem('ar_overlay_opacity').then(v => {
       const n = v ? parseFloat(v) : NaN;
@@ -459,6 +463,29 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
 
   // ── Derived state ─────────────────────────────────────────
   const remainingS = snap?.phaseEndsAt ? Math.max(0, Math.round((snap.phaseEndsAt - snap.serverTime) / 1000)) : 0;
+
+  // Push the same data the phone itself shows (privacy-filtered contacts,
+  // comic-map features, phase/timer) to a paired watch every 2s — plenty for
+  // a wrist HUD, no need for the 1Hz telemetry rate.
+  useEffect(() => {
+    if (!watchSync.paired) return;
+    const iv = setInterval(() => {
+      const contacts = visibleEnemies
+        .filter(e => activeRevealIds.has(e.userId))
+        .map(e => ({ id: e.userId, bearingDeg: e.bearingDeg, distanceM: e.distanceM, hot: e.inCone }));
+      watchSync.push({
+        phase: snap?.phase ?? '–',
+        remainingS,
+        myLat: telemetry.sample?.lat ?? null,
+        myLon: telemetry.sample?.lon ?? null,
+        headingDeg: telemetry.heading,
+        contacts,
+        comicFeatures: (snap?.comicMap?.features ?? []).map(f => ({ kind: f.type, points: f.points })),
+      });
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [watchSync.paired, snap?.phase, remainingS, telemetry.sample?.lat, telemetry.sample?.lon,
+      telemetry.heading, visibleEnemies, activeRevealIds, snap?.comicMap]);
   const isSeeker = snap?.me?.role === 'seeker';
   const isTeamMode = !!snap?.me?.team;
   const shootPhase = isTeamMode ? snap?.phase === 'live' : snap?.phase === 'seeking';
@@ -875,6 +902,18 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
                 <Icon name="bug" size={18} color={debugOpen ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
             )}
+            <TouchableOpacity
+              style={[st.modeBtn, watchSync.paired && st.modeBtnActive]}
+              onPress={() => setWatchPairOpen(true)}>
+              <Icon name="compass" size={18} color={watchSync.paired ? '#f0c840' : '#c0a0f0'} />
+            </TouchableOpacity>
+          </View>
+          <View style={st.iconTextRow}>
+            <Icon name={watchSync.paired ? 'checkCircle' : 'signalOff'} size={12}
+              color={watchSync.paired ? '#80ff40' : '#807050'} />
+            <Text style={st.overlaySettingsTxt}>
+              {watchSync.paired ? 'Uhr gekoppelt' : 'Keine Uhr gekoppelt'}
+            </Text>
           </View>
           {showRange && (
             <>
@@ -952,6 +991,12 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
           </View>
         </View>
       </View>
+
+      <WatchPairModal
+        visible={watchPairOpen}
+        onClose={() => setWatchPairOpen(false)}
+        onClaim={watchSync.claim}
+      />
     </View>
   );
 }
