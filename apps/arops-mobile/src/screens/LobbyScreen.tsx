@@ -8,6 +8,7 @@ import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig } from '@craftworks/arops-shared';
+import { withTimeout } from '../utils/withTimeout';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -108,20 +109,35 @@ export default function LobbyScreen({
 
   // One-shot fetch (not a live watch) — this is just a reference point for
   // drawing the field, not gameplay telemetry, so no need to keep polling.
-  // GPS can be unreliable on first try (cold fix, permission dialog timing),
-  // so this is also wired to a manual retry button on the map, not just mount.
-  const loadMyPosition = async () => {
+  // GPS can be unreliable on first try (cold fix, permission dialog timing) —
+  // getCurrentPositionAsync has no built-in timeout and can hang indefinitely
+  // on some devices/cold fixes, previously leaving myPosLoading stuck true
+  // forever with no way out except tapping retry (which just repeated the
+  // same possibly-hung call). Now: an instant cached fix first if one
+  // exists (so the map has *something* right away), a hard 8s timeout on
+  // the fresh fix, and up to 2 automatic retries before finally falling
+  // back to the manual retry button.
+  const loadMyPosition = async (attempt = 0) => {
     setMyPosLoading(true);
     setMyPosErr(false);
     try {
       const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== 'granted') { setMyPosErr(true); return; }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
+      if (attempt === 0) {
+        Location.getLastKnownPositionAsync().then(cached => {
+          if (cached) setMyPos(p => p ?? { lat: cached.coords.latitude, lon: cached.coords.longitude });
+        }).catch(() => {});
+      }
+      const pos = await withTimeout(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }), 8000);
       setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-    } catch {
-      setMyPosErr(true);
-    } finally {
       setMyPosLoading(false);
+    } catch {
+      if (attempt < 2) {
+        loadMyPosition(attempt + 1);
+      } else {
+        setMyPosErr(true);
+        setMyPosLoading(false);
+      }
     }
   };
 
@@ -428,7 +444,7 @@ export default function LobbyScreen({
             </ShapeSource>
           )}
         </MapView>
-        <TouchableOpacity style={st.locateBtn} onPress={loadMyPosition} disabled={myPosLoading}>
+        <TouchableOpacity style={st.locateBtn} onPress={() => loadMyPosition()} disabled={myPosLoading}>
           {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
             <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
           )}
