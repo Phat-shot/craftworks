@@ -1,19 +1,44 @@
 name: Wear OS APK Build
-# Läuft automatisch bei Push auf main/test — analog zu docker.yml — aber nur
-# bei Änderungen an apps/arops-wear/ selbst (kein Bezug zum shared Package,
-# rein natives Kotlin/Gradle-Projekt ohne gemeinsamen Code mit der Handy-App).
-# KEIN Expo/RN (dafür gibt es keinen Wear-OS-Support). Läuft nie standalone:
-# Companion-App, die den Spielstand vom gekoppelten Handy über die
-# Data-Layer-API empfängt — hat deshalb (anders als die Handy-App) keinen
-# eigenen Backend-Endpoint und damit keine Channel-Unterscheidung nötig.
+# Auf main läuft der Build immer (Merge auf main = Release, keine Ausnahmen).
+# Auf test nur bei Änderungen an apps/arops-wear/ selbst (kein Bezug zum
+# shared Package, rein natives Kotlin/Gradle-Projekt ohne gemeinsamen Code
+# mit der Handy-App). KEIN Expo/RN (dafür gibt es keinen Wear-OS-Support).
+# Läuft nie standalone: Companion-App, die den Spielstand vom gekoppelten
+# Handy über die Data-Layer-API empfängt — hat deshalb (anders als die
+# Handy-App) keinen eigenen Backend-Endpoint und damit keine
+# Channel-Unterscheidung nötig.
 on:
   push:
     branches: [main, test]
-    paths:
-      - 'apps/arops-wear/**'
-      - '.github/workflows/wear-apk.yml'
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: check
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BEFORE" "${{ github.sha }}" | grep -qE '^(apps/arops-wear/|\.github/workflows/wear-apk\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   gradle-build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
