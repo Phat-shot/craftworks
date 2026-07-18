@@ -54,8 +54,18 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
       setGranted(status === 'granted');
       if (status !== 'granted') return;
 
+      // Kickstart with an immediate one-shot fix in parallel — watchPositionAsync's
+      // first callback can take a while to arrive, so without this the player's own
+      // position (and the map dot) can stay empty for a long stretch after match start.
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+        .then(loc => { if (!cancelled && !posRef.current) posRef.current = loc; })
+        .catch(() => {});
+
+      // High (not BestForNavigation): comparable few-meter accuracy but noticeably
+      // faster/more reliable continuous fixes in practice — BestForNavigation was
+      // observed to stall for a long time on some devices.
       posSub = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 0 },
+        { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 },
         (loc) => { posRef.current = loc; }
       );
       headSub = await Location.watchHeadingAsync((h) => {

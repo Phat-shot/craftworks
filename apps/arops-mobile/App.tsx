@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { useFonts } from 'expo-font';
+import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { restoreSession, createArLobby, getUser } from './src/api';
 import Icon from './src/components/Icon';
 import LoginScreen from './src/screens/LoginScreen';
@@ -19,6 +21,10 @@ type Route =
 export default function App() {
   const [route, setRoute] = useState<Route>({ name: 'boot' });
   const [hostErr, setHostErr] = useState('');
+  // Icon glyphs otherwise render blank on the first paint of every single
+  // <Icon> instance (each one lazily self-loads its font in the background)
+  // — explicitly waiting once here up front avoids that race entirely.
+  const [fontsLoaded] = useFonts({ ...MaterialCommunityIcons.font, ...Ionicons.font });
 
   useEffect(() => {
     restoreSession()
@@ -37,6 +43,15 @@ export default function App() {
       setHostErr(e.message || 'Fehler beim Erstellen');
     }
   };
+
+  if (!fontsLoaded) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0a0810' }}>
+        <StatusBar style="light" />
+        <View style={st.center}><ActivityIndicator color="#f0c840" size="large" /></View>
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: '#0a0810' }}>

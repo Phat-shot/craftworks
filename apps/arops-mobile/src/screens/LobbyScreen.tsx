@@ -80,25 +80,33 @@ export default function LobbyScreen({
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
   const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(null);
+  const [myPosLoading, setMyPosLoading] = useState(false);
+  const [myPosErr, setMyPosErr] = useState(false);
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
   const comicMapReqRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    // One-shot fetch (not a live watch) — this is just a reference point for
-    // drawing the field, not gameplay telemetry, so no need to keep polling.
-    let cancelled = false;
-    (async () => {
-      try {
-        const perm = await Location.requestForegroundPermissionsAsync();
-        if (perm.status !== 'granted' || cancelled) return;
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        if (!cancelled) setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-      } catch { /* no location available — map just keeps its default center */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  // One-shot fetch (not a live watch) — this is just a reference point for
+  // drawing the field, not gameplay telemetry, so no need to keep polling.
+  // GPS can be unreliable on first try (cold fix, permission dialog timing),
+  // so this is also wired to a manual retry button on the map, not just mount.
+  const loadMyPosition = async () => {
+    setMyPosLoading(true);
+    setMyPosErr(false);
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== 'granted') { setMyPosErr(true); return; }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+    } catch {
+      setMyPosErr(true);
+    } finally {
+      setMyPosLoading(false);
+    }
+  };
+
+  useEffect(() => { loadMyPosition(); }, []);
 
   useEffect(() => {
     const socket = getSocket();
@@ -309,6 +317,8 @@ export default function LobbyScreen({
           ))}
         </View>
       )}
+      <View style={st.divider} />
+
       {isHost && (
         <Text style={st.hostHint}>
           Auf die Karte tippen: {tapMode === 'zones' ? 'Zone setzen' : 'Wegpunkt setzen'} — Punkte der Reihe nach im Kreis
@@ -350,6 +360,11 @@ export default function LobbyScreen({
             </ShapeSource>
           )}
         </MapView>
+        <TouchableOpacity style={st.locateBtn} onPress={loadMyPosition} disabled={myPosLoading}>
+          {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
+            <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
+          )}
+        </TouchableOpacity>
       </View>
 
       {ar.comicMap && (
@@ -383,6 +398,7 @@ export default function LobbyScreen({
 
       {isHost && (
         <>
+          <View style={st.divider} />
           <View style={st.sectionRow}>
             <Icon name="settings" size={13} color="#e0c080" />
             <Text style={st.section}>Einstellungen</Text>
@@ -469,6 +485,7 @@ export default function LobbyScreen({
           </View>
         </>
       )}
+      <View style={st.divider} />
       <View style={st.sectionRow}>
         <Icon name="people" size={13} color="#e0c080" />
         <Text style={st.section}>Spieler {isHost ? (teamMode ? '(Team antippen)' : '(Rolle antippen)') : ''}</Text>
@@ -581,6 +598,11 @@ const st = StyleSheet.create({
   codeSub: { color: '#807050', fontSize: 9 },
   hostHint: { color: '#807050', fontSize: 11, marginBottom: 8 },
   mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+  locateBtn: {
+    position: 'absolute', bottom: 10, right: 10, width: 38, height: 38, borderRadius: 19,
+    backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
+    alignItems: 'center', justifyContent: 'center',
+  },
   comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
   comicStaleBadge: {
     position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
@@ -599,6 +621,7 @@ const st = StyleSheet.create({
   wpCount: { color: '#807050', fontSize: 11 },
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 4 },
   section: { color: '#e0c080', fontSize: 12, fontWeight: '800' },
+  divider: { height: 1, backgroundColor: '#2a2040', marginVertical: 10 },
   hintRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 8 },
   hint: { color: '#807050', fontSize: 12, textAlign: 'center' },
   errRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },

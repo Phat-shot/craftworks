@@ -332,6 +332,26 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
     return { type: 'FeatureCollection' as const, features: feats };
   }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.sites), JSON.stringify(snap?.bases), snap?.zoneRadiusM]);
 
+  // Small per-target hitbox circles (~1.5m physical radius) at each visible
+  // opponent's exact position — a preview of the point-hitbox the planned
+  // IR-based hit detection will use later (fixed physical radius derived from
+  // distance), rather than only the wide GPS-uncertainty cone above. Shows
+  // for whichever opponents are already visible under the normal privacy
+  // rules (teammates/exposed/flag-carrier) or, in debug sessions, everyone.
+  const hitboxGeoJSON = useMemo(() => {
+    const feats: any[] = [];
+    if (!showRange) return { type: 'FeatureCollection' as const, features: feats };
+    for (const p of snap?.players || []) {
+      if (p.userId === me?.id || typeof p.lat !== 'number' || typeof p.lon !== 'number') continue;
+      const inCone = debugEnemies.find(e => e.userId === p.userId)?.inCone;
+      feats.push({
+        type: 'Feature', properties: { color: inCone ? '#ff2020' : '#ff7828' },
+        geometry: { type: 'Polygon', coordinates: [zoneCircle(p.lat, p.lon, 1.5)] },
+      });
+    }
+    return { type: 'FeatureCollection' as const, features: feats };
+  }, [showRange, JSON.stringify(snap?.players), me?.id, debugEnemies]);
+
   const flagsGeoJSON = useMemo(() => {
     const feats: any[] = [];
     for (const f of snap?.flags || []) {
@@ -420,6 +440,12 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
           <LineLayer id="coneLine" style={{ lineColor: '#ff7828', lineWidth: 1.5 }} />
         </ShapeSource>
       )}
+      {hitboxGeoJSON.features.length > 0 && (
+        <ShapeSource id="hitboxes" shape={hitboxGeoJSON as any}>
+          <FillLayer id="hitboxFill" style={{ fillColor: ['get', 'color'] as any, fillOpacity: 0.35 }} />
+          <LineLayer id="hitboxLine" style={{ lineColor: ['get', 'color'] as any, lineWidth: 2 }} />
+        </ShapeSource>
+      )}
       {zonesGeoJSON.features.length > 0 && (
         <ShapeSource id="zones" shape={zonesGeoJSON as any}>
           <FillLayer id="zoneFill" style={{ fillColor: ['get', 'color'] as any, fillOpacity: 0.14 }} />
@@ -476,22 +502,10 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
         </View>
       </View>
 
-      {/* Debug overlay: live ping/throughput + per-enemy distance & shooting-cone
-          status, laid directly over the existing view — not a separate screen. */}
-      {debugMode && debugOpen && (
-        <View style={st.debugBar}>
-          <View style={st.iconTextRow}>
-            <Icon name="bug" size={12} color="#40ff80" />
-            <Text style={st.debugBarTxt}>Ping {pingMs ?? '–'}ms · {ticksPerSec}/s</Text>
-          </View>
-          {debugEnemies.map(e => (
-            <View key={e.userId} style={st.iconTextRow}>
-              <Icon name={e.inCone ? 'crosshair' : 'circle'} size={11} color={e.inCone ? '#ff4040' : '#80e0a0'} />
-              <Text style={[st.debugBarTxt, e.inCone && st.debugBarTxtHot]}>
-                {e.username}: {Math.round(e.distanceM)}m
-              </Text>
-            </View>
-          ))}
+      {telemetry.heading === null && (
+        <View style={st.geoWarn}>
+          <Icon name="compass" size={12} color="#100" />
+          <Text style={st.geoTxt}>Kein Kompass — Handy kurz in einer 8 bewegen</Text>
         </View>
       )}
 
@@ -586,6 +600,27 @@ export default function GameScreen({ sessionId }: { sessionId: string }) {
 
         {/* Shoot button floats over camera modes */}
         {shootButton && <View style={st.shootWrap}>{shootButton}</View>}
+
+        {/* Debug overlay: floats directly over whichever view is active —
+            rendered last (like shootWrap above) so it actually paints on top
+            of the native MapView/CameraView instead of underneath it; text
+            only, doesn't push any other layout down or intercept taps. */}
+        {debugMode && debugOpen && (
+          <View style={st.debugBar} pointerEvents="none">
+            <View style={st.iconTextRow}>
+              <Icon name="bug" size={12} color="#40ff80" />
+              <Text style={st.debugBarTxt}>Ping {pingMs ?? '–'}ms · {ticksPerSec}/s</Text>
+            </View>
+            {debugEnemies.map(e => (
+              <View key={e.userId} style={st.iconTextRow}>
+                <Icon name={e.inCone ? 'crosshair' : 'circle'} size={11} color={e.inCone ? '#ff4040' : '#80e0a0'} />
+                <Text style={[st.debugBarTxt, e.inCone && st.debugBarTxtHot]}>
+                  {e.username}: {Math.round(e.distanceM)}m
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
       {/* Endgame overlay */}
@@ -724,8 +759,9 @@ const st = StyleSheet.create({
   endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
   debugBar: {
+    position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center',
-    backgroundColor: 'rgba(8,16,8,.9)', borderBottomWidth: 1, borderBottomColor: '#40ff80',
+    backgroundColor: 'rgba(8,16,8,.85)', borderBottomWidth: 1, borderBottomColor: '#40ff80',
     paddingHorizontal: 12, paddingVertical: 6,
   },
   debugBarTxt: { color: '#a0e0a0', fontSize: 11, fontWeight: '700' },
