@@ -3,6 +3,7 @@ package one.srz.aropswear.ui
 import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,8 +22,12 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import one.srz.aropswear.model.PairingRepository
 
-/** Shown until the phone scans our QR code and claims us (see
- *  MainActivity, which swaps this out for RadarScreen once claimed). */
+/**
+ * Shown until the phone scans our QR code and claims us (see MainActivity,
+ * which swaps this out for RadarScreen once claimed). Tap the code to get a
+ * fresh one — useful if the phone's scan attempt failed (e.g. the code
+ * scrolled off screen mid-scan) or you want to pair a different phone.
+ */
 @Composable
 fun PairingScreen() {
     val token by PairingRepository.token.collectAsState()
@@ -33,9 +38,13 @@ fun PairingScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Image(bitmap = qrBitmap.asImageBitmap(), contentDescription = null)
+        Image(
+            bitmap = qrBitmap.asImageBitmap(),
+            contentDescription = null,
+            modifier = Modifier.clickable { PairingRepository.regenerateToken() },
+        )
         Text(
-            text = "Mit Handy-App scannen",
+            text = "Mit Handy-App scannen · antippen für neuen Code",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.padding(top = 8.dp),

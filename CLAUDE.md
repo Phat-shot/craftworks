@@ -36,7 +36,7 @@ node server/test/arops_modes.test.js
 # Syntax aller Server-Kernfiles
 node --check server/src/socket.js && node --check server/src/game/arops.js && node --check server/src/game/worker.js
 
-# App: Typecheck + Bundle-Probe (fängt Metro-Auflösungsfehler VOR EAS)
+# App: Typecheck + Bundle-Probe (fängt Metro-Auflösungsfehler vor dem CI-APK-Build)
 cd apps/arops-mobile && npx tsc --noEmit
 CI=1 npx expo export:embed --eager --platform android --dev false
 ```
@@ -52,10 +52,23 @@ cd apps/arops-mobile && npm run sync-shared
 ## Deployment
 
 - **Test-Server**: `docker pull ghcr.io/phat-shot/craftworks:test` und als eigener
-  Container auf eigenem Port laufen lassen (eigene DATABASE_URL verwenden, nie die Prod-DB!)
-- **Prod** (dev.srz.one): `:latest` nach Merge auf main
-- **APK**: `cd apps/arops-mobile && npx eas-cli@latest build -p android --profile preview`
-  — oder den GitHub-Workflow "APK Build" manuell triggern (braucht Secret `EXPO_TOKEN`)
+  Container auf eigenem Port laufen lassen (eigene DATABASE_URL verwenden, nie die Prod-DB!),
+  Endpoint `https://dev.srz.one`
+- **Prod**: `:latest` nach Merge auf main, Endpoint `https://arops.srz.one`
+- **App-Backend-Endpoint ist ein Build-Time-Env-Var** (`SERVER_URL`, ausgewertet in
+  `apps/arops-mobile/app.config.js` → `expo-constants`, siehe `src/config.ts`) —
+  gesetzt vom Branch im GitHub-Workflow "APK Build" (test → dev.srz.one,
+  main → arops.srz.one). Nie hart im Code für einen Channel überschreiben
+- **APK**: baut automatisch bei jedem Push auf `main`/`test` (Workflow "APK Build",
+  analog zu "Build & Push Docker Image") — kein EAS, kein Kontingent, kein
+  `EXPO_TOKEN`-Secret nötig. Artifact im jeweiligen Workflow-Run herunterladen.
+  Wear-OS-Companion analog über "Wear OS APK Build" (`apps/arops-wear/`), ebenfalls
+  bei jedem Push auf `main`/`test`
+- **Versionsschema**: `apps/arops-mobile/app.json` `"version"` ist die Quelle für den
+  APK-Dateinamen (`ar-ops-android-beta-v<Version>.apk`, Wear-Pendant
+  `ar-ops-wear-beta-v<Version>.apk` aus `apps/arops-wear/app/build.gradle.kts`
+  `versionName`). Jedes Release (Merge auf main) **+1**, jeder Bugfix auf test
+  **+0.1** — von Hand vor dem Build hochzählen, beide Apps zusammen
 
 ## Architektur-Invarianten (nicht brechen)
 
@@ -76,5 +89,6 @@ cd apps/arops-mobile && npm run sync-shared
 - Lobby-Codes: `nanoid(8).toUpperCase()` — enthalten auch `-` und `_`
 - Access-Tokens: 15 min TTL; App refresht via `tryRefresh()` in `src/api.ts`
 - MapLibre-`MapView` niemals in ein ScrollView packen (Android frisst Taps)
-- `expo export:embed` lokal ausführen = exakte EAS-Bundle-Simulation
+- `expo export:embed` lokal ausführen = exakte Simulation des Bundle-Schritts,
+  den `expo prebuild` + `gradlew assembleRelease` im CI-Workflow durchlaufen
 - Fish-Shell beim User: keine Heredocs in Anleitungen

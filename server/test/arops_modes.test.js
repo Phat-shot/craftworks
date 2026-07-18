@@ -7,6 +7,16 @@ const assert = require('assert');
 const arops = require('../src/game/arops');
 const shared = require('../../packages/arops-shared/dist/src');
 
+// These tests predate "Auto" mode (field-size-derived timings/hitConfig, ON
+// by default) and are deliberately about the STABLE, known DEFAULTS/
+// DEFAULT_HIT_CONFIG values with tiny explicit ms-timings for fast test
+// execution — scaleCoreConfig() has its own dedicated tests in
+// packages/arops-shared. Force autoScale off here unless a test opts in.
+function createGame(sessionId, players, workshopConfig) {
+  const wc = { ...workshopConfig, ar_settings: { autoScale: false, ...(workshopConfig.ar_settings || {}) } };
+  return arops.createAropsGame(sessionId, players, wc);
+}
+
 const MUC = { lat: 48.13743, lon: 11.57549 };
 const FIELD = [0, 90, 180, 270].map(b => shared.destinationPoint(MUC, b, 200));
 let passed = 0, failed = 0;
@@ -47,7 +57,7 @@ const Z2 = shared.destinationPoint(MUC, 270, 100);
 // ═══ DOMINATION ═════════════════════════════════════════════
 console.log('\n═══ DOMINATION ═══');
 {
-  const gs = arops.createAropsGame('dom1',
+  const gs = createGame('dom1',
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' },
      { userId: 'A2', username: 'A2' }, { userId: 'B2', username: 'B2' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
@@ -104,7 +114,7 @@ console.log('\n═══ DOMINATION ═══');
 // ═══ FREEZE MECHANIC ════════════════════════════════════════
 console.log('\n═══ FREEZE ═══');
 {
-  const gs = arops.createAropsGame('frz1',
+  const gs = createGame('frz1',
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       timings: { ...FAST, freezeMs: 60_000 }, hitCooldownMs: 50 } });
@@ -164,7 +174,7 @@ console.log('\n═══ FREEZE ═══');
 // ═══ CTF ════════════════════════════════════════════════════
 console.log('\n═══ CTF ═══');
 {
-  const gs = arops.createAropsGame('ctf1',
+  const gs = createGame('ctf1',
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
     { ar_settings: { polygon: FIELD, subMode: 'ctf',
       timings: FAST, targetCaptures: 2, gameDurationMs: 600_000, hitCooldownMs: 50 } });
@@ -266,7 +276,7 @@ console.log('\n═══ CTF ═══');
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {
-  const mk = () => arops.createAropsGame('snd' + Math.random(),
+  const mk = () => createGame('snd' + Math.random(),
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
     { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1],
       timings: FAST, gameDurationMs: 600_000 } });
@@ -311,10 +321,10 @@ console.log('\n═══ SEEK & DESTROY ═══');
   });
 
   check('zones required for snd/domination', () => {
-    assert.throws(() => arops.createAropsGame('bad',
+    assert.throws(() => createGame('bad',
       [{ userId: 'x', username: 'x' }, { userId: 'y', username: 'y' }],
       { ar_settings: { polygon: FIELD, subMode: 'seek_destroy' } }), /need_zones/);
-    assert.throws(() => arops.createAropsGame('bad2',
+    assert.throws(() => createGame('bad2',
       [{ userId: 'x', username: 'x' }, { userId: 'y', username: 'y' }],
       { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1] } }), /need_zones/);
   });
@@ -324,7 +334,7 @@ console.log('\n═══ SEEK & DESTROY ═══');
 console.log('\n═══ H&S PERKS ═══');
 {
   const mkHS = () => {
-    const gs = arops.createAropsGame('hsperk' + Math.random(),
+    const gs = createGame('hsperk' + Math.random(),
       [{ userId: 'S1', username: 'S1' }, { userId: 'H1', username: 'H1' }, { userId: 'H2', username: 'H2' }],
       { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
         roles: { S1: 'seeker', H1: 'hider', H2: 'hider' },
@@ -428,7 +438,7 @@ console.log('\n═══ H&S PERKS ═══');
   });
 
   check('Drohne/Cloak/Fake-Marker/Aufscheuchen rejected outside hide_and_seek', () => {
-    const gs = arops.createAropsGame('teamperk' + Math.random(),
+    const gs = createGame('teamperk' + Math.random(),
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
       { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2], timings: FAST } });
     for (const perk of ['drone', 'cloak', 'fake_marker', 'aufscheuchen']) {
@@ -446,7 +456,7 @@ console.log('\n═══ FOUND-HIDER FATE ═══');
   const posH2 = shared.destinationPoint(MUC, 90, 30);
 
   const mkFound = (foundMode) => {
-    const gs = arops.createAropsGame('found' + Math.random(),
+    const gs = createGame('found' + Math.random(),
       [{ userId: 'S', username: 'S' }, { userId: 'H1', username: 'H1' }, { userId: 'H2', username: 'H2' }],
       { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
         roles: { S: 'seeker', H1: 'hider', H2: 'hider' },
@@ -513,7 +523,7 @@ console.log('\n═══ BOTS & DEBUG MODE ═══');
   }
 
   check('bot seeker chasing a stationary hider strictly closes distance', () => {
-    const gs = arops.createAropsGame('botA' + Math.random(),
+    const gs = createGame('botA' + Math.random(),
       [
         { userId: 'H1', username: 'H1' },
         { userId: 'bot_S', username: 'Bot S', isBot: true },
@@ -539,7 +549,7 @@ console.log('\n═══ BOTS & DEBUG MODE ═══');
   });
 
   check('bot hider fleeing a stationary seeker strictly increases distance', () => {
-    const gs = arops.createAropsGame('botB' + Math.random(),
+    const gs = createGame('botB' + Math.random(),
       [
         { userId: 'S1', username: 'S1' },
         { userId: 'bot_H', username: 'Bot H', isBot: true },
@@ -562,7 +572,7 @@ console.log('\n═══ BOTS & DEBUG MODE ═══');
   });
 
   check('solo debug session: explicit hider role is respected, not force-switched to seeker', () => {
-    const gs = arops.createAropsGame('solo' + Math.random(),
+    const gs = createGame('solo' + Math.random(),
       [{ userId: 'H1', username: 'H1' }],
       { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
         roles: { H1: 'hider' }, debugMode: true,
@@ -571,7 +581,7 @@ console.log('\n═══ BOTS & DEBUG MODE ═══');
   });
 
   check('solo debug hider auto-found by geofence never ends the game via checkWin', () => {
-    const gs = arops.createAropsGame('solo2' + Math.random(),
+    const gs = createGame('solo2' + Math.random(),
       [{ userId: 'H1', username: 'H1' }],
       { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
         roles: { H1: 'hider' }, debugMode: true,
@@ -593,7 +603,7 @@ console.log('\n═══ BOTS & DEBUG MODE ═══');
     // No DB in these engine-level tests — this documents the contract:
     // createAropsGame never touches a database, so a synthetic {isBot:true}
     // player is accepted with no special-casing anywhere except tickBots.
-    const gs = arops.createAropsGame('botC' + Math.random(),
+    const gs = createGame('botC' + Math.random(),
       [
         { userId: 'H1', username: 'H1' },
         { userId: 'bot_1', username: 'Bot 1', isBot: true },
@@ -614,7 +624,7 @@ console.log('\n═══ BOTS & DEBUG MODE ═══');
 console.log('\n═══ DEBUG-MODE REVEAL ═══');
 {
   const mk = (debugMode) => {
-    const gs = arops.createAropsGame('debugreveal' + Math.random(),
+    const gs = createGame('debugreveal' + Math.random(),
       [{ userId: 'S1', username: 'S1' }, { userId: 'H1', username: 'H1' }],
       { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
         roles: { S1: 'seeker', H1: 'hider' }, debugMode,
@@ -650,7 +660,7 @@ console.log('\n═══ DEBUG-MODE REVEAL ═══');
 console.log('\n═══ MISS-DIAGNOSE ═══');
 {
   // Same team → no_candidates
-  const gs = arops.createAropsGame('diag1',
+  const gs = createGame('diag1',
     [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       teams: { A1: 'a', A2: 'a' }, timings: FAST, hitCooldownMs: 50 } });
@@ -666,7 +676,7 @@ console.log('\n═══ MISS-DIAGNOSE ═══');
 }
 {
   // Stale target telemetry → target_stale
-  const gs = arops.createAropsGame('diag2',
+  const gs = createGame('diag2',
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       timings: FAST, hitCooldownMs: 50 } });

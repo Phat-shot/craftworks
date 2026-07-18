@@ -71,6 +71,16 @@ const REF_AREA_M2 = 224 * 224; // matches scaleCoreConfig's internal REF_L_M
     const tiny = (0, timings_1.scaleCoreConfig)(2000);
     strict_1.default.ok(tiny.droneCooldownMs <= 60000);
 });
+(0, node_test_1.test)('scaleCoreConfig: hitHalfWidthM matches the "Normal" manual preset at the reference field size', () => {
+    const ref = (0, timings_1.scaleCoreConfig)(REF_AREA_M2);
+    strict_1.default.ok(Math.abs(ref.hitHalfWidthM - 1) < 0.05);
+});
+(0, node_test_1.test)('scaleCoreConfig: hitHalfWidthM scales with field size, within clamps', () => {
+    const tiny = (0, timings_1.scaleCoreConfig)(2000);
+    const huge = (0, timings_1.scaleCoreConfig)(1000000000);
+    strict_1.default.equal(tiny.hitHalfWidthM, 0.5);
+    strict_1.default.equal(huge.hitHalfWidthM, 5);
+});
 (0, node_test_1.test)('zone: inside / outside', () => {
     const z = { id: 'z1', lat: MUC.lat, lon: MUC.lon, radiusM: 20 };
     strict_1.default.equal((0, timings_1.isInZone)(MUC, z), true);

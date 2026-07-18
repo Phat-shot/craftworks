@@ -7,7 +7,12 @@
 //  sane bounds. Every value can be overridden via ar_settings.
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.validateZones = exports.distanceToZoneM = exports.isInZone = exports.scaleCoreConfig = exports.scaleDroneRangeM = exports.scaleTimings = void 0;
+exports.scaleTimings = scaleTimings;
+exports.scaleDroneRangeM = scaleDroneRangeM;
+exports.scaleCoreConfig = scaleCoreConfig;
+exports.isInZone = isInZone;
+exports.distanceToZoneM = distanceToZoneM;
+exports.validateZones = validateZones;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 /** Compute all mode timings from the playfield area. */
 function scaleTimings(areaM2) {
@@ -27,13 +32,11 @@ function scaleTimings(areaM2) {
         bombTimerMs: clamp(((L / 1.4) + 30) * 1200, 90000, 300000),
     };
 }
-exports.scaleTimings = scaleTimings;
 /** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
 function scaleDroneRangeM(areaM2) {
     const L = Math.sqrt(Math.max(1, areaM2));
     return clamp(L * 0.4, 50, 200);
 }
-exports.scaleDroneRangeM = scaleDroneRangeM;
 // A "medium" reference field (~50,000 m², L≈224m) roughly matching the
 // fixed defaults these values replace (server/src/game/arops.js DEFAULTS) —
 // cooldowns scale down from their reference value as the field grows past
@@ -54,6 +57,7 @@ function scaleCoreConfig(areaM2) {
         hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45000, 600000),
         gameDurationMs: clamp((L / 1.4) * 1000 * 2.5, 300000, 3600000),
         hitRangeM: clamp(L * 0.5, 20, 500),
+        hitHalfWidthM: clamp((L / REF_L_M) * 1, 0.5, 5),
         radarCooldownMs: cooldown(15 * 60000),
         droneCooldownMs: cooldown(60000),
         cloakCooldownMs: cooldown(90000),
@@ -61,17 +65,14 @@ function scaleCoreConfig(areaM2) {
         aufscheuchenCooldownMs: cooldown(45000),
     };
 }
-exports.scaleCoreConfig = scaleCoreConfig;
 const geo_1 = require("./geo");
 function isInZone(p, z) {
     return (0, geo_1.haversineMeters)(p, { lat: z.lat, lon: z.lon }) <= z.radiusM;
 }
-exports.isInZone = isInZone;
 /** Negative = inside (meters past the rim), positive = outside. */
 function distanceToZoneM(p, z) {
     return (0, geo_1.haversineMeters)(p, { lat: z.lat, lon: z.lon }) - z.radiusM;
 }
-exports.distanceToZoneM = distanceToZoneM;
 // ── Zone validation (host setup) ────────────────────────────
 const geo_2 = require("./geo");
 /**
@@ -99,4 +100,3 @@ function validateZones(zones, polygon, maxZones = 8) {
     }
     return { ok: errors.length === 0, errors };
 }
-exports.validateZones = validateZones;
