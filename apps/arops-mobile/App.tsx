@@ -24,7 +24,17 @@ export default function App() {
   // Icon glyphs otherwise render blank on the first paint of every single
   // <Icon> instance (each one lazily self-loads its font in the background)
   // — explicitly waiting once here up front avoids that race entirely.
-  const [fontsLoaded] = useFonts({ ...MaterialCommunityIcons.font, ...Ionicons.font });
+  const [fontsLoaded, fontError] = useFonts({ ...MaterialCommunityIcons.font, ...Ionicons.font });
+  // Loading can fail or hang in a standalone build (asset packaging, device
+  // quirks) — never block the whole app on it forever. On error or after a
+  // timeout we proceed anyway; worst case icons render blank, same as before
+  // this gate existed, instead of the app being stuck on the spinner.
+  const [fontTimedOut, setFontTimedOut] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFontTimedOut(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+  const fontsReady = fontsLoaded || !!fontError || fontTimedOut;
 
   useEffect(() => {
     restoreSession()
@@ -44,7 +54,7 @@ export default function App() {
     }
   };
 
-  if (!fontsLoaded) {
+  if (!fontsReady) {
     return (
       <View style={{ flex: 1, backgroundColor: '#0a0810' }}>
         <StatusBar style="light" />
