@@ -1,14 +1,17 @@
 name: Wear OS APK Build
-# Läuft automatisch bei jedem Push auf main/test — analog zu docker.yml.
-# Baut die AR-Ops-Companion-App für Wear OS (apps/arops-wear/) — ein
-# eigenständiges natives Kotlin/Gradle-Projekt, KEIN Expo/RN (dafür gibt es
-# keinen Wear-OS-Support). Läuft nie standalone: Companion-App, die den
-# Spielstand vom gekoppelten Handy über die Data-Layer-API empfängt — hat
-# deshalb (anders als die Handy-App) keinen eigenen Backend-Endpoint und
-# damit keine Channel-Unterscheidung nötig.
+# Läuft automatisch bei Push auf main/test — analog zu docker.yml — aber nur
+# bei Änderungen an apps/arops-wear/ selbst (kein Bezug zum shared Package,
+# rein natives Kotlin/Gradle-Projekt ohne gemeinsamen Code mit der Handy-App).
+# KEIN Expo/RN (dafür gibt es keinen Wear-OS-Support). Läuft nie standalone:
+# Companion-App, die den Spielstand vom gekoppelten Handy über die
+# Data-Layer-API empfängt — hat deshalb (anders als die Handy-App) keinen
+# eigenen Backend-Endpoint und damit keine Channel-Unterscheidung nötig.
 on:
   push:
     branches: [main, test]
+    paths:
+      - 'apps/arops-wear/**'
+      - '.github/workflows/wear-apk.yml'
 jobs:
   gradle-build:
     runs-on: ubuntu-latest

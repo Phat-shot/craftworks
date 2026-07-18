@@ -1,5 +1,8 @@
 name: APK Build
-# Läuft automatisch bei jedem Push auf main/test — analog zu docker.yml:
+# Läuft automatisch bei Push auf main/test — analog zu docker.yml — aber nur
+# wenn sich tatsächlich etwas an der App oder ihrer einzigen Abhängigkeit
+# (das shared Package, als vendored Tarball eingebunden) geändert hat; ein
+# reiner Server-/Doku-Commit soll keinen kompletten Android-Build anstoßen.
 # Branch bestimmt den Backend-Endpoint (main = arops.srz.one, test =
 # dev.srz.one), keine manuelle Eingabe mehr nötig. Baut lokal in der CI per
 # Gradle statt in der EAS-Cloud — kein EAS-Kontingent, kein EXPO_TOKEN-Secret.
@@ -19,6 +22,10 @@ name: APK Build
 on:
   push:
     branches: [main, test]
+    paths:
+      - 'apps/arops-mobile/**'
+      - 'packages/arops-shared/**'
+      - '.github/workflows/apk.yml'
 jobs:
   gradle-build:
     runs-on: ubuntu-latest
