@@ -561,6 +561,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
   const isFree2D = viewMode === 'comic2d';
+  // Only scan for the IR beacon when the host actually picked IR mode — in
+  // compass mode (the default) there's nothing to gain from running the
+  // frame processor at all, just camera/native overhead and unnecessary
+  // exposure to a still-experimental native code path for no benefit.
+  const irEnabled = snap?.hitTrackingMode === 'ir';
   // Whichever heading is actually meaningful for how the phone is currently
   // expected to be held: flat/screen-up in pure map mode (top-edge heading),
   // upright/screen-towards-you once the camera is showing (camera-forward
@@ -937,7 +942,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           </TouchableOpacity>
         )}
         {hasCam && (
-          <CameraLayer frameProcessor={irScan.frameProcessor}>
+          <CameraLayer frameProcessor={irEnabled ? irScan.frameProcessor : undefined}>
             {/* Same crosshair/lane-funnel/target bundle in every camera-showing
                 mode — it used to only render correctly in pure camera mode
                 (split's half-height container broke the lane math, overlay
@@ -1052,14 +1057,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       )}
 
       {/* IR-Scan/Uhr-Status, icon-only, oben links — analog dem Kompass-Symbol
-          in der Lobby: reine Statusanzeige. IR-Icon links vom Uhr-Icon: gold
-          wenn die Kamera gerade (innerhalb der letzten 3s) ein gültiges
-          Beacon decodiert hat, sonst gedimmt. Keine Kopplungs-/
-          Verbindungsaktion mehr hier für die Uhr (läuft nur noch übers
-          Hauptmenü). */}
-      <View style={[st.espStatusFab, irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) && st.modeBtnActive]}>
-        <Icon name="flash" size={18} color={irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) ? '#f0c840' : '#605850'} />
-      </View>
+          in der Lobby: reine Statusanzeige. IR-Icon links vom Uhr-Icon (nur
+          sichtbar, wenn IR-Modus überhaupt aktiv ist — sonst wird ja auch
+          gar nicht gescannt, siehe irEnabled oben): gold wenn die Kamera
+          gerade (innerhalb der letzten 3s) ein gültiges Beacon decodiert
+          hat, sonst gedimmt. Keine Kopplungs-/Verbindungsaktion mehr hier
+          für die Uhr (läuft nur noch übers Hauptmenü). */}
+      {irEnabled && (
+        <View style={[st.espStatusFab, irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) && st.modeBtnActive]}>
+          <Icon name="flash" size={18} color={irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) ? '#f0c840' : '#605850'} />
+        </View>
+      )}
       <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
         <Icon name="watch" size={18} color={watchSync.paired ? '#f0c840' : '#605850'} />
       </View>
