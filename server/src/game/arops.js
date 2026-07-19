@@ -15,6 +15,12 @@
 //  All timings scale with field size (shared scaleTimings).
 //  Team modes use FREEZE on hit: frozen players cannot shoot,
 //  capture, carry or plant; moving >15 m extends the freeze.
+//
+//  Steckbriefe (declarative descriptions of the modes above and of the
+//  hider/seeker/team_member player types — name, short description,
+//  hasBases/hasTargets, team-vs-individual, shot range/width, unique
+//  perks) live in packages/arops-shared/src/profiles.ts. Pure metadata for
+//  now, not yet a behavior source — see that file's own header comment.
 // ═══════════════════════════════════════════════════════════
 const shared = require('@craftworks/arops-shared');
 

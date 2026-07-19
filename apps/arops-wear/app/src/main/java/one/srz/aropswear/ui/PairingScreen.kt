@@ -35,7 +35,7 @@ import one.srz.aropswear.model.PairingRepository
  * which swaps this out for RadarScreen once claimed).
  */
 @Composable
-fun PairingScreen() {
+fun PairingScreen(onTapCode: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val token by PairingRepository.token.collectAsState()
@@ -62,24 +62,24 @@ fun PairingScreen() {
         Image(
             bitmap = qrBitmap.asImageBitmap(),
             contentDescription = null,
-            // Tap: check RIGHT NOW whether the phone already wrote a claim
-            // for this token (don't just wait for the next 5s poll) — if
-            // one's there, PairingRepository.tryClaim flips `claimed` and
-            // MainActivity swaps to RadarScreen on its own. Only if nothing
-            // was found do we regenerate the token — regenerating
-            // unconditionally on every tap (the old behavior) would have
-            // thrown away a claim the phone already wrote but that this
-            // screen just hadn't picked up yet, making a slow/missed poll
-            // *worse* instead of giving the user a way to recover from it.
+            // Tap: still check RIGHT NOW whether the phone already wrote a
+            // claim for this token (don't just wait for the next 5s poll —
+            // if one's there, PairingRepository.tryClaim flips `claimed` and
+            // MainActivity's own claimed-effect swaps to the LIVE
+            // RadarScreen). But the tap's main, immediate job is now a debug
+            // preview: jump to RadarScreen right away regardless of whether
+            // a claim was found, showing either live data (if one was) or
+            // the screen's own empty/no-data fallback — lets you check the
+            // watch's own compass/radar rendering without needing a real
+            // phone pairing first. Long-press on RadarScreen still gets you
+            // back here (see ui/RadarScreen.kt).
             modifier = Modifier.size(170.dp).clickable {
-                scope.launch {
-                    val claimed = PairingRepository.checkClaimViaDataLayer(context)
-                    if (!claimed) PairingRepository.regenerateToken()
-                }
+                scope.launch { PairingRepository.checkClaimViaDataLayer(context) }
+                onTapCode()
             },
         )
         Text(
-            text = "Scannen · Tippen = prüfen/neu",
+            text = "Scannen · Tippen = Radar-Vorschau",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.padding(top = 4.dp),

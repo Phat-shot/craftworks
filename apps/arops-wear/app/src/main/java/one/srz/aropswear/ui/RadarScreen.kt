@@ -37,7 +37,7 @@ import kotlin.math.sin
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun RadarScreen(state: GameState) {
+fun RadarScreen(state: GameState, onTap: () -> Unit, onLongPress: () -> Unit) {
     var tileBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     // The watch's OWN compass, not just the phone-pushed heading — more
     // responsive, and correct even if the phone (in a pocket, say) is
@@ -76,16 +76,20 @@ fun RadarScreen(state: GameState) {
 
         val mm = state.remainingS / 60
         val ss = state.remainingS % 60
-        // Long-press: escape hatch back to the pairing screen. Needed
-        // because `claimed` now persists across app restarts (see
-        // PairingRepository) — without this, re-pairing a new phone or
+        // Tap: debug info screen (connection/pairing status, see
+        // ui/DebugScreen.kt). Long-press: escape hatch back to the pairing
+        // screen. Needed because `claimed` now persists across app restarts
+        // (see PairingRepository) — without this, re-pairing a new phone or
         // starting a fresh match would have no way back to the QR code.
         Text(
             text = "${state.phase} · $mm:${ss.toString().padStart(2, '0')}",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.align(Alignment.TopCenter)
-                .combinedClickable(onClick = {}, onLongClick = { PairingRepository.regenerateToken() }),
+                .combinedClickable(
+                    onClick = onTap,
+                    onLongClick = { PairingRepository.regenerateToken(); onLongPress() },
+                ),
         )
         if (watchHeading == null) {
             Text(

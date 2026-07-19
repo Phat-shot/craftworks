@@ -4,3 +4,4 @@ export * from './hit';
 export * from './geofence';
 export * from './timings';
 export * from './compass';
+export * from './profiles';
