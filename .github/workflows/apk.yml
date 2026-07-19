@@ -7,6 +7,15 @@ name: APK Build
 # (main = arops.srz.one, test = dev.srz.one). Baut lokal in der CI per
 # Gradle statt in der EAS-Cloud — kein EAS-Kontingent, kein EXPO_TOKEN-Secret.
 #
+# Branch bestimmt außerdem APP_CHANNEL (main/test, siehe app.config.js):
+# Name ("AR Ops" / "AR Ops Beta"), Android-Package (one.srz.arops /
+# one.srz.arops.beta) und Icon (mit/ohne BETA-Ribbon, auch im App-Drawer)
+# unterscheiden sich, damit beide gleichzeitig auf demselben Gerät
+# installiert sein können, statt sich beim Sideload gegenseitig zu
+# überschreiben. APK-Dateiname spiegelt das (main: ar-ops-android-v<Version>,
+# test: ar-ops-android-beta-v<Version>). BUILD_TIME wird ebenfalls gesetzt
+# und in der App unter Einstellungen angezeigt (App.tsx).
+#
 # assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
 # laufenden Metro-Dev-Server und fragt beim Start nach dessen URL ("Unable
 # to load script", wenn man dort z.B. eine normale Webseiten-URL einträgt —
@@ -70,13 +79,16 @@ jobs:
         working-directory: apps/arops-mobile
         run: npm install --no-audit --no-fund
 
-      - name: Backend-Endpoint für den Branch setzen
+      - name: Backend-Endpoint + App-Channel für den Branch setzen
         run: |
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             echo "SERVER_URL=https://arops.srz.one" >> "$GITHUB_ENV"
+            echo "APP_CHANNEL=main" >> "$GITHUB_ENV"
           else
             echo "SERVER_URL=https://dev.srz.one" >> "$GITHUB_ENV"
+            echo "APP_CHANNEL=test" >> "$GITHUB_ENV"
           fi
+          echo "BUILD_TIME=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "$GITHUB_ENV"
 
       - name: Expo prebuild (generiert das native android/-Projekt)
         working-directory: apps/arops-mobile
@@ -92,11 +104,15 @@ jobs:
         working-directory: apps/arops-mobile/android
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: APK umbenennen (ar-ops-android-beta-v<Version>.apk)
+      - name: "APK umbenennen (main: ar-ops-android-v<Version>.apk, test: ...-beta-v<Version>.apk)"
         working-directory: apps/arops-mobile
         run: |
           VERSION=$(node -p "require('./app.json').expo.version")
-          FILENAME="ar-ops-android-beta-v${VERSION}.apk"
+          if [ "$APP_CHANNEL" = "main" ]; then
+            FILENAME="ar-ops-android-v${VERSION}.apk"
+          else
+            FILENAME="ar-ops-android-beta-v${VERSION}.apk"
+          fi
           mv android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/$FILENAME"
           echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"
 

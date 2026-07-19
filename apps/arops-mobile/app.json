@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "icon": "./assets/icons/icon.png",
     "ios": {
       "bundleIdentifier": "one.srz.arops",
       "infoPlist": {
@@ -15,6 +16,10 @@
     },
     "android": {
       "package": "one.srz.arops",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icons/adaptive-foreground.png",
+        "backgroundColor": "#1a1206"
+      },
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",

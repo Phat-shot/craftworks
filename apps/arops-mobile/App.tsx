@@ -5,7 +5,7 @@ import { useFonts } from 'expo-font';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { restoreSession, createArLobby, getUser, logout } from './src/api';
-import { SERVER_URL } from './src/config';
+import { SERVER_URL, BUILD_TIME } from './src/config';
 import Icon from './src/components/Icon';
 import { useWatchSync } from './src/hooks/useWatchSync';
 import { useEspSync } from './src/hooks/useEspSync';
@@ -160,6 +160,7 @@ export default function App() {
               <TouchableOpacity onPress={() => setSettingsOpen(false)}><Icon name="close" size={18} color="#c0a0f0" /></TouchableOpacity>
             </View>
             <Text style={st.modalLine}>Angemeldet als {getUser()?.username}</Text>
+            <Text style={st.modalHint}>Build: {BUILD_TIME}</Text>
             <TouchableOpacity style={st.logoutBtn} onPress={async () => {
               await logout();
               setSettingsOpen(false);
