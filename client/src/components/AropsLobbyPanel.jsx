@@ -46,11 +46,11 @@ const DURATION_OPTIONS = [
 ];
 // Short labels — 5 modes need to fit on one line.
 const SUB_MODES = [
-  { id: 'hide_and_seek', label: '🫥 H&S',        zones: 0 },
-  { id: 'domination',    label: '🎯 Domination', zones: 2 },
-  { id: 'ctf',           label: '🚩 CtF',        zones: 0 },
-  { id: 'seek_destroy',  label: '💣 Detonation', zones: 1 },
-  { id: 'deathmatch',    label: '💀 Deathmatch', zones: 0 },
+  { id: 'hide_and_seek', label: '🫥 H&S', zones: 0 },
+  { id: 'domination',    label: '🎯 DOM', zones: 2 },
+  { id: 'ctf',           label: '🚩 CtF', zones: 0 },
+  { id: 'seek_destroy',  label: '💣 Bomb', zones: 1 },
+  { id: 'deathmatch',    label: '💀 DM',   zones: 0 },
 ];
 // Modes with real team assignment — hide_and_seek (all 3 variants: classic,
 // ffa "Jeder gegen jeden", the_ship) has no teams at all (usesTeams: false

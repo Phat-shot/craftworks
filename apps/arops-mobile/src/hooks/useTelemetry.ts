@@ -34,16 +34,14 @@ export interface TelemetryState {
 }
 
 /**
- * @param enabled Gates the SENSOR side (GPS watch + magnetometer/accelerometer) —
- *   defaults to true. Called once from App.tsx with `enabled` true from the
- *   moment the Lobby screen is reachable (not just once GameScreen mounts),
- *   so GPS/compass have as long as possible to lock in before a match
- *   actually starts, instead of only starting cold at "Start Game". The
- *   SEND side (socket emission) stays independently gated by `sessionId`
- *   being non-null (only a real, started game session has an ar_ops game
- *   state on the server for telemetry to land in — the lobby itself has no
- *   such session yet) — callers pass `sessionId` as null while still in the
- *   lobby even though `enabled` is already true.
+ * @param enabled Gates the SENSOR side (GPS watch + magnetometer/accelerometer).
+ *   Defaults to true (GameScreen's normal usage — starts cold when the game
+ *   itself mounts). A prior attempt at warming this up earlier (hoisted to
+ *   App.tsx, starting as soon as the Lobby screen is reachable) was reverted
+ *   after it correlated with the whole app becoming unresponsive on a real
+ *   device — root cause not confirmed, but this hook now only ever runs
+ *   scoped to GameScreen's own lifetime again, same as before that attempt.
+ *   Revisit warming this up earlier only with real-device verification.
  */
 export function useTelemetry(socket: Socket | null, sessionId: string | null, enabled = true): TelemetryState & {
   /** Snapshot of the current fused sample — call at camera-trigger time. */

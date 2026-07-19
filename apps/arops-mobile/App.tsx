@@ -4,12 +4,11 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import { restoreSession, createArLobby, getUser, logout, getSocket } from './src/api';
+import { restoreSession, createArLobby, getUser, logout } from './src/api';
 import { SERVER_URL, BUILD_TIME } from './src/config';
 import Icon from './src/components/Icon';
 import { useWatchSync } from './src/hooks/useWatchSync';
 import { useEspSync } from './src/hooks/useEspSync';
-import { useTelemetry } from './src/hooks/useTelemetry';
 import WatchPairModal from './src/components/WatchPairModal';
 import LoginScreen from './src/screens/LoginScreen';
 import JoinLobbyScreen from './src/screens/JoinLobbyScreen';
@@ -32,19 +31,6 @@ export default function App() {
   const [watchPairOpen, setWatchPairOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-
-  // Hoisted above Lobby/Game so GPS+compass get as much lead time as
-  // possible to lock in before a match starts (see useTelemetry's own
-  // comment) — a single instance persists across the Lobby -> Game
-  // transition instead of GameScreen cold-starting it at "Start Game".
-  // Sensors free-run from the moment there's an actual screen to show
-  // (not during boot/login); the socket SEND side stays independently
-  // gated by sessionId being non-null (only 'game' has a real session).
-  // Lobby onward, not the whole app — starting this at 'menu'/'join' would
-  // request GPS/compass permissions before the player has even created or
-  // joined a lobby, for no benefit (nothing needs it yet).
-  const telemetryEnabled = route.name === 'lobby' || route.name === 'game';
-  const telemetry = useTelemetry(getSocket(), route.name === 'game' ? route.sessionId : null, telemetryEnabled);
 
   // A match used to close the whole app on back-press (Android's default
   // hardwareBackPress behavior with no handler on the root screen). Back now
@@ -142,10 +128,10 @@ export default function App() {
       )}
       {route.name === 'join' && <JoinLobbyScreen onJoined={(lobbyId) => setRoute({ name: 'lobby', lobbyId, isHost: false })} />}
       {route.name === 'lobby' && (
-        <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} telemetry={telemetry} />
+        <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} />
       )}
       {route.name === 'game' && (
-        <GameScreen sessionId={route.sessionId} watchSync={watchSync} onExit={() => setRoute({ name: 'menu' })} telemetry={telemetry} />
+        <GameScreen sessionId={route.sessionId} watchSync={watchSync} onExit={() => setRoute({ name: 'menu' })} />
       )}
 
       <WatchPairModal visible={watchPairOpen} onClose={() => setWatchPairOpen(false)} onClaim={watchSync.claim} />

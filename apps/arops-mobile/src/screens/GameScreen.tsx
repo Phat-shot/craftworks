@@ -111,17 +111,14 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
-export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: {
+export default function GameScreen({ sessionId, onExit, watchSync }: {
   sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
-  // Lifted to App.tsx (shared across Lobby + Game) so GPS/compass get a
-  // head start during the lobby instead of cold-starting here — see
-  // useTelemetry's own comment and App.tsx.
-  telemetry: ReturnType<typeof useTelemetry>;
 }) {
   useKeepAwake(); // screen lock would stop GPS → target_stale for everyone else
   const socket = getSocket();
   const me = getUser();
   const [snap, setSnap] = useState<Snap | null>(null);
+  const telemetry = useTelemetry(socket, sessionId);
   const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
   const [lastResult, setLastResult] = useState<Toast | null>(null);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
