@@ -50,6 +50,7 @@ const DEFAULTS = {
   revealTrapCooldownMs: 60_000,   // Scout class perk (any mode)
   revealTrapDurationMs: 20_000,   // how long a placed trap stays armed
   revealTrapRevealMs: 8_000,      // how long the triggered reveal stays visible to the owner
+  livesPerPlayer: 3,              // Deathmatch (respawn variant): lives before elimination
 };
 
 function now() { return Date.now(); }
@@ -504,6 +505,104 @@ const MODES = {
     isOpponentPair(gs, a, b) { return a.team !== b.team; },
     revealPosition() { return false; },
   },
+
+  // ── DEATHMATCH ────────────────────────────────────────────
+  // Team vs team, no objective besides frags. Two on-hit consequences
+  // (cfg.deathmatchOnHit, host-configurable): 'respawn' — lose a life,
+  // 'downed' until the base/respawn checkpoint (see applySpawnCheckpoint/
+  // tickSpawnRespawn) revives it, eliminated at 0 lives; or 'freeze' — the
+  // plain team-mode freeze mechanic, no lives lost at all. Reuses the exact
+  // same base_setup phase as CTF (captain places a base, see
+  // actionArSetBase) since the respawn variant needs somewhere to revive.
+  deathmatch: {
+    usesTeams: true,
+    initialPhase: () => 'base_setup',
+    shootPhases: ['live'],
+    phaseDurationMs(gs) {
+      return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
+        : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
+    },
+    initState(gs) {
+      gs.modeState = {
+        bases: { a: null, b: null },
+        lives: Object.fromEntries(Object.values(gs.players).map(p => [p.userId, gs.cfg.livesPerPlayer])),
+      };
+    },
+    isOpponentPair(gs, a, b) { return a.team !== b.team; },
+    canShoot() { return null; },
+    targetFilter(gs, shooter, c) { return c.team !== shooter.team; },
+    applyHit(gs, shooter, target, verdict, t) {
+      shooter.score += 10;
+      if (gs.cfg.deathmatchOnHit === 'respawn') {
+        const ms = gs.modeState;
+        const remaining = Math.max(0, (ms.lives[target.userId] ?? gs.cfg.livesPerPlayer) - 1);
+        ms.lives[target.userId] = remaining;
+        if (remaining <= 0) {
+          target.status = 'found'; // eliminated — out for the rest of the match
+          pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
+          this.checkWin(gs);
+        } else {
+          target.status = 'downed';
+          target.spawnDwellMs = 0;
+          pushEvent(gs, 'player_downed', { userId: target.userId, byUserId: shooter.userId, livesRemaining: remaining });
+        }
+      } else {
+        applyFreeze(gs, target, shooter.userId, t);
+      }
+    },
+    checkWin(gs) {
+      const remaining = { a: 0, b: 0 };
+      for (const p of Object.values(gs.players)) {
+        if (p.team && p.status !== 'found') remaining[p.team]++;
+      }
+      if (remaining.a === 0 && remaining.b === 0) return endGame(gs, 'draw');
+      if (remaining.a === 0) return endGame(gs, 'team_b');
+      if (remaining.b === 0) return endGame(gs, 'team_a');
+    },
+    tick(gs, t) {
+      const ms = gs.modeState;
+      if (gs.phase === 'base_setup') {
+        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) {
+          for (const tm of ['a', 'b']) {
+            if (!ms.bases[tm]) {
+              const cap = gs.players[gs.captains[tm]];
+              const pos = cap?.lastAccepted
+                || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
+              ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
+              pushEvent(gs, 'base_set', { team: tm, auto: true });
+            }
+          }
+          gs.phase = 'live';
+          gs.phaseStartTime = t;
+          pushEvent(gs, 'phase_change', { phase: 'live' });
+          applySpawnCheckpoint(gs, t);
+        }
+        return;
+      }
+      if (gs.phase !== 'live') return;
+      if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
+        // Time limit: 'respawn' compares total lives left, 'freeze' compares
+        // score (frags) — lives never change under 'freeze', so a lives
+        // comparison would always tie there.
+        const sums = { a: 0, b: 0 };
+        for (const p of Object.values(gs.players)) {
+          if (!p.team) continue;
+          sums[p.team] += gs.cfg.deathmatchOnHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score;
+        }
+        endGame(gs, sums.a > sums.b ? 'team_a' : sums.b > sums.a ? 'team_b' : 'draw');
+      }
+    },
+    onGameEnd() {},
+    snapshotExtras(gs) {
+      return {
+        lives: gs.modeState.lives,
+        livesPerPlayer: gs.cfg.livesPerPlayer,
+        deathmatchOnHit: gs.cfg.deathmatchOnHit,
+        bases: gs.modeState.bases,
+      };
+    },
+    revealPosition() { return false; },
+  },
 };
 
 function dropFlag(gs, flagTeam, carrier, t) {
@@ -619,6 +718,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
   cfg.autoScale = autoScale;
   cfg.foundMode = ['seeker', 'freeze'].includes(ar.foundMode) ? ar.foundMode : 'spectator';
   cfg.debugMode = ar.debugMode === true;
+  // Deathmatch: on-hit consequence — 'respawn' (lose a life, downed until
+  // the base/respawn checkpoint dwell revives it) is the mode's identity;
+  // 'freeze' reuses the plain team-mode freeze mechanic instead (no lives
+  // lost at all, closer to Domination/CTF's hit consequence).
+  cfg.deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
 
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG };
   if (auto) {
@@ -998,7 +1102,10 @@ function actionArHitAttempt(gs, userId, data) {
 //  CTF: captain sets the team base during base_setup
 // ═══════════════════════════════════════════════════════════
 function actionArSetBase(gs, userId, data) {
-  if (gs.subMode !== 'ctf') return { ok: false, err: 'wrong_mode' };
+  // Generic capability check (gs.modeState.bases) instead of a hardcoded
+  // mode name — CTF and Deathmatch both use the same base_setup/bases
+  // shape; any future base-having mode gets this for free.
+  if (!gs.modeState.bases) return { ok: false, err: 'wrong_mode' };
   if (gs.phase !== 'base_setup') return { ok: false, err: 'wrong_phase' };
   const p = gs.players[userId];
   if (!p) return { ok: false, err: 'not_in_game' };

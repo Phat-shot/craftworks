@@ -9,7 +9,7 @@ const profiles_1 = require("../src/profiles");
 // Mirrors the MODES keys in server/src/game/arops.js — kept as a literal list
 // here (not imported, arops-shared has no dependency on server) so this test
 // fails loudly if a mode gets added/renamed on one side but not the other.
-const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy'];
+const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch'];
 const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sniper', 'bomber'];
 (0, node_test_1.test)('GAME_MODE_PROFILES: has exactly the four known AR Ops modes', () => {
     strict_1.default.deepEqual(Object.keys(profiles_1.GAME_MODE_PROFILES).sort(), [...EXPECTED_MODE_IDS].sort());
@@ -41,7 +41,7 @@ const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sn
 });
 (0, node_test_1.test)('GAME_MODE_PROFILES: partyMode matches arops.js usesTeams (hide_and_seek is the only individual mode)', () => {
     strict_1.default.equal(profiles_1.GAME_MODE_PROFILES.hide_and_seek.partyMode, 'individual');
-    for (const id of ['domination', 'ctf', 'seek_destroy']) {
+    for (const id of ['domination', 'ctf', 'seek_destroy', 'deathmatch']) {
         strict_1.default.equal(profiles_1.GAME_MODE_PROFILES[id].partyMode, 'team', `${id} should be team-based`);
     }
 });

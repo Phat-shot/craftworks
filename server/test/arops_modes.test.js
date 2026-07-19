@@ -387,6 +387,100 @@ console.log('\n═══ Base/Respawn Checkpoint (CTF) ═══');
   });
 }
 
+// ═══ DEATHMATCH ═════════════════════════════════════════════
+console.log('\n═══ DEATHMATCH ═══');
+{
+  function setupDeathmatch(sessionId, over = {}) {
+    const gs = createGame(sessionId,
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'deathmatch', gameDurationMs: 600_000,
+        timings: { ...FAST, spawnCheckDwellMs: 300 }, ...over } });
+    const baseA = shared.destinationPoint(MUC, 270, 100);
+    const baseB = shared.destinationPoint(MUC, 90, 100);
+    arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: baseB.lat, lon: baseB.lon });
+    tel(gs, 'A1', baseA);
+    tel(gs, 'B1', baseB);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    return { gs, baseA, baseB };
+  }
+
+  check('starts in base_setup; captain-only (generic bases check, not hardcoded to ctf)', () => {
+    const { gs } = setupDeathmatch('dm_setup');
+    assert.equal(gs.phase, 'live'); // already ticked past setup in the helper
+    assert.equal(gs.players.A1.team, 'a');
+    assert.equal(gs.players.B1.team, 'b');
+  });
+
+  check('respawn variant: hit downs the target and costs a life, does not remove them from the match', () => {
+    const { gs, baseA, baseB } = setupDeathmatch('dm_respawn', { deathmatchOnHit: 'respawn', livesPerPlayer: 2 });
+    let posA = baseA, posB = baseB;
+    const brgA = shared.bearingDeg(baseA, MUC), brgB = shared.bearingDeg(baseB, MUC);
+    for (let i = 0; i < 12; i++) { posA = shared.destinationPoint(posA, brgA, 9); tel(gs, 'A1', posA); }
+    for (let i = 0; i < 12; i++) { posB = shared.destinationPoint(posB, brgB, 9); tel(gs, 'B1', posB); }
+    const heading = shared.bearingDeg(posA, posB);
+    TS += 1100;
+    const r = arops.actionArHitAttempt(gs, 'A1', { sample: { lat: posA.lat, lon: posA.lon, ts: TS, accuracyM: 5, headingDeg: heading } });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'downed');
+    assert.equal(gs.modeState.lives.B1, 1);
+    assert.equal(gs.gameOver, false, 'still has lives left, match continues');
+  });
+
+  check('respawn variant: a downed player revives after dwelling in their own base', () => {
+    const { gs, baseB } = setupDeathmatch('dm_revive', { deathmatchOnHit: 'respawn', livesPerPlayer: 2 });
+    gs.players.B1.status = 'downed';
+    gs.players.B1.spawnDwellMs = 0;
+    tel(gs, 'B1', baseB);
+    tick(gs, 350); // > spawnCheckDwellMs (300)
+    assert.equal(gs.players.B1.status, 'alive');
+  });
+
+  check('respawn variant: 0 lives eliminates the player and ends the match for their team', () => {
+    const { gs, baseA } = setupDeathmatch('dm_elim', { deathmatchOnHit: 'respawn', livesPerPlayer: 1 });
+    const shooterPos = baseA; // A1 is already there (setupDeathmatch's tel), no jump
+    const targetPos = shared.destinationPoint(baseA, 0, 5);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(shooterPos, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: shooterPos.lat, lon: shooterPos.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'found', 'eliminated, out for the rest of the match');
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'team_a');
+  });
+
+  check('freeze variant: hit freezes the target, no life lost, no elimination', () => {
+    const { gs, baseA } = setupDeathmatch('dm_freeze', { deathmatchOnHit: 'freeze', freezeMs: 5000 });
+    const shooterPos = baseA;
+    const targetPos = shared.destinationPoint(baseA, 0, 20);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(shooterPos, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: shooterPos.lat, lon: shooterPos.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'alive');
+    assert.ok(gs.players.B1.frozenUntil > Date.now());
+    assert.deepEqual(gs.modeState.lives, { A1: 3, B1: 3 }, 'freeze variant never touches lives');
+  });
+
+  check('a downed player cannot shoot (reuses the generic status gate)', () => {
+    const { gs, baseA } = setupDeathmatch('dm_downed_gate', { deathmatchOnHit: 'respawn' });
+    gs.players.A1.status = 'downed';
+    TS += 1100;
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA.lat, lon: baseA.lon, ts: TS, accuracyM: 5, headingDeg: 0 },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.err, 'downed');
+  });
+}
+
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {

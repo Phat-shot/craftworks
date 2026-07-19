@@ -7,14 +7,14 @@
 //  arops.js implementiert; dieses Modul ist das Fundament, aus dem sie
 //  später abgeleitet werden sollen (siehe AR-Ops-Modi-Ausbau-Plan, Phase 1).
 //
-//  Umfang bewusst auf den HEUTIGEN Implementierungsstand begrenzt: die vier
-//  bestehenden Modi (hide_and_seek/domination/ctf/seek_destroy) und die drei
-//  bestehenden Rollen (hider/seeker/team_member) plus die drei neuen
-//  Spielerklassen (scout/sniper/bomber, additiv zu Rolle/Team — kein Ersatz).
-//  Deathmatch, "The Ship" und Zerstören (die geplante seek_destroy-Ablösung
+//  Umfang bewusst auf den jeweils bereits implementierten Stand begrenzt:
+//  hide_and_seek/domination/ctf/seek_destroy (Fundament) plus deathmatch
+//  (neu), die drei bestehenden Rollen (hider/seeker/team_member) und die
+//  drei Spielerklassen (scout/sniper/bomber, additiv zu Rolle/Team — kein
+//  Ersatz). "The Ship" und Zerstören (die geplante seek_destroy-Ablösung
 //  mit rotierenden Zielen) kommen erst mit ihrer jeweiligen Umsetzungsphase
-//  dazu — `submodes` ist deshalb für alle vier bestehenden Modi noch leer,
-//  keiner von ihnen hat heute echte Varianten.
+//  dazu — `submodes` ist deshalb noch für alle Modi leer, keiner hat heute
+//  echte Varianten.
 // ═══════════════════════════════════════════════════════════
 
 /** Team-basiert (zwei Seiten gegeneinander) oder individuelle Rollen ohne
@@ -199,6 +199,39 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
         description: 'Wie lange Verteidiger ungestört an der Bombe stehen müssen, um sie zu entschärfen (in ar_settings.timings).' },
       { key: 'bombTimerMs', name: 'Bomben-Timer', unit: 'ms',
         description: 'Zeit von der Pflanzung bis zur Explosion (in ar_settings.timings).' },
+    ],
+  },
+  deathmatch: {
+    id: 'deathmatch',
+    name: 'Deathmatch',
+    shortDescription:
+      'Zwei Teams kämpfen ohne weiteres Ziel gegeneinander. Treffer frieren ein oder ' +
+      'kosten ein Leben (host-konfigurierbar) — bei 0 Leben scheidet man aus.',
+    longDescription:
+      'Wie Domination/CTF beginnt Deathmatch mit einer Basis-Setup-Phase (Kapitän ' +
+      'platziert die Team-Basis). Danach entscheidet die Host-Einstellung ' +
+      '"deathmatchOnHit" über die Treffer-Konsequenz: "freeze" (Standard-Team-Freeze, ' +
+      'keine Leben verloren, Sieg nach Zeitlimit über den Punktestand) oder "respawn" ' +
+      '(Getroffene verlieren ein Leben und werden "downed" — sie können erst wieder ' +
+      'mitspielen, nachdem sie eine Weile ununterbrochen in der eigenen Basis gestanden ' +
+      'haben, siehe das Base/Respawn-Checkpoint-System. Bei 0 Leben scheidet man endgültig ' +
+      'aus; verliert ein Team alle Spieler, gewinnt das andere sofort, sonst entscheidet ' +
+      'bei Zeitlimit die Summe der verbleibenden Leben).',
+    hasBases: true,
+    hasTargets: false,
+    partyMode: 'team',
+    submodes: [],
+    parameters: [
+      { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
+        description: 'Zeitlimit; danach gewinnt je nach Modus-Variante das Team mit mehr Punkten oder mehr verbleibenden Leben.' },
+      { key: 'deathmatchOnHit', name: 'Treffer-Konsequenz', unit: 'enum (freeze/respawn)',
+        description: 'Ob ein Treffer nur einfriert (kein Leben verloren) oder ein Leben kostet und "downed" macht.' },
+      { key: 'livesPerPlayer', name: 'Leben pro Spieler', unit: 'Leben',
+        description: 'Nur bei Treffer-Konsequenz "respawn": Anzahl Leben, bevor ein Spieler endgültig ausscheidet.' },
+      { key: 'baseSettingMs', name: 'Basis-Setup-Zeit', unit: 'ms',
+        description: 'Zeitfenster für die Kapitäne, ihre Basis zu platzieren (in ar_settings.timings).' },
+      { key: 'spawnCheckDwellMs', name: 'Spawn-Verweildauer', unit: 'ms',
+        description: 'Wie lange ein "downed" Spieler ununterbrochen in der eigenen Basis stehen muss, um wieder mitzuspielen (in ar_settings.timings).' },
     ],
   },
 };
