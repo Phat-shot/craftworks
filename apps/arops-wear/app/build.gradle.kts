@@ -3,12 +3,21 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// APP_CHANNEL ('main' | 'test'), set per branch in .github/workflows/wear-apk.yml —
+// same pattern as apps/arops-mobile/app.config.js's APP_CHANNEL. Differentiates
+// applicationId + label so a test build can be installed on the watch
+// alongside a main build instead of overwriting it. Defaults to 'test' (a
+// local `gradle assembleRelease` without the env var set produces the same
+// Beta build a tester would sideload, mirroring the mobile app's default).
+val appChannel = System.getenv("APP_CHANNEL") ?: "test"
+val isMainChannel = appChannel == "main"
+
 android {
     namespace = "one.srz.aropswear"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "one.srz.aropswear"
+        applicationId = if (isMainChannel) "one.srz.aropswear" else "one.srz.aropswear.beta"
         // Wear OS 3+ only (API 30) — matches the Pixel Watch line; Google
         // itself no longer supports anything older.
         minSdk = 30
@@ -19,6 +28,7 @@ android {
         // apps/arops-mobile/app.json "version" (dieselbe Zählung, beide
         // Apps gehören zum selben AR-Ops-Release).
         versionName = "1"
+        resValue("string", "app_name", if (isMainChannel) "AR Ops Radar" else "AR Ops Radar Beta")
     }
 
     buildFeatures {
@@ -40,10 +50,22 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    signingConfigs {
+        getByName("debug") {
+            // AGP's auto-generated ~/.android/debug.keystore (well-known
+            // credentials) — same approach the mobile app's Expo prebuild
+            // uses for its release build (see .github/workflows/apk.yml):
+            // fine for sideload/internal testing, NOT for a Play Store
+            // release. Explicitly reused below for `release` too, since
+            // AGP's default release build type has no signingConfig at all
+            // (an unsigned APK can't be installed).
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     packaging {

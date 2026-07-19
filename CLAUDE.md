@@ -83,10 +83,15 @@ cd apps/arops-mobile && npm run sync-shared
   überschrieben statt neue Releases anzuhäufen. Wear-OS-Companion analog über
   "Wear OS APK Build" (`apps/arops-wear/`) unter `apk-wear-test`/`apk-wear-main`
 - **Versionsschema**: `apps/arops-mobile/app.json` `"version"` ist die Quelle für den
-  APK-Dateinamen (`ar-ops-android-beta-v<Version>.apk`, Wear-Pendant
-  `ar-ops-wear-beta-v<Version>.apk` aus `apps/arops-wear/app/build.gradle.kts`
-  `versionName`). Jedes Release (Merge auf main) **+1**, jeder Bugfix auf test
-  **+0.1** — von Hand vor dem Build hochzählen, beide Apps zusammen
+  APK-Dateinamen (main: `ar-ops-android-v<Version>.apk`, test:
+  `ar-ops-android-beta-v<Version>.apk`), Wear-Pendant aus `apps/arops-wear/
+  app/build.gradle.kts` `versionName` (main: `ar-ops-wear-v<Version>.apk`,
+  test: `ar-ops-wear-beta-v<Version>.apk`). Jedes Release (Merge auf main)
+  **+1**, jeder Bugfix auf test **+0.1** — von Hand vor dem Build
+  hochzählen, beide Apps zusammen. Beide Apps bekommen auf test zusätzlich
+  App-Channel-Differenzierung (applicationId + Label mit "Beta"-Suffix, bei
+  der Handy-App zusätzlich Icon-Badge), damit main- und test-Build
+  gleichzeitig auf demselben Gerät installiert sein können
 
 ## Architektur-Invarianten (nicht brechen)
 

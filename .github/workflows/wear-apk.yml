@@ -6,7 +6,16 @@ name: Wear OS APK Build
 # Läuft nie standalone: Companion-App, die den Spielstand vom gekoppelten
 # Handy über die Data-Layer-API empfängt — hat deshalb (anders als die
 # Handy-App) keinen eigenen Backend-Endpoint und damit keine
-# Channel-Unterscheidung nötig.
+# Channel-Unterscheidung dafür nötig.
+#
+# APP_CHANNEL bestimmt trotzdem applicationId + Label (analog zur Handy-App,
+# siehe app/build.gradle.kts): main = one.srz.aropswear ("AR Ops Radar"),
+# test = one.srz.aropswear.beta ("AR Ops Radar Beta") — damit beide
+# gleichzeitig auf derselben Uhr installiert sein können. assembleRelease
+# (nicht assembleDebug): signiert über AGP's Standard-Debug-Keystore (siehe
+# signingConfigs in build.gradle.kts), für Sideload/internes Testen
+# ausreichend, wie bei der Handy-App. APK-Dateiname spiegelt den Channel
+# (main: ar-ops-wear-v<Version>, test: ar-ops-wear-beta-v<Version>).
 on:
   push:
     branches: [main, test]
@@ -54,22 +63,34 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Debug-APK bauen
-        working-directory: apps/arops-wear
-        run: gradle :app:assembleDebug --no-daemon
+      - name: App-Channel für den Branch setzen
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "APP_CHANNEL=main" >> "$GITHUB_ENV"
+          else
+            echo "APP_CHANNEL=test" >> "$GITHUB_ENV"
+          fi
 
-      - name: APK umbenennen (ar-ops-wear-beta-v<Version>.apk)
+      - name: Release-APK bauen
+        working-directory: apps/arops-wear
+        run: gradle :app:assembleRelease --no-daemon
+
+      - name: "APK umbenennen (main: ar-ops-wear-v<Version>.apk, test: ...-beta-v<Version>.apk)"
         working-directory: apps/arops-wear
         run: |
           VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
-          FILENAME="ar-ops-wear-beta-v${VERSION}.apk"
-          mv app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/$FILENAME"
+          if [ "$APP_CHANNEL" = "main" ]; then
+            FILENAME="ar-ops-wear-v${VERSION}.apk"
+          else
+            FILENAME="ar-ops-wear-beta-v${VERSION}.apk"
+          fi
+          mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/$FILENAME"
           echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APK_FILENAME }}
-          path: apps/arops-wear/app/build/outputs/apk/debug/${{ env.APK_FILENAME }}
+          path: apps/arops-wear/app/build/outputs/apk/release/${{ env.APK_FILENAME }}
           if-no-files-found: error
 
       # Siehe apk.yml: Actions-Artifacts sind immer gezippt und laufen ohne
@@ -81,7 +102,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="apk-wear-${GITHUB_REF_NAME}"
-          ASSET="app/build/outputs/apk/debug/${{ env.APK_FILENAME }}"
+          ASSET="app/build/outputs/apk/release/${{ env.APK_FILENAME }}"
           NOTES="Build ${GITHUB_SHA::7} · $(date -u +'%Y-%m-%d %H:%M UTC') · Branch ${GITHUB_REF_NAME}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ASSET" --clobber
