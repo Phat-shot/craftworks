@@ -603,6 +603,58 @@ const MODES = {
     },
     revealPosition() { return false; },
   },
+
+  // ── BATTLE ROYALE ─────────────────────────────────────────
+  // Free-for-all: no teams, no roles, no bases — every other player is
+  // always an opponent (isOpponentPair always true, so the snapshot's
+  // "teammates see each other" reveal path never fires; nobody has any
+  // ally at all). A hit eliminates permanently (classic BR convention —
+  // no freeze/respawn here, unlike Deathmatch). Last player alive wins;
+  // at the time limit, highest score wins (tie -> draw). Shared concept
+  // reused by Hide & Seek's own "Battle Royale" variant (see the AR-Ops
+  // modes plan) — both route to this same subMode rather than each
+  // reimplementing it.
+  battle_royale: {
+    usesTeams: false,
+    initialPhase: () => 'live',
+    shootPhases: ['live'],
+    phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
+    initState() {},
+    isOpponentPair() { return true; },
+    canShoot() { return null; },
+    targetFilter() { return true; },
+    applyHit(gs, shooter, target, verdict, t) {
+      shooter.score += 10;
+      target.status = 'found'; // eliminated — permanent, no freeze/respawn
+      pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
+      this.checkWin(gs);
+    },
+    checkWin(gs) {
+      // A solo debug session (host alone, no bots) can't have a winner —
+      // never auto-end it just because there's trivially "1 player left"
+      // (same guard hide_and_seek uses for the analogous case).
+      if (Object.keys(gs.players).length < 2) return;
+      const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+      if (alive.length <= 1) {
+        endGame(gs, alive.length === 1 ? alive[0].userId : 'draw');
+      }
+    },
+    tick(gs, t) {
+      if (gs.phase !== 'live') return;
+      if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
+        const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+        if (alive.length === 0) return endGame(gs, 'draw');
+        const top = Math.max(...alive.map(p => p.score));
+        const leaders = alive.filter(p => p.score === top);
+        endGame(gs, leaders.length === 1 ? leaders[0].userId : 'draw');
+      }
+    },
+    onGameEnd() {},
+    snapshotExtras(gs) {
+      return { aliveCount: Object.values(gs.players).filter(p => p.status === 'alive').length };
+    },
+    revealPosition() { return false; },
+  },
 };
 
 function dropFlag(gs, flagTeam, carrier, t) {
@@ -806,9 +858,12 @@ function createAropsGame(sessionId, players, workshopConfig) {
       spawnDwellMs: 0, // Base/respawn checkpoint (CTF, Deathmatch)
     };
   });
-  // Every normal match needs at least one seeker — but a solo debug session
-  // (host testing the hider view alone) should be able to explicitly opt out.
-  if (!mode.usesTeams && seekerCount === 0 && !cfg.debugMode) {
+  // Every normal Hide & Seek match needs at least one seeker — but a solo
+  // debug session (host testing the hider view alone) should be able to
+  // explicitly opt out. Hide & Seek-specific check (not just "any non-team
+  // mode") since Battle Royale is also usesTeams:false but has no
+  // seeker/hider role concept at all.
+  if (subMode === 'hide_and_seek' && seekerCount === 0 && !cfg.debugMode) {
     const first = Object.values(playerState)[0];
     if (first) first.role = 'seeker';
   }

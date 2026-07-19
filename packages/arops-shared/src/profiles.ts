@@ -8,13 +8,13 @@
 //  später abgeleitet werden sollen (siehe AR-Ops-Modi-Ausbau-Plan, Phase 1).
 //
 //  Umfang bewusst auf den jeweils bereits implementierten Stand begrenzt:
-//  hide_and_seek/domination/ctf/seek_destroy (Fundament) plus deathmatch
-//  (neu), die drei bestehenden Rollen (hider/seeker/team_member) und die
-//  drei Spielerklassen (scout/sniper/bomber, additiv zu Rolle/Team — kein
-//  Ersatz). "The Ship" und Zerstören (die geplante seek_destroy-Ablösung
-//  mit rotierenden Zielen) kommen erst mit ihrer jeweiligen Umsetzungsphase
-//  dazu — `submodes` ist deshalb noch für alle Modi leer, keiner hat heute
-//  echte Varianten.
+//  hide_and_seek/domination/ctf/seek_destroy (Fundament) plus deathmatch und
+//  battle_royale (neu), die drei bestehenden Rollen (hider/seeker/
+//  team_member) und die drei Spielerklassen (scout/sniper/bomber, additiv
+//  zu Rolle/Team — kein Ersatz). "The Ship" und Zerstören (die geplante
+//  seek_destroy-Ablösung mit rotierenden Zielen) kommen erst mit ihrer
+//  jeweiligen Umsetzungsphase dazu — `submodes` ist deshalb noch für alle
+//  Modi leer, keiner hat heute echte Varianten.
 // ═══════════════════════════════════════════════════════════
 
 /** Team-basiert (zwei Seiten gegeneinander) oder individuelle Rollen ohne
@@ -232,6 +232,31 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
         description: 'Zeitfenster für die Kapitäne, ihre Basis zu platzieren (in ar_settings.timings).' },
       { key: 'spawnCheckDwellMs', name: 'Spawn-Verweildauer', unit: 'ms',
         description: 'Wie lange ein "downed" Spieler ununterbrochen in der eigenen Basis stehen muss, um wieder mitzuspielen (in ar_settings.timings).' },
+    ],
+  },
+  battle_royale: {
+    id: 'battle_royale',
+    name: 'Battle Royale',
+    shortDescription:
+      'Jeder gegen jeden, keine Teams. Ein Treffer scheidet endgültig aus — letzter ' +
+      'Überlebender gewinnt.',
+    longDescription:
+      'Kein Team, keine Rolle, keine Basis: jeder Spieler ist Gegner jedes anderen. ' +
+      'Ein Treffer scheidet den Getroffenen sofort und endgültig aus dem Match aus ' +
+      '(anders als Deathmatch — kein Einfrieren, kein Wiederbeleben). Sobald nur noch ' +
+      'ein Spieler übrig ist, gewinnt dieser sofort. Läuft die Zeit ab, gewinnt der ' +
+      'Spieler mit dem höchsten Punktestand (Gleichstand = Unentschieden). Dasselbe ' +
+      'Konzept wie Hide & Seeks "Jeder gegen jeden"-Variante — beide nutzen denselben ' +
+      'Modus.',
+    hasBases: false,
+    hasTargets: false,
+    partyMode: 'individual',
+    submodes: [],
+    parameters: [
+      { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
+        description: 'Zeitlimit; danach gewinnt der Spieler mit dem höchsten Punktestand.' },
+      { key: 'hitCooldownMs', name: 'Schuss-Cooldown', unit: 'ms',
+        description: 'Mindestabstand zwischen zwei Schussversuchen desselben Spielers.' },
     ],
   },
 };

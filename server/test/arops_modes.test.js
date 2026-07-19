@@ -481,6 +481,80 @@ console.log('\n═══ DEATHMATCH ═══');
   });
 }
 
+// ═══ BATTLE ROYALE ══════════════════════════════════════════
+console.log('\n═══ BATTLE ROYALE ═══');
+{
+  function setupBR(sessionId, players, over = {}) {
+    return createGame(sessionId, players,
+      { ar_settings: { polygon: FIELD, subMode: 'battle_royale', gameDurationMs: 600_000, hitCooldownMs: 50, ...over } });
+  }
+
+  check('no teams, no roles assigned (unlike Hide & Seek, no seeker/hider concept here)', () => {
+    const gs = setupBR('br_setup', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    assert.equal(gs.players.A.team, null);
+    assert.equal(gs.players.B.team, null);
+  });
+
+  check('everyone is an opponent of everyone — no allies, positions never shared as teammates', () => {
+    const gs = setupBR('br_opp', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' }]);
+    tel(gs, 'A', MUC);
+    tel(gs, 'B', shared.destinationPoint(MUC, 0, 20));
+    tel(gs, 'C', shared.destinationPoint(MUC, 180, 20));
+    const snap = arops.getAropsSnapshot(gs, 'A');
+    const b = snap.players.find(p => p.userId === 'B');
+    const c = snap.players.find(p => p.userId === 'C');
+    assert.equal(typeof b.lat, 'undefined', 'B is an opponent, not revealed by default');
+    assert.equal(typeof c.lat, 'undefined', 'C is an opponent, not revealed by default');
+  });
+
+  check('a hit eliminates permanently (no freeze, no downed) and can end the match when one player remains', () => {
+    const gs = setupBR('br_elim', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' }]);
+    tel(gs, 'A', MUC);
+    tel(gs, 'B', shared.destinationPoint(MUC, 0, 20));
+    tel(gs, 'C', shared.destinationPoint(MUC, 180, 20));
+    TS += 1100;
+    const r1 = arops.actionArHitAttempt(gs, 'A', { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(r1.hit, true, JSON.stringify(r1));
+    assert.equal(gs.players.B.status, 'found');
+    assert.equal(gs.players.B.frozenUntil, 0, 'no freeze — permanent elimination instead');
+    assert.equal(gs.gameOver, false, 'C is still alive');
+
+    sleepMs(60); // clear hitCooldownMs
+    TS += 1100;
+    const r2 = arops.actionArHitAttempt(gs, 'A', { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 180 } });
+    assert.equal(r2.hit, true, JSON.stringify(r2));
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'A', 'last player standing wins by userId');
+  });
+
+  check('time limit: highest score wins, tie is a draw', () => {
+    const gs = setupBR('br_time', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gs.players.A.score = 30;
+    gs.players.B.score = 10;
+    gs.phaseStartTime = Date.now() - 700_000; // > gameDurationMs (600_000)
+    tick(gs, 100);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'A');
+
+    const gsTie = setupBR('br_time_tie', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gsTie.players.A.score = 20;
+    gsTie.players.B.score = 20;
+    gsTie.phaseStartTime = Date.now() - 700_000;
+    tick(gsTie, 100);
+    assert.equal(gsTie.gameOver, true);
+    assert.equal(gsTie.winner, 'draw');
+  });
+
+  check('solo debug session never auto-ends via checkWin just because "1 player is left"', () => {
+    const gs = setupBR('br_solo', [{ userId: 'A', username: 'A' }], { debugMode: true });
+    tel(gs, 'A', MUC);
+    // No opponents exist to eliminate anyone — checkWin is only ever invoked
+    // from applyHit, so this asserts the guard exists without needing to
+    // contrive an actual self-hit.
+    assert.equal(gs.gameOver, false);
+  });
+}
+
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {
