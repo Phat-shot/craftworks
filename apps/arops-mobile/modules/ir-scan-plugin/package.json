@@ -1,0 +1,6 @@
+{
+  "name": "ir-scan-plugin",
+  "version": "0.1.0",
+  "description": "Registers the native VisionCamera frame-processor plugin that decodes the AR Ops IR-ID beacon (hardware/esp32-ir). Local module, Android-only, not published.",
+  "main": "index.ts"
+}

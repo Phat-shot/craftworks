@@ -14,6 +14,20 @@ Seek&Destroy) mit Web-Lobby und React-Native-App (Expo).
   rechnen mit identischem Code. `dist/` ist committet (Server/Docker braucht es)
 - `apps/arops-mobile/` — Expo-App (SDK 52, MapLibre). Nutzt das Shared Package als
   **vendored Tarball** (`vendor/arops-shared.tgz`) — NICHT als file:-Link
+- `apps/arops-wear/` — natives Kotlin/Gradle Wear-OS-Companion (kein Expo/RN)
+- `hardware/esp32-ir/` — IR-ID-Beacon (ESP32-S3, TSAL6100+AO3400A) für den "IR"-
+  Trefferverfolgungsmodus: sendet autark (kein Handy-Tether nötig) dauerhaft die
+  eigene 8-Bit-ID als Blinkmuster. Firmware, Pinbelegung, Flash-Anleitung (Android/
+  iOS/Linux/Mac/Windows — iOS technisch nicht möglich, siehe `FLASHING.md`).
+  Erkennung läuft über die Handy-KAMERA des Schützen (nicht USB!): natives
+  VisionCamera-Frame-Processor-Plugin `apps/arops-mobile/modules/ir-scan-plugin`
+  dekodiert das Blinkmuster live, `src/hooks/useIrScan.ts` liefert die erkannte ID
+  ans GameScreen. Server validiert bei `hitTrackingMode='ir'` zusätzlich zur
+  bestehenden Kompass/GPS-Kegel-Prüfung, dass die gescannte ID zur in der Lobby
+  zugewiesenen ID (`ar_settings.irIds`) des Ziels passt und aktuell genug ist
+  (`server/src/game/arops.js`, `IR_SCAN_MAX_AGE_MS`). `apps/arops-mobile/modules/
+  esp-bridge` (natives Android-USB-Serial-Modul) + `useEspSync.ts` sind nur noch ein
+  Werkbank-Testwerkzeug (PING-Kommando), kein Teil des Spielablaufs mehr
 - `.github/workflows/` — CI: Docker-Image pro Branch + APK-Build
 
 ## Branch-Regeln (WICHTIG)
@@ -59,11 +73,15 @@ cd apps/arops-mobile && npm run sync-shared
   `apps/arops-mobile/app.config.js` → `expo-constants`, siehe `src/config.ts`) —
   gesetzt vom Branch im GitHub-Workflow "APK Build" (test → dev.srz.one,
   main → arops.srz.one). Nie hart im Code für einen Channel überschreiben
-- **APK**: baut automatisch bei jedem Push auf `main`/`test` (Workflow "APK Build",
-  analog zu "Build & Push Docker Image") — kein EAS, kein Kontingent, kein
-  `EXPO_TOKEN`-Secret nötig. Artifact im jeweiligen Workflow-Run herunterladen.
-  Wear-OS-Companion analog über "Wear OS APK Build" (`apps/arops-wear/`), ebenfalls
-  bei jedem Push auf `main`/`test`
+- **APK**: baut automatisch bei Push auf `main` (immer) bzw. `test` (nur bei
+  Änderungen an der jeweiligen App) — Workflow "APK Build", analog zu
+  "Build & Push Docker Image" — kein EAS, kein Kontingent, kein
+  `EXPO_TOKEN`-Secret nötig. **Download als GitHub-Release-Asset** (nicht
+  Actions-Artifact — das ist immer gezippt und läuft ohne CDN, spürbar
+  langsamer): fester Tag pro Branch, `apk-android-test`/`apk-android-main`
+  unter github.com/phat-shot/craftworks/releases, wird bei jedem Build
+  überschrieben statt neue Releases anzuhäufen. Wear-OS-Companion analog über
+  "Wear OS APK Build" (`apps/arops-wear/`) unter `apk-wear-test`/`apk-wear-main`
 - **Versionsschema**: `apps/arops-mobile/app.json` `"version"` ist die Quelle für den
   APK-Dateinamen (`ar-ops-android-beta-v<Version>.apk`, Wear-Pendant
   `ar-ops-wear-beta-v<Version>.apk` aus `apps/arops-wear/app/build.gradle.kts`

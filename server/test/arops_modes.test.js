@@ -695,5 +695,80 @@ console.log('\n═══ MISS-DIAGNOSE ═══');
   });
 }
 
+// ═══ IR MODE (hardware/esp32-ir beacon confirmation) ═══════════
+console.log('\n═══ IR MODE ═══');
+{
+  const posS = MUC;
+  const posH1 = shared.destinationPoint(MUC, 0, 50); // due north of S — headingDeg 0 hits
+
+  const mkIr = () => {
+    const gs = createGame('ir' + Math.random(),
+      [{ userId: 'S', username: 'S' }, { userId: 'H1', username: 'H1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { S: 'seeker', H1: 'hider' }, hidingDurationMs: 0, gameDurationMs: 600_000,
+        hitCooldownMs: 50, hitTrackingMode: 'ir', irIds: { H1: 7 } } });
+    tick(gs, 10); // → seeking
+    return gs;
+  };
+  const shootAt = (gs, t0, irScan) => arops.actionArHitAttempt(gs, 'S', {
+    sample: { lat: posS.lat, lon: posS.lon, ts: t0 + 1100, accuracyM: 5, headingDeg: 0 },
+    irScan,
+  });
+
+  check('ir mode: cone-check passes but no IR scan at all → rejected', () => {
+    const gs = mkIr();
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+    const r = shootAt(gs, t0, undefined);
+    assert.equal(r.hit, false, JSON.stringify(r));
+    assert.equal(r.reason, 'ir_not_confirmed');
+  });
+
+  check('ir mode: scanned a different device ID than the target\'s assigned one → rejected', () => {
+    const gs = mkIr();
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+    const r = shootAt(gs, t0, { deviceId: 99, ts: t0 + 1100 });
+    assert.equal(r.hit, false, JSON.stringify(r));
+    assert.equal(r.reason, 'ir_not_confirmed');
+  });
+
+  check('ir mode: scan matches the ID but is too old → rejected', () => {
+    const gs = mkIr();
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+    const r = shootAt(gs, t0, { deviceId: 7, ts: t0 - 10_000 });
+    assert.equal(r.hit, false, JSON.stringify(r));
+    assert.equal(r.reason, 'ir_not_confirmed');
+  });
+
+  check('ir mode: scan matches the assigned ID and is recent → hit counts', () => {
+    const gs = mkIr();
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+    const r = shootAt(gs, t0, { deviceId: 7, ts: t0 + 1100 });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(r.targetId, 'H1');
+  });
+
+  check('compass mode (default): hit counts with no irScan at all — the gate is ir-mode-only', () => {
+    const gs = createGame('ir-default' + Math.random(),
+      [{ userId: 'S', username: 'S' }, { userId: 'H1', username: 'H1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
+        roles: { S: 'seeker', H1: 'hider' }, hidingDurationMs: 0, gameDurationMs: 600_000,
+        hitCooldownMs: 50 } });
+    tick(gs, 10);
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+    const r = shootAt(gs, t0, undefined);
+    assert.equal(r.hit, true, JSON.stringify(r));
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

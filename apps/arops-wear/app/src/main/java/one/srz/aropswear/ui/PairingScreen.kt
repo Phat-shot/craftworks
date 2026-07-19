@@ -8,46 +8,86 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import one.srz.aropswear.BuildConfig
 import one.srz.aropswear.model.PairingRepository
 
 /**
  * Shown until the phone scans our QR code and claims us (see MainActivity,
- * which swaps this out for RadarScreen once claimed). Tap the code to get a
- * fresh one — useful if the phone's scan attempt failed (e.g. the code
- * scrolled off screen mid-scan) or you want to pair a different phone.
+ * which swaps this out for RadarScreen once claimed).
  */
 @Composable
 fun PairingScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val token by PairingRepository.token.collectAsState()
-    val qrBitmap = remember(token) { encodeQr(token, 200) }
+    val qrBitmap = remember(token) { encodeQr(token, 280) }
+
+    // The MessageClient push (GameStateListenerService receiving
+    // "/arops/claim") can silently miss the watch if Wear OS killed the
+    // app's process at the exact moment it arrived — poll the persistent
+    // DataItem as a reliable fallback for as long as this screen is showing.
+    // Restarts (so it checks immediately, not just every 5s) whenever the
+    // token changes, e.g. right after tapping the code and getting a fresh one.
+    LaunchedEffect(token) {
+        while (isActive) {
+            PairingRepository.checkClaimViaDataLayer(context)
+            delay(5000)
+        }
+    }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
+        modifier = Modifier.fillMaxSize().padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Image(
             bitmap = qrBitmap.asImageBitmap(),
             contentDescription = null,
-            modifier = Modifier.clickable { PairingRepository.regenerateToken() },
+            // Tap: check RIGHT NOW whether the phone already wrote a claim
+            // for this token (don't just wait for the next 5s poll) — if
+            // one's there, PairingRepository.tryClaim flips `claimed` and
+            // MainActivity swaps to RadarScreen on its own. Only if nothing
+            // was found do we regenerate the token — regenerating
+            // unconditionally on every tap (the old behavior) would have
+            // thrown away a claim the phone already wrote but that this
+            // screen just hadn't picked up yet, making a slow/missed poll
+            // *worse* instead of giving the user a way to recover from it.
+            modifier = Modifier.size(170.dp).clickable {
+                scope.launch {
+                    val claimed = PairingRepository.checkClaimViaDataLayer(context)
+                    if (!claimed) PairingRepository.regenerateToken()
+                }
+            },
         )
         Text(
-            text = "Mit Handy-App scannen · antippen für neuen Code",
+            text = "Scannen · Tippen = prüfen/neu",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            text = "v${BuildConfig.VERSION_NAME}",
+            color = ComicPalette.gold.copy(alpha = 0.45f),
+            style = MaterialTheme.typography.caption3,
         )
     }
 }

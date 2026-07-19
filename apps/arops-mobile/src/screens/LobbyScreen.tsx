@@ -8,6 +8,7 @@ import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig } from '@craftworks/arops-shared';
+import { withTimeout } from '../utils/withTimeout';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -39,6 +40,7 @@ interface ArSettings {
   debugMode?: boolean;
   comicMap?: ComicMap;
   hitTrackingMode?: 'compass' | 'ir';
+  irIds?: Record<string, number>;
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
   autoScale?: boolean;
 }
@@ -108,20 +110,35 @@ export default function LobbyScreen({
 
   // One-shot fetch (not a live watch) — this is just a reference point for
   // drawing the field, not gameplay telemetry, so no need to keep polling.
-  // GPS can be unreliable on first try (cold fix, permission dialog timing),
-  // so this is also wired to a manual retry button on the map, not just mount.
-  const loadMyPosition = async () => {
+  // GPS can be unreliable on first try (cold fix, permission dialog timing) —
+  // getCurrentPositionAsync has no built-in timeout and can hang indefinitely
+  // on some devices/cold fixes, previously leaving myPosLoading stuck true
+  // forever with no way out except tapping retry (which just repeated the
+  // same possibly-hung call). Now: an instant cached fix first if one
+  // exists (so the map has *something* right away), a hard 8s timeout on
+  // the fresh fix, and up to 2 automatic retries before finally falling
+  // back to the manual retry button.
+  const loadMyPosition = async (attempt = 0) => {
     setMyPosLoading(true);
     setMyPosErr(false);
     try {
       const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== 'granted') { setMyPosErr(true); return; }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
+      if (attempt === 0) {
+        Location.getLastKnownPositionAsync().then(cached => {
+          if (cached) setMyPos(p => p ?? { lat: cached.coords.latitude, lon: cached.coords.longitude });
+        }).catch(() => {});
+      }
+      const pos = await withTimeout(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }), 8000);
       setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-    } catch {
-      setMyPosErr(true);
-    } finally {
       setMyPosLoading(false);
+    } catch {
+      if (attempt < 2) {
+        loadMyPosition(attempt + 1);
+      } else {
+        setMyPosErr(true);
+        setMyPosLoading(false);
+      }
     }
   };
 
@@ -197,6 +214,7 @@ export default function LobbyScreen({
   const foundMode = ar.foundMode || 'spectator';
   const bots = ar.bots || [];
   const debugMode = ar.debugMode || false;
+  const hitTrackingMode = ar.hitTrackingMode || 'compass';
   // Bots are display-only overlay from ar_settings — never touch the real
   // socket-driven `members` state, which tracks actual joined players.
   const displayMembers = useMemo(
@@ -206,6 +224,17 @@ export default function LobbyScreen({
   // Server is the single source of truth for roles/teams
   const roleOf = (uid: string) => ar.roles?.[uid] || 'hider';
   const teamOf = (uid: string) => ar.teams?.[uid] || 'a';
+  // Which numeric ID (0-255) each player's physical ESP32 IR beacon
+  // broadcasts (see hardware/esp32-ir) — only meaningful/shown once IR mode
+  // is selected. Tap-to-cycle rather than a text input, matching the
+  // existing role/team toggle pattern; fine for the small player counts
+  // this is actually used with.
+  const irIdOf = (uid: string) => ar.irIds?.[uid];
+  const cycleIrId = (uid: string) => {
+    if (!isHost) return;
+    const next = ((irIdOf(uid) ?? -1) + 1) % 256;
+    emitUpdate({ irIds: { ...(ar.irIds || {}), [uid]: next } });
+  };
 
   const onMapPress = (feature: any) => {
     if (!isHost) return;
@@ -253,6 +282,20 @@ export default function LobbyScreen({
     setComicMapErr('');
     getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId });
   };
+
+  // Once the field becomes valid, auto-generate the comic map a single time
+  // if the host never has (manual "generate"/"regenerate" button still
+  // covers every later case — staleness after edits, retry after failure).
+  // No extra fallback needed on failure: GameScreen already falls back to
+  // plain OSM tiles whenever no comic map exists (see hasComicMap there).
+  const autoGenTriedRef = useRef(false);
+  useEffect(() => {
+    if (!isHost || autoGenTriedRef.current) return;
+    if (polygon.length >= 3 && polyErrs.length === 0 && !ar.comicMap && !comicMapLoading) {
+      autoGenTriedRef.current = true;
+      generateComicMap();
+    }
+  }, [isHost, polygon.length, polyErrs.length, ar.comicMap, comicMapLoading]);
 
   const toggleReady = () => {
     const next = !ready;
@@ -327,18 +370,19 @@ export default function LobbyScreen({
       {/* Oben: Erkennungsmodus + Debug links, Code rechts */}
       <View style={st.topRow}>
         <View style={st.topLeft}>
-          <Icon name="satellite" size={16} color="#f0c840" />
+          <Icon name="satellite" size={19} color="#f0c840" />
           {isHost && (
             <>
-              <TouchableOpacity style={[st.iconBtn, st.smallBtnActive]}
+              <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode !== 'ir' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-                <Icon name="compass" size={15} color="#f0c840" />
+                <Icon name="compass" size={19} color={hitTrackingMode !== 'ir' ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
-              <View style={[st.iconBtn, st.smallBtnDisabled]}>
-                <Icon name="signalOff" size={15} color="#605850" />
-              </View>
-              <TouchableOpacity style={[st.iconBtn, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
-                <Icon name="bug" size={15} color={debugMode ? '#f0c840' : '#c0a0f0'} />
+              <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode === 'ir' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ hitTrackingMode: 'ir' })}>
+                <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? '#f0c840' : '#c0a0f0'} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
+                <Icon name="bug" size={19} color={debugMode ? '#f0c840' : '#c0a0f0'} />
               </TouchableOpacity>
             </>
           )}
@@ -414,7 +458,7 @@ export default function LobbyScreen({
             </ShapeSource>
           )}
         </MapView>
-        <TouchableOpacity style={st.locateBtn} onPress={loadMyPosition} disabled={myPosLoading}>
+        <TouchableOpacity style={st.locateBtn} onPress={() => loadMyPosition()} disabled={myPosLoading}>
           {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
             <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
           )}
@@ -453,11 +497,11 @@ export default function LobbyScreen({
       {isHost && (
         <>
           <View style={st.rowBtns}>
-            <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
-              <Icon name="undo" size={15} color="#c0a0f0" />
+            <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
+              <Icon name="undo" size={19} color="#c0a0f0" />
             </TouchableOpacity>
-            <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Icon name="close" size={15} color="#c0a0f0" />
+            <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
+              <Icon name="close" size={19} color="#c0a0f0" />
             </TouchableOpacity>
             <Text style={st.wpCount}>{polygon.length}</Text>
             {NEEDS_ZONES[subMode] !== undefined && (
@@ -468,15 +512,15 @@ export default function LobbyScreen({
                 <TouchableOpacity style={[st.smallBtn, tapMode === 'zones' && st.smallBtnActive]} onPress={() => setTapMode('zones')}>
                   <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen {zones.length}/{NEEDS_ZONES[subMode]}+</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={st.iconBtn} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                  <Icon name="trash" size={15} color="#c0a0f0" />
+                <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
+                  <Icon name="trash" size={19} color="#c0a0f0" />
                 </TouchableOpacity>
               </>
             )}
-            <TouchableOpacity style={st.iconBtn} onPress={generateComicMap}
+            <TouchableOpacity style={st.iconBtnLg} onPress={generateComicMap}
               disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
               {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={comicMapStale ? 'loop' : 'palette'} size={15} color="#c0a0f0" />
+                <Icon name={comicMapStale ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
               )}
             </TouchableOpacity>
           </View>
@@ -648,6 +692,12 @@ export default function LobbyScreen({
                 <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? 'Seeker' : 'Hider'}</Text>
               </TouchableOpacity>
             )}
+            {hitTrackingMode === 'ir' && (
+              <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => cycleIrId(item.id)}>
+                <Icon name="flash" size={12} color="#f0c840" />
+                <Text style={st.roleTag}>{irIdOf(item.id) !== undefined ? `IR ${irIdOf(item.id)}` : 'IR –'}</Text>
+              </TouchableOpacity>
+            )}
             <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}
               color={item.ready ? '#80ff40' : '#807050'} style={{ marginLeft: 8 }} />
             {isHost && item.isBot && (
@@ -716,8 +766,8 @@ const st = StyleSheet.create({
   },
   smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
   smallBtnDisabled: { opacity: 0.5 },
-  iconBtn: {
-    width: 30, height: 30, borderRadius: 7, alignItems: 'center', justifyContent: 'center',
+  iconBtnLg: {
+    width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
   },
   smallTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },

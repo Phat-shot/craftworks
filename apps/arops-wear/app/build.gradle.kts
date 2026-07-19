@@ -23,6 +23,10 @@ android {
 
     buildFeatures {
         compose = true
+        // AGP 8+ no longer generates BuildConfig by default — needed here so
+        // versionName (single source of truth, see defaultConfig above) can
+        // be shown small on the pairing screen instead of a second hardcoded copy.
+        buildConfig = true
     }
     composeOptions {
         // Paired with Kotlin 1.9.24 per the official Compose-Kotlin

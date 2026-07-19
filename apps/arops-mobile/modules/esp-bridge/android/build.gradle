@@ -1,0 +1,25 @@
+apply plugin: 'com.android.library'
+
+group = 'one.srz.espbridge'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  namespace "expo.modules.espbridge"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+// No extra dependency needed — android.hardware.usb (USB host API) is part
+// of the platform SDK. Deliberately not pulling in a third-party USB-serial
+// library (e.g. usb-serial-for-android/JitPack) for this: the ESP32-S3's
+// native USB already presents as a standard CDC-ACM device, and raw
+// bulkTransfer on its data interface is enough — one less external Maven
+// repository to configure/trust.

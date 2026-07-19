@@ -8,6 +8,7 @@ import { restoreSession, createArLobby, getUser, logout } from './src/api';
 import { SERVER_URL } from './src/config';
 import Icon from './src/components/Icon';
 import { useWatchSync } from './src/hooks/useWatchSync';
+import { useEspSync } from './src/hooks/useEspSync';
 import WatchPairModal from './src/components/WatchPairModal';
 import LoginScreen from './src/screens/LoginScreen';
 import JoinLobbyScreen from './src/screens/JoinLobbyScreen';
@@ -26,17 +27,20 @@ export default function App() {
   const [route, setRoute] = useState<Route>({ name: 'boot' });
   const [hostErr, setHostErr] = useState('');
   const watchSync = useWatchSync();
+  const espSync = useEspSync();
   const [watchPairOpen, setWatchPairOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // A match used to close the whole app on back-press (Android's default
-  // hardwareBackPress behavior with no handler on the root screen). Leaving
-  // a running match now has a deliberate exit path (the endgame recap's
-  // "Beenden" button) — so while a game is open, back is simply swallowed
-  // instead of killing the app.
+  // hardwareBackPress behavior with no handler on the root screen). Back now
+  // ends the match for this player (same as the endgame recap's "Beenden"
+  // button) and returns to the main menu, instead of closing the app.
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => route.name === 'game');
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (route.name === 'game') { setRoute({ name: 'menu' }); return true; }
+      return false;
+    });
     return () => sub.remove();
   }, [route.name]);
   // Icon glyphs otherwise render blank on the first paint of every single
@@ -92,6 +96,7 @@ export default function App() {
         <View style={st.center}>
           <Icon name="satellite" size={56} color="#f0c840" style={{ marginBottom: 6 }} />
           <Text style={st.title}>AR Ops</Text>
+          <Text style={st.version}>v{Constants.expoConfig?.version || '–'}</Text>
           <View style={st.subRow}>
             <Text style={st.sub}>Hallo {getUser()?.username}</Text>
             <Icon name="wave" size={14} color="#807050" />
@@ -108,6 +113,9 @@ export default function App() {
           <View style={st.menuIconRow}>
             <TouchableOpacity style={[st.menuIconBtn, watchSync.paired && st.menuIconBtnActive]} onPress={() => setWatchPairOpen(true)}>
               <Icon name="watch" size={17} color={watchSync.paired ? '#f0c840' : '#c0a0f0'} />
+            </TouchableOpacity>
+            <TouchableOpacity style={[st.menuIconBtn, espSync.connected && st.menuIconBtnActive]} onPress={() => espSync.connect()}>
+              <Icon name="usb" size={17} color={espSync.connected ? '#f0c840' : '#c0a0f0'} />
             </TouchableOpacity>
             <TouchableOpacity style={st.menuIconBtn} onPress={() => setInfoOpen(true)}>
               <Icon name="info" size={17} color="#c0a0f0" />
@@ -168,7 +176,8 @@ export default function App() {
 
 const st = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  title: { fontSize: 30, fontWeight: '900', color: '#f0c840', marginBottom: 4 },
+  title: { fontSize: 30, fontWeight: '900', color: '#f0c840', marginBottom: 2 },
+  version: { fontSize: 10, color: '#605850', marginBottom: 4 },
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 32 },
   sub: { fontSize: 13, color: '#807050' },
   hostBtn: {

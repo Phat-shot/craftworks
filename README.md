@@ -5,6 +5,14 @@ Multiplayer-Gaming-Plattform mit zwei eigenständigen Spielen obendrauf:
 Wettrennen, 2D + echtes 3D via Three.js). Node.js · Express · Socket.io ·
 PostgreSQL · React/Vite · React Native/Expo · Docker.
 
+[![Android APK](https://img.shields.io/badge/Download-Android%20APK-3ddc84?logo=android&logoColor=white)](https://github.com/Phat-shot/craftworks/releases/tag/apk-android-test)
+[![Wear OS APK](https://img.shields.io/badge/Download-Wear%20OS%20APK-4285f4?logo=wearos&logoColor=white)](https://github.com/Phat-shot/craftworks/releases/tag/apk-wear-test)
+
+Immer der neueste Build vom `test`-Branch — die Links sind stabil (fester
+Tag pro Channel), das Release-Asset dahinter wird bei jedem Push automatisch
+ersetzt (siehe `.github/workflows/apk.yml` / `wear-apk.yml`). Sobald es
+`main`-Releases gibt, kommen `apk-android-main`/`apk-wear-main` dazu.
+
 ---
 
 ## Inhalt
@@ -116,13 +124,16 @@ RTS-Spiel bleibt Web-only (`ta-game.html`/`ta-game-3d.html` im Browser).
 - Nutzt `packages/arops-shared` als **vendored Tarball**
   (`vendor/arops-shared.tgz`), nie als `file:`-Link, damit die App unabhängig
   vom Server-Repo gebaut werden kann
-- 4 View-Modi im laufenden Match: Comic-Karte (kompassorientiert), Kamera,
-  Split, Overlay (Kamera+Comic)
+- 5 View-Modi im laufenden Match: Comic-Karte 2D (frei dreh-/zoombar), Comic
+  3D (kompassorientiert), Split, Overlay, reine Kamera
 - Icon-Fonts (`@expo/vector-icons`) werden über das `expo-font`-Config-Plugin
   **nativ vorgelinkt** statt zur Laufzeit nachgeladen — vermeidet einen
   bekannten Hänger von `expo-font` unter React Natives New Architecture
-- Build: `npx eas-cli@latest build -p android --profile preview`, oder
-  GitHub-Workflow „APK Build“ manuell triggern (Secret `EXPO_TOKEN`)
+- Build: läuft automatisch per CI bei jedem Push (kein EAS) — [Download](#-craftworks)
+  oben, oder GitHub-Workflow „APK Build“/„Wear OS APK Build“ manuell antriggern
+- Wear-OS-Companion (`apps/arops-wear/`, natives Kotlin) fürs Radar-HUD am
+  Handgelenk; IR-ID-Beacon-Begleitgerät (`hardware/esp32-ir/`, ESP32-S3) für
+  physische Trefferbestätigung im IR-Modus
 
 ---
 
@@ -229,7 +240,8 @@ server {
 .
 ├── .github/workflows/
 │   ├── docker.yml               Docker-Image pro Branch (test/main) → ghcr.io
-│   └── apk.yml                  Manueller EAS-APK-Build (arops-mobile)
+│   ├── apk.yml                  Android-APK (arops-mobile) → Release-Asset
+│   └── wear-apk.yml             Wear-OS-APK (arops-wear) → Release-Asset
 ├── server/src/
 │   ├── index.js                 Express-Bootstrap + Auto-Migration
 │   ├── socket.js                Spiel-Sessions (RTS-Modi + Comic-Map-Bridge)
@@ -262,6 +274,8 @@ server {
 │   └── ar-game.html             AR-Ops-Debug-Harness
 ├── packages/arops-shared/       Geteilte Geometrie (Server + App), dist/ committed
 ├── apps/arops-mobile/           Expo-App für AR Ops (SDK 52, MapLibre)
+├── apps/arops-wear/             Wear-OS-Companion, natives Kotlin/Gradle (kein Expo)
+├── hardware/esp32-ir/           IR-ID-Beacon-Begleitgerät (ESP32-S3, Firmware + Flash-Anleitung)
 ├── Dockerfile.server            Multi-Stage: Vite-Client-Build → Node 20-Alpine
 ├── docker-compose.yml           Production (ghcr.io-Image)
 └── docker-compose.local.yml     Lokal/LAN (baut selbst)

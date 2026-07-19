@@ -16,3 +16,13 @@ const NativeWearBridge = requireNativeModule('WearBridge');
 export async function sendToWatch(path: string, payload: unknown): Promise<boolean> {
   return NativeWearBridge.sendMessage(path, JSON.stringify(payload));
 }
+
+/**
+ * Confirms a pairing as a persistent DataItem (not just a MessageClient
+ * push) — the watch polls for this (see PairingRepository.kt on the watch)
+ * as the reliable path, since a one-off message can silently miss a watch
+ * whose app process Wear OS just killed in the background.
+ */
+export async function putClaimOnWatch(token: string): Promise<boolean> {
+  return NativeWearBridge.putClaim(token);
+}

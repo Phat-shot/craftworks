@@ -182,7 +182,7 @@ export function Home() {
   return (
     <div style={{ height:'100%', overflow:'auto' }}>
       <div style={{ maxWidth:680, margin:'0 auto', padding:'20px 16px 32px' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:24 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:8 }}>
           <Avatar user={user} size="lg" />
           <div style={{ flex:1 }}>
             <div style={{ fontSize:18, fontWeight:800, color:'var(--text)' }}>{user?.username}</div>
@@ -191,6 +191,7 @@ export function Home() {
           <button className="btn btn-ghost btn-sm" onClick={()=>navigate('/friends')}>👥</button>
           <button className="btn btn-ghost btn-sm" onClick={()=>navigate('/leaderboard')}>🏆</button>
         </div>
+        <div style={{ textAlign:'right', color:'var(--text3)', fontSize:9, marginBottom:16 }}>v{__APP_VERSION__}</div>
 
         {error && <div className="alert alert-error" style={{ marginBottom:12 }}>{error}</div>}
 

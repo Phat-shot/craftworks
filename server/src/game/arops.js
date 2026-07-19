@@ -613,10 +613,14 @@ function createAropsGame(sessionId, players, workshopConfig) {
     sessionId, mode: 'ar_ops', subMode,
     polygon, cfg, hitConfig, timings, zones, captains,
     comicMap: ar.comicMap && Array.isArray(ar.comicMap.features) ? ar.comicMap : null,
-    // Forward-prep only: no engine behavior branches on this yet, IR hit
-    // detection isn't implemented. Exposed in the snapshot so clients can
-    // already show/prepare for it.
     hitTrackingMode: ar.hitTrackingMode === 'ir' ? 'ir' : 'compass',
+    // Host-assigned mapping of userId -> the numeric ID (0-255) their
+    // physical ESP32 IR beacon broadcasts (see hardware/esp32-ir). Only
+    // consulted when hitTrackingMode === 'ir' — see actionArHitAttempt,
+    // which requires the shooter's client to have actually camera-decoded
+    // the claimed target's assigned ID recently before a hit counts, in
+    // addition to (not instead of) the existing GPS/compass cone check.
+    irIds: (ar.irIds && typeof ar.irIds === 'object') ? { ...ar.irIds } : {},
     players: playerState,
     phase: mode.initialPhase(),
     phaseStartTime: now(),
@@ -702,6 +706,10 @@ function actionArTelemetry(gs, userId, data) {
 // ═══════════════════════════════════════════════════════════
 //  HIT ATTEMPT (core; mode decides gating + consequence)
 // ═══════════════════════════════════════════════════════════
+// A beacon broadcast cycle is ~2.1s (see hardware/esp32-ir firmware) — this
+// just needs to comfortably cover "decoded a moment before/during the shot",
+// not exactly one cycle.
+const IR_SCAN_MAX_AGE_MS = 4000;
 const pickTargetSample = shared.pickTargetSample;
 
 function actionArHitAttempt(gs, userId, data) {
@@ -795,6 +803,32 @@ function actionArHitAttempt(gs, userId, data) {
         distanceM: nearMiss.distanceM,
       } : null,
     };
+  }
+
+  // IR mode: the GPS/compass cone check above still has to pass (never
+  // relaxed), but additionally requires the shooter's phone to have
+  // camera-decoded the claimed target's assigned beacon ID recently — real
+  // physical confirmation they were looking at that specific player, not
+  // just that the angle math picked them as the closest candidate. See
+  // hardware/esp32-ir and useIrScan.ts on the client for where the scan
+  // comes from; never trust it without the cone check still having passed.
+  if (gs.hitTrackingMode === 'ir') {
+    const scan = data?.irScan;
+    const expectedId = gs.irIds[bestTarget.userId];
+    // Compared against the shot's own trigger.ts (the phone's clock), not
+    // the server's `t` — both timestamps come from the same client, so this
+    // avoids introducing a server/phone clock-skew dependency the rest of
+    // the freshness checks in this function don't have either.
+    const scanValid = scan
+      && Number.isFinite(scan.deviceId)
+      && Number.isFinite(scan.ts)
+      && expectedId !== undefined
+      && scan.deviceId === expectedId
+      && (trigger.ts - scan.ts) <= IR_SCAN_MAX_AGE_MS
+      && scan.ts <= trigger.ts;
+    if (!scanValid) {
+      return { ok: true, hit: false, reason: 'ir_not_confirmed' };
+    }
   }
 
   mode.applyHit(gs, shooter, bestTarget, bestVerdict, t);

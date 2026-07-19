@@ -1,10 +1,10 @@
 name: APK Build
-# Läuft automatisch bei Push auf main/test — analog zu docker.yml — aber nur
-# wenn sich tatsächlich etwas an der App oder ihrer einzigen Abhängigkeit
-# (das shared Package, als vendored Tarball eingebunden) geändert hat; ein
-# reiner Server-/Doku-Commit soll keinen kompletten Android-Build anstoßen.
-# Branch bestimmt den Backend-Endpoint (main = arops.srz.one, test =
-# dev.srz.one), keine manuelle Eingabe mehr nötig. Baut lokal in der CI per
+# Auf main läuft der Build immer (Merge auf main = Release, keine Ausnahmen).
+# Auf test nur, wenn sich seit dem letzten Push tatsächlich etwas an der App
+# oder ihrer einzigen Abhängigkeit (das shared Package, als vendored Tarball
+# eingebunden) geändert hat — ein reiner Server-/Doku-Commit soll keinen
+# kompletten Android-Build anstoßen. Branch bestimmt den Backend-Endpoint
+# (main = arops.srz.one, test = dev.srz.one). Baut lokal in der CI per
 # Gradle statt in der EAS-Cloud — kein EAS-Kontingent, kein EXPO_TOKEN-Secret.
 #
 # assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
@@ -22,13 +22,38 @@ name: APK Build
 on:
   push:
     branches: [main, test]
-    paths:
-      - 'apps/arops-mobile/**'
-      - 'packages/arops-shared/**'
-      - '.github/workflows/apk.yml'
 jobs:
-  gradle-build:
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: check
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BEFORE" "${{ github.sha }}" | grep -qE '^(apps/arops-mobile/|packages/arops-shared/|\.github/workflows/apk\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  gradle-build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -80,3 +105,30 @@ jobs:
           name: ${{ env.APK_FILENAME }}
           path: apps/arops-mobile/android/app/build/outputs/apk/release/${{ env.APK_FILENAME }}
           if-no-files-found: error
+
+      # Actions-Artifacts sind immer als Zip verpackt und laufen ohne CDN —
+      # spürbar langsamer Download als ein Release-Asset (direkt/CDN
+      # ausgeliefert, keine Extra-Zip-Schicht). Eine feste Tag pro Branch
+      # ("apk-android-test"/"apk-android-main") wird bei jedem Build
+      # überschrieben statt neue Releases anzuhäufen — ein Link zum
+      # Bookmarken, der immer den neuesten Build zeigt.
+      - name: Als Release-Asset veröffentlichen (schnellerer Download)
+        working-directory: apps/arops-mobile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="apk-android-${GITHUB_REF_NAME}"
+          ASSET="android/app/build/outputs/apk/release/${{ env.APK_FILENAME }}"
+          NOTES="Build ${GITHUB_SHA::7} · $(date -u +'%Y-%m-%d %H:%M UTC') · Branch ${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+            gh release edit "$TAG" --notes "$NOTES"
+          else
+            PRERELEASE_FLAG=""
+            [ "$GITHUB_REF_NAME" != "main" ] && PRERELEASE_FLAG="--prerelease"
+            gh release create "$TAG" "$ASSET" \
+              --title "AR Ops Android (${GITHUB_REF_NAME})" \
+              --notes "$NOTES" \
+              --target "$GITHUB_SHA" \
+              $PRERELEASE_FLAG
+          fi

@@ -10,6 +10,7 @@ import type { TelemetrySample } from '@craftworks/arops-shared';
 import {
   tiltCompensatedHeadingDeg, TOP_EDGE_AXIS, CAMERA_FORWARD_AXIS,
 } from '@craftworks/arops-shared';
+import { withTimeout } from '../utils/withTimeout';
 
 export interface TelemetryState {
   granted: boolean | null;
@@ -113,26 +114,48 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
       startHeading();
     };
 
+    // watchPositionAsync's setup promise has no built-in timeout and can hang
+    // indefinitely on some devices instead of resolving/rejecting. Without a
+    // guard, the 4s-silence watchdog below would then fire startPosition()
+    // again on top of the still-pending first call — two overlapping
+    // watchPositionAsync setups racing to assign posSub, one of them
+    // possibly getting leaked/never torn down. The guard serializes
+    // automatic retries; a manual tap (retryPosition) always force-clears it
+    // first so the user can never get stuck behind a permanently-stuck flag.
+    let posStartInFlight = false;
     const startPosition = async () => {
-      posSub?.remove();
-      // Kickstart with an immediate one-shot fix in parallel — watchPositionAsync's
-      // first callback can take a while to arrive, so without this the player's own
-      // position (and the map dot) can stay empty for a long stretch after match start.
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-        .then(loc => { if (!cancelled) { posRef.current = loc; lastPosAt.current = Date.now(); } })
-        .catch(() => {});
+      if (posStartInFlight) return;
+      posStartInFlight = true;
+      try {
+        posSub?.remove();
+        // Kickstart with an immediate one-shot fix in parallel — watchPositionAsync's
+        // first callback can take a while to arrive, so without this the player's own
+        // position (and the map dot) can stay empty for a long stretch after match start.
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+          .then(loc => { if (!cancelled) { posRef.current = loc; lastPosAt.current = Date.now(); } })
+          .catch(() => {});
 
-      // High (not BestForNavigation): comparable few-meter accuracy but noticeably
-      // faster/more reliable continuous fixes in practice — BestForNavigation was
-      // observed to stall for a long time on some devices.
-      posSub = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 },
-        (loc) => { posRef.current = loc; lastPosAt.current = Date.now(); }
-      );
+        // High (not BestForNavigation): comparable few-meter accuracy but noticeably
+        // faster/more reliable continuous fixes in practice — BestForNavigation was
+        // observed to stall for a long time on some devices.
+        posSub = await withTimeout(
+          Location.watchPositionAsync(
+            { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 },
+            (loc) => { posRef.current = loc; lastPosAt.current = Date.now(); }
+          ),
+          10_000
+        );
+      } catch {
+        // Swallowed — the silence watchdog below notices no position ever
+        // arrived and retries.
+      } finally {
+        posStartInFlight = false;
+      }
     };
     startPositionRef.current = async () => {
       posRetries.current = 0;
       lastPosAt.current = Date.now();
+      posStartInFlight = false;
       await startPosition();
     };
 

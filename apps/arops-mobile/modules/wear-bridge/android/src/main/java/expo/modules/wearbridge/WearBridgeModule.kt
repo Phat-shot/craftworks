@@ -1,6 +1,7 @@
 package expo.modules.wearbridge
 
 import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.functions.Coroutine
@@ -29,6 +30,25 @@ class WearBridgeModule : Module() {
         for (node in nodes) {
           Tasks.await(Wearable.getMessageClient(context).sendMessage(node.id, path, data))
         }
+        true
+      }
+    }
+
+    // Pairing confirmation as a persistent DataItem, not just a one-off
+    // MessageClient push — the watch can be in a short-lived, Activity-less
+    // process exactly when the message arrives (Wear OS kills backgrounded
+    // apps aggressively) and silently miss it. DataItems are actively kept
+    // in sync by Play Services and can be polled on the watch side
+    // (PairingRepository.checkClaimViaDataLayer) instead of relying purely
+    // on a push being delivered at the right moment.
+    AsyncFunction("putClaim") Coroutine { token: String ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      withContext(Dispatchers.IO) {
+        val request = PutDataMapRequest.create("/arops/claim").apply {
+          dataMap.putString("token", token)
+          dataMap.putLong("ts", System.currentTimeMillis())
+        }.asPutDataRequest().setUrgent()
+        Tasks.await(Wearable.getDataClient(context).putDataItem(request))
         true
       }
     }
