@@ -9,12 +9,14 @@
 //  später abgeleitet werden sollen (siehe AR-Ops-Modi-Ausbau-Plan, Phase 1).
 //
 //  Umfang: alle sechs implementierten Modi (hide_and_seek/domination/ctf/
-//  seek_destroy alias "Zerstören"/deathmatch/battle_royale/the_ship), die
-//  drei bestehenden Rollen (hider/seeker/team_member) und die drei
-//  Spielerklassen (scout/sniper/bomber, additiv zu Rolle/Team — kein
-//  Ersatz). `submodes` ist für alle Modi leer — keiner hat heute echte
-//  Varianten (Battle Royale ist ein eigener Modus, keine Sub-Variante von
-//  Hide & Seek, siehe dessen eigener Kommentar in arops.js).
+//  seek_destroy alias "Zerstören"/deathmatch/battle_royale), die drei
+//  bestehenden Rollen (hider/seeker/team_member) und die drei Spielerklassen
+//  (scout/sniper/bomber, additiv zu Rolle/Team — kein Ersatz). "The Ship"
+//  ist KEIN eigener Modus, sondern eine Variante von hide_and_seek
+//  (ar_settings.hsVariant='the_ship', siehe dessen submodes-Eintrag unten
+//  und der zugehörige Kommentar in arops.js's MODES.hide_and_seek) — Battle
+//  Royale dagegen bleibt ein eigener Modus (kein hide_and_seek-Submode),
+//  siehe dessen eigener Kommentar in arops.js.
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GLOSSARY = exports.PLAYER_TYPE_PROFILES = exports.GAME_MODE_PROFILES = void 0;
@@ -38,30 +40,36 @@ exports.GAME_MODE_PROFILES = {
         hasBases: false,
         hasTargets: true, // die Hider selbst sind die Ziele
         partyMode: 'individual',
-        submodes: [],
+        submodes: [
+            { id: 'the_ship', name: 'The Ship',
+                shortDescription: 'Geheime Attentats-Kette statt Seeker/Hider-Rollen: jeder hat genau ein Ziel, ' +
+                    'niemand kennt seinen eigenen Jäger. Aktiviert über die Host-Einstellung "hsVariant".' },
+        ],
         parameters: [
             { key: 'hidingDurationMs', name: 'Versteckzeit', unit: 'ms',
-                description: 'Dauer der Versteckphase, bevor der Seeker aktiv suchen/schießen darf.' },
+                description: 'Dauer der Versteckphase, bevor der Seeker aktiv suchen/schießen darf. Ohne Wirkung bei hsVariant "the_ship" (keine Versteckphase).' },
             { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
-                description: 'Zeitlimit der Suchphase — läuft es ab, gewinnen die überlebenden Hider.' },
+                description: 'Zeitlimit der Suchphase — läuft es ab, gewinnen die überlebenden Hider (bzw. bei "The Ship" der höhere Punktestand).' },
             { key: 'hitCooldownMs', name: 'Schuss-Cooldown', unit: 'ms',
                 description: 'Mindestabstand zwischen zwei Schussversuchen desselben Spielers.' },
             { key: 'radarCooldownMs', name: 'Radar-Cooldown', unit: 'ms',
-                description: 'Abklingzeit des gemeinsamen Radar-Perks (beide Rollen).' },
+                description: 'Abklingzeit des gemeinsamen Radar-Perks (beide Rollen, nur klassische Variante).' },
             { key: 'droneCooldownMs', name: 'Drohnen-Cooldown', unit: 'ms',
-                description: 'Abklingzeit von Hiders Drohnen-Perk.' },
-            { key: 'cloakCooldownMs', name: 'Tarnung-Cooldown', unit: 'ms', description: 'Abklingzeit von Hiders Tarnung.' },
-            { key: 'cloakDurationMs', name: 'Tarnung-Dauer', unit: 'ms', description: 'Wie lange die Tarnung aktiv bleibt.' },
+                description: 'Abklingzeit von Hiders Drohnen-Perk (nur klassische Variante).' },
+            { key: 'cloakCooldownMs', name: 'Tarnung-Cooldown', unit: 'ms', description: 'Abklingzeit von Hiders Tarnung (nur klassische Variante).' },
+            { key: 'cloakDurationMs', name: 'Tarnung-Dauer', unit: 'ms', description: 'Wie lange die Tarnung aktiv bleibt (nur klassische Variante).' },
             { key: 'fakeMarkerCooldownMs', name: 'Fake-Marker-Cooldown', unit: 'ms',
-                description: 'Abklingzeit von Hiders Fake-Marker-Perk.' },
+                description: 'Abklingzeit von Hiders Fake-Marker-Perk (nur klassische Variante).' },
             { key: 'fakeMarkerDurationMs', name: 'Fake-Marker-Dauer', unit: 'ms',
-                description: 'Wie lange die Fake-Marker auf dem Radar des Seekers erscheinen.' },
+                description: 'Wie lange die Fake-Marker auf dem Radar des Seekers erscheinen (nur klassische Variante).' },
             { key: 'aufscheuchenCooldownMs', name: 'Aufscheuchen-Cooldown', unit: 'ms',
-                description: 'Abklingzeit von Seekers Aufscheuchen-Perk.' },
+                description: 'Abklingzeit von Seekers Aufscheuchen-Perk (nur klassische Variante).' },
             { key: 'aufscheuchenDurationMs', name: 'Aufscheuchen-Dauer', unit: 'ms',
-                description: 'Wie lange alle Hider danach einen Näherungs-Alarm erhalten.' },
-            { key: 'foundMode', name: 'Schicksal bei Fund', unit: 'enum (spectator/seeker)',
-                description: 'Was mit einem gefundenen Hider passiert: ausscheiden oder zur Seeker-Seite wechseln.' },
+                description: 'Wie lange alle Hider danach einen Näherungs-Alarm erhalten (nur klassische Variante).' },
+            { key: 'foundMode', name: 'Schicksal bei Fund', unit: 'enum (spectator/seeker/freeze)',
+                description: 'Was mit einem gefundenen Hider passiert (nur klassische Variante): ausscheiden, zur Seeker-Seite wechseln, oder einfrieren.' },
+            { key: 'hsVariant', name: 'Variante', unit: 'enum (classic/the_ship)',
+                description: 'Klassisches Seeker/Hider-Gameplay oder "The Ship" (geheime Attentats-Kette, siehe submodes).' },
         ],
     },
     domination: {
@@ -209,34 +217,6 @@ exports.GAME_MODE_PROFILES = {
             'Modus.',
         hasBases: false,
         hasTargets: false,
-        partyMode: 'individual',
-        submodes: [],
-        parameters: [
-            { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
-                description: 'Zeitlimit; danach gewinnt der Spieler mit dem höchsten Punktestand.' },
-            { key: 'hitCooldownMs', name: 'Schuss-Cooldown', unit: 'ms',
-                description: 'Mindestabstand zwischen zwei Schussversuchen desselben Spielers.' },
-        ],
-    },
-    the_ship: {
-        id: 'the_ship',
-        name: 'The Ship',
-        shortDescription: 'Geheime Attentats-Kette: jeder hat genau ein Ziel, niemand kennt seinen ' +
-            'eigenen Jäger. Nach einem Treffer erbt man das Ziel des Opfers.',
-        longDescription: 'Kein Team, keine Rolle, keine Basis. Zu Spielbeginn wird jedem Spieler ' +
-            'verdeckt genau ein anderer Spieler als Ziel zugewiesen — die gesamte ' +
-            'Teilnehmerliste bildet dabei eine einzige Kette (jeder ist gleichzeitig ' +
-            'Jäger von genau einem und Ziel von genau einem anderen). Nur das eigene ' +
-            'Ziel kann getroffen werden, jeder andere Spieler zählt schlicht nicht als ' +
-            'Treffer-Kandidat. Gelingt der Treffer, scheidet das Ziel endgültig aus, ' +
-            'und man erbt dessen bisheriges Ziel — die Kette bleibt so immer über die ' +
-            'verbliebenen Spieler geschlossen. Wer als letzter übrig bleibt, gewinnt; ' +
-            'beim Zeitlimit entscheidet der höhere Punktestand (Gleichstand = ' +
-            'Unentschieden). Die eigene Zielperson wird nur der/dem betreffenden ' +
-            'Spieler:in angezeigt (Identität, nie Position) — niemand sonst erfährt, ' +
-            'wer wen jagt.',
-        hasBases: false,
-        hasTargets: true, // das persönliche Attentats-Ziel jedes Spielers
         partyMode: 'individual',
         submodes: [],
         parameters: [

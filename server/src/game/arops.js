@@ -55,6 +55,8 @@ const DEFAULTS = {
   revealTrapDurationMs: 20_000,   // how long a placed trap stays armed
   revealTrapRevealMs: 8_000,      // how long the triggered reveal stays visible to the owner
   livesPerPlayer: 3,              // Deathmatch (respawn variant): lives before elimination
+  pingCooldownMs: 5_000,          // team ping (map tap): rate limit against spam
+  pingDurationMs: 20_000,         // how long a ping marker stays visible to teammates
 };
 
 function now() { return Date.now(); }
@@ -147,12 +149,66 @@ const MODES = {
       return gs.phase === 'hiding' ? gs.cfg.hidingDurationMs
         : gs.phase === 'seeking' ? gs.cfg.gameDurationMs : 0;
     },
+    // "The Ship" (gs.cfg.hsVariant === 'the_ship'): a Hide & Seek variant,
+    // not a separate mode — secret assassin-chain target assignment instead
+    // of seeker/hider roles. Every player is secretly assigned exactly one
+    // other player as their sole target, and is exactly one other player's
+    // target — the whole roster forms a single cycle (built once here),
+    // never independent pairs, so a hit can never leave a survivor without
+    // a hunter or a target. On a kill, the shooter inherits the eliminated
+    // target's own target, splicing them out of the cycle and keeping it a
+    // single loop over whoever's left. Only the killer's identity leaks
+    // (public roster, same as any other mode) — a player's TARGET's
+    // identity is secret to everyone but that player, delivered via a
+    // me-only snapshot field (me.targetUserId, see getAropsSnapshot) that
+    // carries an identity, never a position — deliberately not an overload
+    // of the revealPosition hook below (which answers a different
+    // question: "is this player's location visible").
+    initState(gs) {
+      if (gs.cfg.hsVariant !== 'the_ship') return;
+      const ids = Object.keys(gs.players);
+      for (let i = ids.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+      }
+      const targets = {};
+      if (ids.length >= 2) {
+        ids.forEach((uid, i) => { targets[uid] = ids[(i + 1) % ids.length]; });
+      } else if (ids.length === 1) {
+        targets[ids[0]] = null; // solo debug session: nobody to hunt
+      }
+      gs.modeState = { targets };
+    },
     canShoot(gs, p) {
+      if (gs.cfg.hsVariant === 'the_ship') {
+        return gs.modeState.targets[p.userId] ? null : 'no_target';
+      }
       if (p.role !== 'seeker') return 'role_cannot_shoot';
       return null;
     },
-    targetFilter(gs, shooter, c) { return c.role === 'hider'; },
+    // The Ship restricts targetFilter to a single specific player instead
+    // of a whole category — you can only ever hit your own assigned
+    // target, nobody else.
+    targetFilter(gs, shooter, c) {
+      if (gs.cfg.hsVariant === 'the_ship') return c.userId === gs.modeState.targets[shooter.userId];
+      return c.role === 'hider';
+    },
     applyHit(gs, shooter, target, verdict, t) {
+      if (gs.cfg.hsVariant === 'the_ship') {
+        shooter.score += 10;
+        const ms = gs.modeState;
+        const inherited = ms.targets[target.userId];
+        target.status = 'found'; // eliminated — permanently out
+        ms.targets[target.userId] = null;
+        // Guards the only case a cycle splice could self-target: exactly 2
+        // players left (A→B→A) — hitting B would otherwise assign A as A's
+        // own target. Harmless in practice (checkWin ends the match the
+        // same tick since only A remains) but null is the honest value.
+        ms.targets[shooter.userId] = (inherited && inherited !== shooter.userId) ? inherited : null;
+        pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
+        this.checkWin(gs);
+        return;
+      }
       foundHider(gs, target, t, shooter.userId);
       shooter.score += 10;
       pushEvent(gs, 'player_found', {
@@ -164,26 +220,60 @@ const MODES = {
     },
     checkWin(gs) {
       // Solo debug sessions (host alone, no bots) can't have a winner — never
-      // auto-end them just because there are trivially "0 hiders left".
+      // auto-end them just because there are trivially "0 left".
       if (Object.keys(gs.players).length < 2) return;
+      if (gs.cfg.hsVariant === 'the_ship') {
+        const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+        if (alive.length <= 1) endGame(gs, alive.length === 1 ? alive[0].userId : 'draw');
+        return;
+      }
       const hidersLeft = Object.values(gs.players)
         .filter(p => p.role === 'hider' && p.status === 'alive').length;
       if (hidersLeft === 0) endGame(gs, 'seekers');
     },
     tick(gs, t) {
-      if (gs.phase === 'hiding' && t - gs.phaseStartTime >= gs.cfg.hidingDurationMs) {
-        gs.phase = 'seeking';
-        gs.phaseStartTime = t;
-        pushEvent(gs, 'phase_change', { phase: 'seeking' });
+      // The Ship has no hiding phase (no hider role to hide from) — it
+      // skips straight through to the shootable phase on the very first
+      // tick, same phase machinery as classic, just zero-length.
+      if (gs.phase === 'hiding') {
+        const hidingDone = gs.cfg.hsVariant === 'the_ship' || t - gs.phaseStartTime >= gs.cfg.hidingDurationMs;
+        if (hidingDone) {
+          gs.phase = 'seeking';
+          gs.phaseStartTime = t;
+          pushEvent(gs, 'phase_change', { phase: 'seeking' });
+        }
       } else if (gs.phase === 'seeking' && t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
-        endGame(gs, 'hiders');
+        if (gs.cfg.hsVariant === 'the_ship') {
+          // No teams/hiders to compare — same score-at-time-limit tiebreak
+          // as Battle Royale (tie -> draw).
+          const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+          if (alive.length === 0) { endGame(gs, 'draw'); return; }
+          const top = Math.max(...alive.map(p => p.score));
+          const leaders = alive.filter(p => p.score === top);
+          endGame(gs, leaders.length === 1 ? leaders[0].userId : 'draw');
+        } else {
+          endGame(gs, 'hiders');
+        }
         return;
       }
-      // Geofence: exposure + auto-found for hiders
+      // Geofence: exposure + auto-elimination for whoever leaves too long.
+      // Classic: only hiders (seekers have nothing to hide from). The Ship:
+      // everyone, spliced out of the assassin chain same as a kill.
       for (const p of Object.values(gs.players)) {
         if (p.status !== 'alive' || p.outsideSince === null) continue;
         const outsideFor = t - p.outsideSince;
-        if (p.role === 'hider' && outsideFor >= gs.cfg.geofenceAutoFoundMs) {
+        if (outsideFor < gs.cfg.geofenceAutoFoundMs) continue;
+        if (gs.cfg.hsVariant === 'the_ship') {
+          const ms = gs.modeState;
+          const hunter = Object.values(gs.players).find(h => ms.targets[h.userId] === p.userId);
+          const inherited = ms.targets[p.userId];
+          p.status = 'found';
+          ms.targets[p.userId] = null;
+          if (hunter) ms.targets[hunter.userId] = (inherited && inherited !== hunter.userId) ? inherited : null;
+          pushEvent(gs, 'player_eliminated', { userId: p.userId, byUserId: null, reason: 'left_field' });
+          this.checkWin(gs);
+          if (gs.gameOver) return;
+        } else if (p.role === 'hider') {
           foundHider(gs, p, t, null);
           pushEvent(gs, 'player_found', { userId: p.userId, byUserId: null, reason: 'left_field' });
           this.checkWin(gs);
@@ -192,17 +282,24 @@ const MODES = {
       }
     },
     onGameEnd(gs) {
+      if (gs.cfg.hsVariant === 'the_ship') return;
       for (const p of Object.values(gs.players)) {
         if (p.role === 'hider' && p.status === 'alive') p.score += 20;
       }
     },
     snapshotExtras(gs) {
+      if (gs.cfg.hsVariant === 'the_ship') {
+        return { aliveCount: Object.values(gs.players).filter(p => p.status === 'alive').length };
+      }
       return {
         hidersRemaining: Object.values(gs.players)
           .filter(p => p.role === 'hider' && p.status === 'alive').length,
       };
     },
-    isOpponentPair(gs, a, b) { return a.role !== b.role; },
+    isOpponentPair(gs, a, b) {
+      if (gs.cfg.hsVariant === 'the_ship') return true;
+      return a.role !== b.role;
+    },
     revealPosition() { return false; },
   },
 
@@ -713,91 +810,6 @@ const MODES = {
     },
     revealPosition() { return false; },
   },
-
-  // ── THE SHIP ──────────────────────────────────────────────
-  // Assassin-chain: no teams, no roles, no bases. Every player is secretly
-  // assigned exactly one other player as their sole target, and every
-  // player is exactly one other player's target — the whole roster forms
-  // a single cycle (built once in initState), never independent pairs, so
-  // a hit can never leave a survivor without a hunter or a target. On a
-  // kill, the shooter inherits the eliminated target's own target,
-  // splicing them out of the cycle and keeping it a single loop over
-  // whoever's left. Only the killer's identity leaks (public roster, same
-  // as any other mode) — a player's TARGET's identity is secret to
-  // everyone but that player, delivered via a new me-only snapshot field
-  // (me.targetUserId) that carries an identity, never a position — the
-  // plan's explicit requirement, deliberately not an overload of the
-  // existing revealPosition hook (which answers a different question:
-  // "is this player's location visible").
-  the_ship: {
-    usesTeams: false,
-    initialPhase: () => 'live',
-    shootPhases: ['live'],
-    phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
-    initState(gs) {
-      const ids = Object.keys(gs.players);
-      for (let i = ids.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [ids[i], ids[j]] = [ids[j], ids[i]];
-      }
-      const targets = {};
-      if (ids.length >= 2) {
-        ids.forEach((uid, i) => { targets[uid] = ids[(i + 1) % ids.length]; });
-      } else if (ids.length === 1) {
-        targets[ids[0]] = null; // solo debug session: nobody to hunt
-      }
-      gs.modeState = { targets };
-    },
-    // No allies at all — nobody's target assignment is shared, not even
-    // with that target themselves. Same "always true" shape Battle Royale
-    // uses so the snapshot's "teammates see each other" branch never fires.
-    isOpponentPair() { return true; },
-    canShoot(gs, p) {
-      if (!gs.modeState.targets[p.userId]) return 'no_target';
-      return null;
-    },
-    // The one place a mode restricts targetFilter to a single specific
-    // player instead of a whole category (team/role) — you can only ever
-    // hit your own assigned target, nobody else.
-    targetFilter(gs, shooter, c) { return c.userId === gs.modeState.targets[shooter.userId]; },
-    applyHit(gs, shooter, target, verdict, t) {
-      shooter.score += 10;
-      const ms = gs.modeState;
-      const inherited = ms.targets[target.userId];
-      target.status = 'found'; // eliminated — permanently out
-      ms.targets[target.userId] = null;
-      // Guards the only case a cycle splice could self-target: exactly 2
-      // players left (A→B→A) — hitting B would otherwise assign A as A's
-      // own target. Harmless in practice (checkWin ends the match the
-      // same tick since only A remains) but null is the honest value.
-      ms.targets[shooter.userId] = (inherited && inherited !== shooter.userId) ? inherited : null;
-      pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
-      this.checkWin(gs);
-    },
-    checkWin(gs) {
-      // Solo debug session (host alone, no bots) can't have a winner.
-      if (Object.keys(gs.players).length < 2) return;
-      const alive = Object.values(gs.players).filter(p => p.status === 'alive');
-      if (alive.length <= 1) {
-        endGame(gs, alive.length === 1 ? alive[0].userId : 'draw');
-      }
-    },
-    tick(gs, t) {
-      if (gs.phase !== 'live') return;
-      if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
-        const alive = Object.values(gs.players).filter(p => p.status === 'alive');
-        if (alive.length === 0) return endGame(gs, 'draw');
-        const top = Math.max(...alive.map(p => p.score));
-        const leaders = alive.filter(p => p.score === top);
-        endGame(gs, leaders.length === 1 ? leaders[0].userId : 'draw');
-      }
-    },
-    onGameEnd() {},
-    snapshotExtras(gs) {
-      return { aliveCount: Object.values(gs.players).filter(p => p.status === 'alive').length };
-    },
-    revealPosition() { return false; },
-  },
 };
 
 function dropFlag(gs, flagTeam, carrier, t) {
@@ -913,6 +925,10 @@ function createAropsGame(sessionId, players, workshopConfig) {
   cfg.autoScale = autoScale;
   cfg.foundMode = ['seeker', 'freeze'].includes(ar.foundMode) ? ar.foundMode : 'spectator';
   cfg.debugMode = ar.debugMode === true;
+  // Hide & Seek variant: 'classic' (default, seeker/hider roles) or
+  // 'the_ship' (secret assassin-chain — no roles, see the MODES.hide_and_seek
+  // entry). A Hide & Seek variant, not its own mode — same subMode either way.
+  cfg.hsVariant = ar.hsVariant === 'the_ship' ? 'the_ship' : 'classic';
   // Deathmatch: on-hit consequence — 'respawn' (lose a life, downed until
   // the base/respawn checkpoint dwell revives it) is the mode's identity;
   // 'freeze' reuses the plain team-mode freeze mechanic instead (no lives
@@ -1004,14 +1020,15 @@ function createAropsGame(sessionId, players, workshopConfig) {
       frozenUntil: 0, freezeAnchor: null, freezeViolations: 0,
       trap: null, trapAlert: null, // Scout's Reveal-Trap perk state
       spawnDwellMs: 0, // Base/respawn checkpoint (CTF, Deathmatch)
+      lastPingAt: 0, // team ping cooldown (map tap)
     };
   });
-  // Every normal Hide & Seek match needs at least one seeker — but a solo
-  // debug session (host testing the hider view alone) should be able to
-  // explicitly opt out. Hide & Seek-specific check (not just "any non-team
-  // mode") since Battle Royale is also usesTeams:false but has no
-  // seeker/hider role concept at all.
-  if (subMode === 'hide_and_seek' && seekerCount === 0 && !cfg.debugMode) {
+  // Every normal (classic) Hide & Seek match needs at least one seeker —
+  // but a solo debug session (host testing the hider view alone) should be
+  // able to explicitly opt out, and The Ship variant has no seeker/hider
+  // role concept at all (role is simply unused there), same reasoning as
+  // Battle Royale's own usesTeams:false-but-roleless case.
+  if (subMode === 'hide_and_seek' && cfg.hsVariant !== 'the_ship' && seekerCount === 0 && !cfg.debugMode) {
     const first = Object.values(playerState)[0];
     if (first) first.role = 'seeker';
   }
@@ -1034,6 +1051,12 @@ function createAropsGame(sessionId, players, workshopConfig) {
     gameOver: false, _gameOverWin: false, winner: null,
     events: [], _eventSeq: 0,
     modeState: {},
+    // Team ping (map tap): mode-agnostic, like events/modeState above — any
+    // team mode gets this for free. Per-team so a viewer only ever reads
+    // their OWN team's array in the snapshot (see getAropsSnapshot's
+    // me.teamPings) — never the opponent's, unlike gs.events which is the
+    // same broadcast list for everyone.
+    teamPings: { a: [], b: [] },
     _lastModeTick: now(),
     _hasBots: Object.values(playerState).some(p => p.isBot),
     _lastBotStep: 0,
@@ -1362,6 +1385,27 @@ function actionArUsePerk(gs, userId, data) {
   if (!mode.shootPhases.includes(gs.phase)) return { ok: false, err: 'wrong_phase' };
   const t = now();
   const perk = data?.perk;
+
+  // Team ping (map tap in-game): drops a short-lived marker visible only to
+  // the pinger's own team — never to opponents, and no-op for teamless
+  // modes (no teammates to ping). Delivery is per-viewer (gs.teamPings[team]
+  // filtered in getAropsSnapshot by the VIEWER's own team), not the shared
+  // gs.events broadcast list every player already receives — that list
+  // never carries positions, and pings must not be the first thing that does.
+  if (perk === 'ping') {
+    if (!p.team) return { ok: false, err: 'no_team' };
+    const lat = data?.lat, lon = data?.lon;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false, err: 'bad_location' };
+    const elapsed = t - p.lastPingAt;
+    if (p.lastPingAt && elapsed < gs.cfg.pingCooldownMs) {
+      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.pingCooldownMs - elapsed };
+    }
+    p.lastPingAt = t;
+    const pings = gs.teamPings[p.team];
+    pings.push({ lat, lon, byUserId: userId, ts: t, expiresAt: t + gs.cfg.pingDurationMs });
+    if (pings.length > 5) pings.splice(0, pings.length - 5);
+    return { ok: true };
+  }
 
   if (perk === 'radar') {
     const elapsed = t - p.perks.radarLastUsed;
@@ -1743,6 +1787,12 @@ function getAropsSnapshot(gs, userId) {
       // a position when independently revealed (never true here, since
       // isOpponentPair is always true for this mode).
       targetUserId: gs.modeState.targets ? (gs.modeState.targets[userId] || null) : null,
+      // Team ping (map tap): only the viewer's OWN team's recent pings,
+      // expired ones filtered out — never the opponent team's array, and
+      // empty for teamless modes (me.team is null there).
+      teamPings: me.team
+        ? (gs.teamPings[me.team] || []).filter(pg => t < pg.expiresAt)
+        : [],
     } : null,
     players: roster,
     events: gs.events.slice(-15),

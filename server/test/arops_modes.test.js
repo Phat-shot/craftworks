@@ -387,6 +387,73 @@ console.log('\n═══ Base/Respawn Checkpoint (CTF) ═══');
   });
 }
 
+// ═══ TEAM PING (map tap) ══════════════════════════════════════
+console.log('\n═══ TEAM PING ═══');
+{
+  function setupPing(sessionId, over = {}) {
+    // Explicit team assignment — domination's default alternates by array
+    // index (A1='a', A2='b', ...), which would make A1/A2 opponents instead
+    // of the teammates this test needs.
+    return createGame(sessionId,
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' },
+       { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
+        teams: { A1: 'a', A2: 'a', B1: 'b' },
+        timings: FAST, gameDurationMs: 600_000, pingCooldownMs: 50, ...over } });
+  }
+
+  check('ping is visible to teammates, never to the opposing team', () => {
+    const gs = setupPing('ping_basic');
+    const r = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r.ok, true, JSON.stringify(r));
+
+    const snapMate = arops.getAropsSnapshot(gs, 'A2');
+    assert.equal(snapMate.me.teamPings.length, 1);
+    assert.equal(snapMate.me.teamPings[0].byUserId, 'A1');
+    assert.equal(snapMate.me.teamPings[0].lat, MUC.lat);
+
+    const snapSelf = arops.getAropsSnapshot(gs, 'A1');
+    assert.equal(snapSelf.me.teamPings.length, 1, 'the pinger sees their own ping too (same team)');
+
+    const snapFoe = arops.getAropsSnapshot(gs, 'B1');
+    assert.equal(snapFoe.me.teamPings.length, 0, 'opposing team never receives the ping');
+  });
+
+  check('cooldown blocks a second ping in quick succession', () => {
+    const gs = setupPing('ping_cooldown', { pingCooldownMs: 60_000 });
+    const r1 = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r1.ok, true);
+    const r2 = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r2.ok, false);
+    assert.equal(r2.err, 'cooldown', JSON.stringify(r2));
+  });
+
+  check('missing/invalid lat-lon is rejected', () => {
+    const gs = setupPing('ping_badloc');
+    const r = arops.actionArUsePerk(gs, 'A1', { perk: 'ping' });
+    assert.equal(r.ok, false);
+    assert.equal(r.err, 'bad_location');
+  });
+
+  check('teamless modes (no team) cannot ping — nobody to ping', () => {
+    const gs = createGame('ping_noteam',
+      [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }],
+      { ar_settings: { polygon: FIELD, subMode: 'battle_royale', gameDurationMs: 600_000 } });
+    const r = arops.actionArUsePerk(gs, 'A', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r.ok, false);
+    assert.equal(r.err, 'no_team');
+  });
+
+  check('a ping expires and disappears from the snapshot after pingDurationMs', () => {
+    const gs = setupPing('ping_expiry', { pingDurationMs: 500 });
+    const r = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r.ok, true);
+    assert.equal(arops.getAropsSnapshot(gs, 'A2').me.teamPings.length, 1);
+    gs.teamPings.a[0].expiresAt = Date.now() - 1; // force-expire without a real sleep
+    assert.equal(arops.getAropsSnapshot(gs, 'A2').me.teamPings.length, 0);
+  });
+}
+
 // ═══ DEATHMATCH ═════════════════════════════════════════════
 console.log('\n═══ DEATHMATCH ═══');
 {
@@ -555,12 +622,20 @@ console.log('\n═══ BATTLE ROYALE ═══');
   });
 }
 
-// ═══ THE SHIP ════════════════════════════════════════════════
+// ═══ THE SHIP (Hide & Seek variant) ═════════════════════════
 console.log('\n═══ THE SHIP ═══');
 {
   function setupShip(sessionId, players, over = {}) {
-    return createGame(sessionId, players,
-      { ar_settings: { polygon: FIELD, subMode: 'the_ship', gameDurationMs: 600_000, hitCooldownMs: 50, ...over } });
+    const gs = createGame(sessionId, players, { ar_settings: {
+      polygon: FIELD, subMode: 'hide_and_seek', hsVariant: 'the_ship',
+      gameDurationMs: 600_000, hitCooldownMs: 50, ...over,
+    } });
+    // The Ship has no hiding phase — one tick is enough to flip
+    // hiding -> seeking regardless of hidingDurationMs (see MODES.hide_and_seek's
+    // tick()). Tests below attempt hits immediately, which requires the
+    // 'seeking' phase (mode.shootPhases).
+    tick(gs, 10);
+    return gs;
   }
 
   check('no teams assigned; every player gets exactly one target, forming a single cycle over the whole roster', () => {
@@ -668,6 +743,16 @@ console.log('\n═══ THE SHIP ═══');
     tick(gsTie, 100);
     assert.equal(gsTie.gameOver, true);
     assert.equal(gsTie.winner, 'draw');
+  });
+
+  check('classic Hide & Seek is unaffected: roles assigned, hiding phase still gated by hidingDurationMs', () => {
+    const gs = createGame('ship_regression', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+    ], { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', hidingDurationMs: 100_000, gameDurationMs: 600_000 } });
+    assert.equal(gs.phase, 'hiding');
+    assert.equal(gs.modeState.targets, undefined, 'classic variant never builds an assassin chain');
+    tick(gs, 10);
+    assert.equal(gs.phase, 'hiding', 'classic variant still respects hidingDurationMs, unlike The Ship');
   });
 
   check('solo debug session never auto-ends via checkWin just because "1 player is left"', () => {
