@@ -170,35 +170,46 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
         description: 'Mindestabstand zwischen den beiden Team-Basen (in ar_settings.timings).' },
     ],
   },
+  // Code-Id bewusst 'seek_destroy' geblieben (ersetzt den alten Einzel-
+  // Bombenplatz-Modus an derselben Stelle, siehe AR-Ops-Modi-Ausbau-Plan) —
+  // Name/Beschreibung/Parameter spiegeln jetzt "Zerstören", nicht mehr das
+  // alte Seek-&-Destroy.
   seek_destroy: {
     id: 'seek_destroy',
-    name: 'Seek & Destroy',
+    name: 'Zerstören',
     shortDescription:
-      'Angreifer (Team a) platzieren an einem Zielort eine Bombe, ' +
-      'Verteidiger (Team b) müssen sie vor der Explosion entschärfen.',
+      'Ein rotierendes Ziel ist aktiv; wird es eingenommen, ist es zerstört und ' +
+      'das nächste aktiviert. Symmetrisch (beide Teams) oder mit Entschärfen (asymmetrisch).',
     longDescription:
-      'Angreifer (Team a) müssen an einem der host-platzierten Zielorte eine ' +
-      'Zeit lang ungestört verweilen, um dort eine Bombe zu platzieren ' +
-      '(plantDwellMs). Danach läuft ein Timer bis zur Explosion ' +
-      '(bombTimerMs) — Verteidiger (Team b) müssen in dieser Zeit ebenso ' +
-      'lange ungestört am Bombenort verweilen, um sie zu entschärfen ' +
-      '(defuseDwellMs). Gelingt die Entschärfung oder läuft die Zeit ab, ' +
-      'ohne dass eine Bombe gepflanzt wurde, gewinnen die Verteidiger; ' +
-      'explodiert die Bombe, gewinnen die Angreifer. Eine feste ' +
-      'Angreifer/Verteidiger-Zuteilung pro Runde, kein Seitenwechsel.',
+      'Von den host-platzierten oder zufällig generierten Zielen ist immer genau ' +
+      'eines aktiv. Je nach Host-Einstellung "destroyVariant": "instant" (Standard) ' +
+      '— beide Teams können das aktive Ziel durch ungestörtes Verweilen einnehmen ' +
+      '(captureDwellMs), wer zuerst fertig ist, zerstört es und punktet; oder ' +
+      '"defuse" — nur Team a kann das Ziel scharf machen (plantDwellMs), danach ' +
+      'läuft ein Timer (doppelte Pflanzzeit) bis zur Zerstörung, Team b kann in ' +
+      'dieser Zeit entschärfen (defuseDwellMs) — das rettet das Ziel, es bleibt ' +
+      'aktiv und kann erneut scharf gemacht werden, statt zerstört zu sein. Sobald ' +
+      'ein Ziel zerstört ist, aktiviert sich automatisch das nächste. Sind alle ' +
+      'zerstört, endet das Match sofort (Sieg fürs zuletzt zerstörende Team) — es ' +
+      'sei denn, "destroyReactivate" ist an: dann setzen sich alle Ziele zurück und ' +
+      'der Zyklus läuft bis zum Zeitlimit weiter (dort entscheidet der Punktestand).',
     hasBases: false,
-    hasTargets: true, // der Plant-Site ist das Ziel der Angreifer
+    hasTargets: true,
     partyMode: 'team',
     submodes: [],
     parameters: [
       { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
-        description: 'Zeitlimit ohne Bombenpflanzung; danach gewinnen automatisch die Verteidiger.' },
-      { key: 'plantDwellMs', name: 'Pflanzzeit', unit: 'ms',
-        description: 'Wie lange Angreifer ungestört am Zielort stehen müssen, um die Bombe zu pflanzen (in ar_settings.timings).' },
-      { key: 'defuseDwellMs', name: 'Entschärfzeit', unit: 'ms',
-        description: 'Wie lange Verteidiger ungestört an der Bombe stehen müssen, um sie zu entschärfen (in ar_settings.timings).' },
-      { key: 'bombTimerMs', name: 'Bomben-Timer', unit: 'ms',
-        description: 'Zeit von der Pflanzung bis zur Explosion (in ar_settings.timings).' },
+        description: 'Zeitlimit; danach gewinnt der höhere Punktestand (Gleichstand = Unentschieden).' },
+      { key: 'destroyVariant', name: 'Zerstören-Variante', unit: 'enum (instant/defuse)',
+        description: 'Ob beide Teams symmetrisch einnehmen können, oder nur Team a scharf macht und Team b entschärfen kann.' },
+      { key: 'destroyReactivate', name: 'Ziele reaktivieren', unit: 'boolean',
+        description: 'Ob zerstörte Ziele nach einer vollen Runde zurückgesetzt werden, statt das Match sofort zu beenden.' },
+      { key: 'captureDwellMs', name: 'Einnahmezeit (instant)', unit: 'ms',
+        description: 'Wie lange ein Team ungestört am Ziel stehen muss, um es einzunehmen (in ar_settings.timings).' },
+      { key: 'plantDwellMs', name: 'Scharfmachzeit (defuse)', unit: 'ms',
+        description: 'Wie lange Team a ungestört am Ziel stehen muss, um es scharf zu machen (in ar_settings.timings).' },
+      { key: 'defuseDwellMs', name: 'Entschärfzeit (defuse)', unit: 'ms',
+        description: 'Wie lange Team b ungestört am Ziel stehen muss, um es zu entschärfen (in ar_settings.timings).' },
     ],
   },
   deathmatch: {

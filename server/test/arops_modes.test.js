@@ -558,48 +558,98 @@ console.log('\n═══ BATTLE ROYALE ═══');
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {
-  const mk = () => createGame('snd' + Math.random(),
+  const mk = (over = {}) => createGame('snd' + Math.random(),
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-    { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1],
-      timings: FAST, gameDurationMs: 600_000 } });
+    { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2],
+      timings: FAST, gameDurationMs: 600_000, ...over } });
 
-  check('attacker plants after dwell; bomb timer runs', () => {
+  check('instant variant (default): either team can capture the active target, destroying it and scoring', () => {
+    const gs = mk();
+    assert.equal(gs.cfg.destroyVariant, 'instant');
+    assert.equal(gs.modeState.activeIndex, 0);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200);
+    assert.equal(gs.modeState.destroyed[0], false, 'not yet — dwell not complete');
+    tick(gs, 200);
+    assert.equal(gs.modeState.destroyed[0], true);
+    assert.equal(gs.modeState.activeIndex, 1, 'next non-destroyed zone activates');
+    assert.ok(gs.events.some(e => e.type === 'target_destroyed' && e.byTeam === 'a'));
+    assert.ok(gs.players.A1.score > 0, 'capturing player is credited');
+  });
+
+  check('instant variant: contested (both teams present) pauses capture progress', () => {
     const gs = mk();
     tel(gs, 'A1', Z1);
+    tel(gs, 'B1', Z1);
+    tick(gs, 400);
+    assert.equal(gs.modeState.destroyed[0], false, 'contested — nobody captures');
+  });
+
+  check('instant variant: destroying every target without reactivation ends the match for the capturing team', () => {
+    // A dedicated single-zone game — destroying the only target should end the match immediately.
+    const gsSolo = createGame('snd_solo',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
+    tel(gsSolo, 'A1', Z1);
+    tick(gsSolo, 200); tick(gsSolo, 200);
+    assert.equal(gsSolo.gameOver, true);
+    assert.equal(gsSolo.winner, 'team_a');
+  });
+
+  check('destroyReactivate: after all targets are destroyed, they reset and the match continues', () => {
+    const gs = createGame('snd_reactivate',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST,
+        gameDurationMs: 600_000, destroyReactivate: true } });
+    tel(gs, 'A1', Z1);
     tick(gs, 200); tick(gs, 200);
-    assert.ok(gs.modeState.bomb, 'planted');
-    assert.ok(gs.events.some(e => e.type === 'bomb_planted'));
+    assert.equal(gs.gameOver, false, 'reactivation keeps the match going instead of ending it');
+    assert.deepEqual(gs.modeState.destroyed, [false], 'the single zone reactivated');
+    assert.ok(gs.events.some(e => e.type === 'targets_reactivated'));
+  });
+
+  check('defuse variant: attacker arms the target, defender defuses it — target survives, stays active', () => {
+    const gs = mk({ destroyVariant: 'defuse' });
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.ok(gs.modeState.armed, 'armed');
+    assert.ok(gs.events.some(e => e.type === 'target_armed'));
+    tel(gs, 'B1', Z1);
+    tel(gs, 'A1', shared.destinationPoint(Z1, 90, 30)); // attacker leaves, clean presence for defuse
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.armed, null, 'defused');
+    assert.equal(gs.modeState.destroyed[0], false, 'defusing spares the target, it stays active');
+    assert.ok(gs.events.some(e => e.type === 'target_defused'));
     assert.equal(gs.gameOver, false);
   });
 
-  check('defender defuses → defenders win', () => {
-    const gs = mk();
+  check('defuse variant: explosion (no defuse in time) destroys the target and scores for the attacking team', () => {
+    const gs = mk({ destroyVariant: 'defuse', zones: [Z1] });
     tel(gs, 'A1', Z1);
-    tick(gs, 200); tick(gs, 200);            // plant
-    tel(gs, 'B1', Z1);                        // defender enters site
-    // attacker leaves (so presence is clean)
-    tel(gs, 'A1', shared.destinationPoint(Z1, 90, 30));
-    tick(gs, 200); tick(gs, 200);            // defuse dwell
+    tick(gs, 200); tick(gs, 200);
+    assert.ok(gs.modeState.armed);
+    gs.modeState.armed.explodeAt = Date.now() - 1;
+    tick(gs, 100);
+    assert.equal(gs.modeState.destroyed[0], true);
     assert.equal(gs.gameOver, true);
-    assert.equal(gs.winner, 'team_b');
+    assert.equal(gs.winner, 'team_a');
   });
 
-  check('bomb timer expiry → attackers win', () => {
+  check('time limit: higher score wins, tie is a draw', () => {
     const gs = mk();
-    tel(gs, 'A1', Z1);
-    tick(gs, 200); tick(gs, 200);            // plant
-    gs.modeState.bomb.explodeAt = Date.now() - 1;
+    gs.players.A1.score = 20;
+    gs.players.B1.score = 10;
+    gs.phaseStartTime = Date.now() - 700_000;
     tick(gs, 100);
     assert.equal(gs.gameOver, true);
     assert.equal(gs.winner, 'team_a');
-    assert.ok(gs.events.some(e => e.type === 'bomb_exploded'));
-  });
 
-  check('time limit without plant → defenders win', () => {
-    const gs = mk();
-    gs.phaseStartTime = Date.now() - 700_000;
-    tick(gs, 100);
-    assert.equal(gs.winner, 'team_b');
+    const gsTie = mk();
+    gsTie.players.A1.score = 15;
+    gsTie.players.B1.score = 15;
+    gsTie.phaseStartTime = Date.now() - 700_000;
+    tick(gsTie, 100);
+    assert.equal(gsTie.winner, 'draw');
   });
 
   check('zones required for snd/domination', () => {

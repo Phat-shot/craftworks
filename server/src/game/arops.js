@@ -419,6 +419,21 @@ const MODES = {
   },
 
   // ── SEEK & DESTROY ────────────────────────────────────────
+  // ── ZERSTÖREN (replaces the old single bomb-site "Seek & Destroy") ────
+  // Rotating single-active-target: one of gs.zones is "active" at a time,
+  // capturing it destroys it and the next non-destroyed zone activates.
+  // Two host-configurable variants (cfg.destroyVariant):
+  //  'instant' (default) — symmetric, EITHER team can capture the active
+  //    target (dwell-to-capture, same convention as Domination's zone
+  //    capture) — whoever gets there first destroys it and scores.
+  //  'defuse' — asymmetric, mirrors the old mechanic: team 'a' dwells to
+  //    arm/plant the active target, which then has a timer (2x the plant
+  //    dwell time) before it explodes/is destroyed; team 'b' can defuse
+  //    during that window (dwell-to-defuse) — defusing does NOT destroy
+  //    the target, it just resets the arm attempt so team 'a' can try again.
+  // cfg.destroyReactivate (host toggle): once every zone has been
+  // destroyed, either the match ends immediately (default, false) or every
+  // zone reactivates and the cycle continues until the time limit (true).
   seek_destroy: {
     usesTeams: true,
     initialPhase: () => 'live',
@@ -426,8 +441,10 @@ const MODES = {
     phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
     initState(gs) {
       gs.modeState = {
-        bomb: null,           // { siteId, plantedAt, explodeAt, defuseProg }
-        plantProg: null,      // { uid, siteId, ms }
+        activeIndex: 0,
+        destroyed: gs.zones.map(() => false),
+        captureProg: null, // { team, ms } (instant) or { uid, team, ms } (defuse arm progress)
+        armed: null,       // { armedAt, explodeAt, defuseProg } (defuse variant only)
       };
     },
     canShoot() { return null; },
@@ -436,70 +453,107 @@ const MODES = {
       applyFreeze(gs, target, shooter.userId, t);
       shooter.score += 5;
     },
+    // Destroys the currently active zone, credits `scoringUids` (may be
+    // empty — the passive explosion case credits nobody individually),
+    // then activates the next non-destroyed zone or ends the match.
+    destroyActive(gs, byTeam, scoringUids, t) {
+      const ms = gs.modeState;
+      const zone = gs.zones[ms.activeIndex];
+      ms.destroyed[ms.activeIndex] = true;
+      ms.captureProg = null;
+      ms.armed = null;
+      for (const uid of scoringUids) { const p = gs.players[uid]; if (p) p.score += 10; }
+      pushEvent(gs, 'target_destroyed', { zoneId: zone.id, byTeam });
+
+      const remaining = gs.zones.map((_, i) => i).filter(i => !ms.destroyed[i]);
+      if (remaining.length === 0) {
+        if (gs.cfg.destroyReactivate) {
+          ms.destroyed = ms.destroyed.map(() => false);
+          ms.activeIndex = 0;
+          pushEvent(gs, 'targets_reactivated', {});
+        } else {
+          return endGame(gs, byTeam === 'a' ? 'team_a' : 'team_b');
+        }
+      } else {
+        ms.activeIndex = remaining[0];
+      }
+    },
     tick(gs, t, dtMs) {
       const ms = gs.modeState;
       if (gs.phase !== 'live') return;
+      const zone = gs.zones[ms.activeIndex];
+      if (!zone) return; // defensive — shouldn't happen, all zones destroyed without reactivation ends the match already
 
-      if (!ms.bomb) {
-        // Attackers (team a) plant at any site
-        let advanced = false;
-        for (const z of gs.zones) {
-          const pres = zonePresence(gs, z, t);
+      if (gs.cfg.destroyVariant === 'defuse') {
+        if (!ms.armed) {
+          const pres = zonePresence(gs, zone, t);
           const attackers = pres.byTeam.a;
+          const slot = ms.captureProg && ms.captureProg.team === 'a' ? ms.captureProg : null;
           if (attackers.length) {
-            const slot = ms.plantProg && ms.plantProg.siteId === z.id
-              ? { uid: ms.plantProg.uid, ms: ms.plantProg.ms } : null;
             const next = advanceDwell(slot, attackers, dtMs);
-            ms.plantProg = { uid: next.uid, siteId: z.id, ms: next.ms };
-            advanced = true;
+            ms.captureProg = { team: 'a', uid: next.uid, ms: next.ms };
             if (next.ms >= gs.timings.plantDwellMs) {
-              ms.bomb = {
-                siteId: z.id, plantedAt: t,
-                explodeAt: t + gs.timings.bombTimerMs, defuseProg: null,
-              };
-              ms.plantProg = null;
-              gs.players[next.uid].score += 10;
-              pushEvent(gs, 'bomb_planted', { siteId: z.id, byUserId: next.uid, explodeAt: ms.bomb.explodeAt });
+              ms.armed = { armedAt: t, explodeAt: t + gs.timings.plantDwellMs * 2, defuseProg: null };
+              ms.captureProg = null;
+              pushEvent(gs, 'target_armed', { zoneId: zone.id, byUserId: next.uid, explodeAt: ms.armed.explodeAt });
             }
-            break; // one plant progress at a time
+          } else {
+            ms.captureProg = null;
+          }
+        } else {
+          const pres = zonePresence(gs, zone, t);
+          const defenders = pres.byTeam.b;
+          ms.armed.defuseProg = advanceDwell(ms.armed.defuseProg, defenders, defenders.length ? dtMs : 0);
+          if (!defenders.length) ms.armed.defuseProg = null;
+          if (ms.armed.defuseProg && ms.armed.defuseProg.ms >= gs.timings.defuseDwellMs) {
+            pushEvent(gs, 'target_defused', { zoneId: zone.id, byUserId: ms.armed.defuseProg.uid });
+            const p = gs.players[ms.armed.defuseProg.uid]; if (p) p.score += 10;
+            ms.armed = null; // defusing spares the target — stays active, attackers can re-arm it
+          } else if (t >= ms.armed.explodeAt) {
+            this.destroyActive(gs, 'a', [], t);
           }
         }
-        if (!advanced) ms.plantProg = null;
-        // Time up without plant → defenders win
-        if (!ms.bomb && t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
-          return endGame(gs, 'team_b');
-        }
       } else {
-        // Defenders defuse at the bomb site
-        const site = gs.zones.find(z => z.id === ms.bomb.siteId);
-        const pres = zonePresence(gs, site, t);
-        const defenders = pres.byTeam.b;
-        ms.bomb.defuseProg = advanceDwell(ms.bomb.defuseProg, defenders, defenders.length ? dtMs : 0);
-        if (!defenders.length) ms.bomb.defuseProg = null;
-        if (ms.bomb.defuseProg && ms.bomb.defuseProg.ms >= gs.timings.defuseDwellMs) {
-          gs.players[ms.bomb.defuseProg.uid].score += 10;
-          pushEvent(gs, 'bomb_defused', { byUserId: ms.bomb.defuseProg.uid });
-          return endGame(gs, 'team_b');
+        // instant (default): either team can dwell-capture the active target
+        const pres = zonePresence(gs, zone, t);
+        const teamsIn = ['a', 'b'].filter(tm => pres.byTeam[tm].length > 0);
+        if (teamsIn.length === 1) {
+          const tm = teamsIn[0];
+          const prog = ms.captureProg && ms.captureProg.team === tm ? ms.captureProg : null;
+          const nextMs = (prog ? prog.ms : 0) + dtMs;
+          ms.captureProg = { team: tm, ms: nextMs };
+          if (nextMs >= gs.timings.captureDwellMs) {
+            this.destroyActive(gs, tm, pres.byTeam[tm], t);
+            return;
+          }
         }
-        if (t >= ms.bomb.explodeAt) {
-          pushEvent(gs, 'bomb_exploded', { siteId: ms.bomb.siteId });
-          return endGame(gs, 'team_a');
-        }
+        // contested by both teams or empty: progress pauses (kept), same
+        // convention as Domination's zone capture.
+      }
+
+      if (!gs.gameOver && t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
+        const scores = { a: 0, b: 0 };
+        for (const p of Object.values(gs.players)) if (p.team) scores[p.team] += p.score;
+        endGame(gs, scores.a > scores.b ? 'team_a' : scores.b > scores.a ? 'team_b' : 'draw');
       }
     },
     onGameEnd() {},
     snapshotExtras(gs) {
       const ms = gs.modeState;
       return {
-        sites: gs.zones.map(z => ({ id: z.id, lat: z.lat, lon: z.lon, radiusM: z.radiusM })),
-        bomb: ms.bomb ? {
-          siteId: ms.bomb.siteId,
-          explodeAt: ms.bomb.explodeAt,
-          defusePct: ms.bomb.defuseProg
-            ? Math.min(100, Math.round(100 * ms.bomb.defuseProg.ms / gs.timings.defuseDwellMs)) : 0,
+        targets: gs.zones.map((z, i) => ({
+          id: z.id, lat: z.lat, lon: z.lon, radiusM: z.radiusM,
+          destroyed: ms.destroyed[i], active: i === ms.activeIndex,
+        })),
+        destroyVariant: gs.cfg.destroyVariant,
+        capturePct: ms.captureProg
+          ? Math.min(100, Math.round(100 * ms.captureProg.ms /
+              (gs.cfg.destroyVariant === 'defuse' ? gs.timings.plantDwellMs : gs.timings.captureDwellMs))) : 0,
+        armed: ms.armed ? {
+          explodeAt: ms.armed.explodeAt,
+          defusePct: ms.armed.defuseProg
+            ? Math.min(100, Math.round(100 * ms.armed.defuseProg.ms / gs.timings.defuseDwellMs)) : 0,
         } : null,
-        plantPct: ms.plantProg
-          ? Math.min(100, Math.round(100 * ms.plantProg.ms / gs.timings.plantDwellMs)) : 0,
       };
     },
     isOpponentPair(gs, a, b) { return a.team !== b.team; },
@@ -775,6 +829,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
   // 'freeze' reuses the plain team-mode freeze mechanic instead (no lives
   // lost at all, closer to Domination/CTF's hit consequence).
   cfg.deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
+  // Zerstören: 'instant' (either team captures the active target, default)
+  // vs 'defuse' (attacker-arms/defender-defuses, mirrors the old
+  // single-bomb-site mechanic but generalized to a rotating target list).
+  cfg.destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
+  cfg.destroyReactivate = ar.destroyReactivate === true;
 
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG };
   if (auto) {
