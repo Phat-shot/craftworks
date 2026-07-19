@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "lint": "eslint server client",
+    "typecheck": "npm run typecheck --workspace=server",
     "format": "prettier --check server client",
     "format:write": "prettier --write server client",
     "test": "npm run test --workspace=server && npm run test --workspace=packages/arops-shared"
