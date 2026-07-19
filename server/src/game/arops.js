@@ -502,10 +502,20 @@ const MODES = {
         targetCaptures: gs.cfg.targetCaptures,
         bases: ms.bases,
         zoneRadiusM: gs.timings.zoneRadiusM,
-        flags: ['a', 'b'].map(tm => ({
-          team: tm, state: ms.flags[tm].state, carrier: ms.flags[tm].carrier,
-          ...(ms.bases[tm] || gs.phase === 'live' ? (flagPos(tm) || {}) : {}),
-        })),
+        flags: ['a', 'b'].map(tm => {
+          const f = ms.flags[tm];
+          return {
+            team: tm, state: f.state, carrier: f.carrier,
+            ...(ms.bases[tm] || gs.phase === 'live' ? (flagPos(tm) || {}) : {}),
+            // Enemy team's dwell progress stealing this flag — only ever
+            // non-null while state === 'home' (pickupProg is unused/null
+            // otherwise). Client uses this to flow-ring the base being
+            // raided, colored by the raiding (enemy) team.
+            pickupPct: f.pickupProg
+              ? Math.min(100, Math.round(100 * f.pickupProg.ms / gs.timings.flagPickupDwellMs)) : 0,
+            pickupTeam: f.pickupProg ? (tm === 'a' ? 'b' : 'a') : null,
+          };
+        }),
         baseSetup: gs.phase === 'base_setup' ? {
           myTeamBaseSet: null, // filled per-player below via revealPosition path (kept simple)
         } : null,
@@ -647,9 +657,15 @@ const MODES = {
           destroyed: ms.destroyed[i], active: i === ms.activeIndex,
         })),
         destroyVariant: gs.cfg.destroyVariant,
-        capturePct: ms.captureProg
-          ? Math.min(100, Math.round(100 * ms.captureProg.ms /
-              (gs.cfg.destroyVariant === 'defuse' ? gs.timings.plantDwellMs : gs.timings.captureDwellMs))) : 0,
+        // Team attribution: 'instant' variant can be captured by either team
+        // (whoever's dwelling — ms.captureProg.team tracks that); 'defuse'
+        // variant's capture progress here is always team a's arming attempt
+        // (defusing is a separate, always-team-b progress, see armed below).
+        // Client uses this to color the flow-ring overlay by team.
+        capture: ms.captureProg
+          ? { team: ms.captureProg.team, pct: Math.min(100, Math.round(100 * ms.captureProg.ms /
+              (gs.cfg.destroyVariant === 'defuse' ? gs.timings.plantDwellMs : gs.timings.captureDwellMs))) }
+          : null,
         armed: ms.armed ? {
           explodeAt: ms.armed.explodeAt,
           defusePct: ms.armed.defuseProg

@@ -15,7 +15,12 @@ import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
 
 interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
-interface FlagInfo { team: 'a'|'b'; state: string; carrier: string | null; lat?: number; lon?: number; }
+interface FlagInfo {
+  team: 'a'|'b'; state: string; carrier: string | null; lat?: number; lon?: number;
+  // Enemy team's dwell progress stealing this flag (0 while nobody's raiding it).
+  pickupPct?: number; pickupTeam?: 'a'|'b'|null;
+}
+interface TargetInfo { id: string; lat: number; lon: number; radiusM: number; destroyed: boolean; active: boolean; }
 
 interface Snap {
   sessionId?: string;
@@ -29,6 +34,12 @@ interface Snap {
   hitTrackingMode?: 'compass' | 'ir';
   hitRangeM?: number;
   hitConeHalfAngleDeg?: number;
+  // Raw dwell-time totals (ms) behind every *Pct value below — lets the
+  // client compute remaining time instead of just showing a percentage.
+  timings?: {
+    freezeMs: number; captureDwellMs: number; flagPickupDwellMs: number;
+    plantDwellMs: number; defuseDwellMs: number; zoneRadiusM: number;
+  };
   winner: string | null;
   hidersRemaining: number;
   me: {
@@ -55,9 +66,11 @@ interface Snap {
   bases?: { a: { lat: number; lon: number } | null; b: { lat: number; lon: number } | null };
   zoneRadiusM?: number;
   flags?: FlagInfo[];
-  sites?: ZoneInfo[];
-  bomb?: { siteId: string; explodeAt: number; defusePct: number } | null;
-  plantPct?: number;
+  // Zerstören (seek_destroy) — rotating multi-target list, see arops.js.
+  targets?: TargetInfo[];
+  destroyVariant?: 'instant' | 'defuse';
+  capture?: { team: 'a'|'b'; pct: number } | null;
+  armed?: { explodeAt: number; defusePct: number } | null;
   events: { seq: number; type: string; userId?: string; winner?: string }[];
 }
 
@@ -178,7 +191,7 @@ export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: 
         else if (r.reason === 'no_candidates') toast = { icon: 'close', text: 'Kein gültiges Ziel (Team? Eingefroren? Keine Daten?)' };
         else if (r.reason === 'target_stale') toast = { icon: 'signalOff', text: 'Gegner-Position veraltet — dessen App/Display muss aktiv sein!' };
         else if (r.reason === 'low_confidence') toast = { icon: 'signal', text: 'Im Kegel, aber Datenqualität zu niedrig (GPS/Aktualität)' };
-        else if (r.reason === 'out_of_range') toast = { icon: 'ruler', text: `Außer Reichweite (max. ${hitRangeRef.current} m)` };
+        else if (r.reason === 'out_of_range') toast = { icon: 'ruler', text: `Außer Reichweite (max. ${Math.round(hitRangeRef.current)} m)` };
         else toast = { icon: 'windy', text: 'Daneben — kein Ziel im Kegel' };
         setLastResult(toast);
         setTimeout(() => setLastResult(null), 4500);
@@ -427,7 +440,10 @@ export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: 
     };
   }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, telemetry.heading, effectiveLaneWidthM, effectiveMaxRangeM]);
 
-  // Zones (domination), sites (S&D), bases (CTF) as circles
+  // Zones (domination), targets (Zerstören), bases (CTF/Deathmatch) as
+  // circles — real-world-meter-accurate polygons (not CircleLayer's
+  // screen-pixel radius, which wouldn't scale correctly with zoom), same
+  // technique as the shot-range ring/lane above.
   const zoneCircle = (lat: number, lon: number, radiusM: number) => {
     const pts: [number, number][] = [];
     for (let i = 0; i <= 32; i++) {
@@ -436,23 +452,95 @@ export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: 
     }
     return pts;
   };
-  const zonesGeoJSON = useMemo(() => {
-    const feats: any[] = [];
-    const zs = snap?.zones || snap?.sites || [];
-    for (const z of zs) {
-      const color = z.owner === 'a' ? '#40a0ff' : z.owner === 'b' ? '#ff5050' : '#c0c0c0';
-      feats.push({ type: 'Feature', properties: { color },
-        geometry: { type: 'Polygon', coordinates: [zoneCircle(z.lat, z.lon, z.radiusM)] } });
+  // Unified list of every zone/target/base marker, used for both the base
+  // fill/outline and the "portal" glow layered underneath it.
+  const markerEntities = useMemo(() => {
+    const ents: { id: string; lat: number; lon: number; radiusM: number; color: string }[] = [];
+    for (const z of snap?.zones || []) {
+      ents.push({ id: 'z_' + z.id, lat: z.lat, lon: z.lon, radiusM: z.radiusM,
+        color: z.owner === 'a' ? TEAM_COLOR.a : z.owner === 'b' ? TEAM_COLOR.b : '#c0c0c0' });
+    }
+    for (const t of snap?.targets || []) {
+      if (t.destroyed) continue; // destroyed targets are gone, nothing left to draw
+      ents.push({ id: 't_' + t.id, lat: t.lat, lon: t.lon, radiusM: t.radiusM,
+        color: t.active ? '#f0c840' : '#605850' });
     }
     if (snap?.bases) {
       for (const tm of ['a', 'b'] as const) {
         const b = snap.bases[tm];
-        if (b) feats.push({ type: 'Feature', properties: { color: TEAM_COLOR[tm] },
-          geometry: { type: 'Polygon', coordinates: [zoneCircle(b.lat, b.lon, snap.zoneRadiusM || 15)] } });
+        if (b) ents.push({ id: 'base_' + tm, lat: b.lat, lon: b.lon, radiusM: snap.zoneRadiusM || 15, color: TEAM_COLOR[tm] });
+      }
+    }
+    return ents;
+  }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.targets), JSON.stringify(snap?.bases), snap?.zoneRadiusM]);
+
+  const zonesGeoJSON = useMemo(() => ({
+    type: 'FeatureCollection' as const,
+    features: markerEntities.map(e => ({
+      type: 'Feature' as const, properties: { color: e.color },
+      geometry: { type: 'Polygon' as const, coordinates: [zoneCircle(e.lat, e.lon, e.radiusM)] },
+    })),
+  }), [markerEntities]);
+
+  // "Portal" effect: 2 translucent glow rings underneath every marker,
+  // larger and fainter the further out — stacked low-opacity fills read as
+  // a soft radial glow (no native blur in MapLibre GL), giving the flat
+  // circle some depth instead of a plain flat disc.
+  const portalGeoJSON = useMemo(() => ({
+    type: 'FeatureCollection' as const,
+    features: markerEntities.flatMap(e => ([
+      { type: 'Feature' as const, properties: { color: e.color, op: 0.05 },
+        geometry: { type: 'Polygon' as const, coordinates: [zoneCircle(e.lat, e.lon, e.radiusM * 1.7)] } },
+      { type: 'Feature' as const, properties: { color: e.color, op: 0.10 },
+        geometry: { type: 'Polygon' as const, coordinates: [zoneCircle(e.lat, e.lon, e.radiusM * 1.35)] } },
+      // Bright inner core, well inside the capture radius — the "event
+      // horizon" at the portal's center.
+      { type: 'Feature' as const, properties: { color: e.color, op: 0.35 },
+        geometry: { type: 'Polygon' as const, coordinates: [zoneCircle(e.lat, e.lon, e.radiusM * 0.3)] } },
+    ])),
+  }), [markerEntities]);
+
+  // Flow-ring: an arc drawn AT the marker's own radius, sweeping proportional
+  // to capture/defuse/pickup progress, colored by the progressing team —
+  // replaces the old raw "%" text with a ring that visibly fills/overwrites
+  // instead. Remaining time (not %) is shown as text separately (scoreLine).
+  const arcLine = (lat: number, lon: number, radiusM: number, pct: number) => {
+    const sweep = Math.max(0, Math.min(100, pct)) / 100 * 360;
+    if (sweep <= 0) return null;
+    const steps = Math.max(2, Math.round(sweep / 6));
+    const pts: [number, number][] = [];
+    for (let i = 0; i <= steps; i++) {
+      const p = destinationPoint({ lat, lon }, (i / steps) * sweep, radiusM);
+      pts.push([p.lon, p.lat]);
+    }
+    return pts;
+  };
+  const flowRingGeoJSON = useMemo(() => {
+    const feats: any[] = [];
+    const push = (lat: number, lon: number, radiusM: number, team: 'a'|'b', pct: number) => {
+      const line = arcLine(lat, lon, radiusM, pct);
+      if (line) feats.push({ type: 'Feature', properties: { color: TEAM_COLOR[team] },
+        geometry: { type: 'LineString', coordinates: line } });
+    };
+    for (const z of snap?.zones || []) {
+      if (z.capture) push(z.lat, z.lon, z.radiusM, z.capture.team as 'a'|'b', z.capture.pct);
+    }
+    const activeTarget = (snap?.targets || []).find(t => t.active);
+    if (activeTarget) {
+      if (snap?.capture) push(activeTarget.lat, activeTarget.lon, activeTarget.radiusM, snap.capture.team, snap.capture.pct);
+      if (snap?.armed) push(activeTarget.lat, activeTarget.lon, activeTarget.radiusM, 'b', snap.armed.defusePct);
+    }
+    if (snap?.bases) {
+      for (const f of snap.flags || []) {
+        if (f.pickupTeam) {
+          const raidedBase = snap.bases[f.team as 'a'|'b'];
+          if (raidedBase) push(raidedBase.lat, raidedBase.lon, snap.zoneRadiusM || 15, f.pickupTeam, f.pickupPct || 0);
+        }
       }
     }
     return { type: 'FeatureCollection' as const, features: feats };
-  }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.sites), JSON.stringify(snap?.bases), snap?.zoneRadiusM]);
+  }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.targets), JSON.stringify(snap?.capture),
+      JSON.stringify(snap?.armed), JSON.stringify(snap?.flags), JSON.stringify(snap?.bases), snap?.zoneRadiusM]);
 
   // The hitbox/cross/camera-target overlay is a strong aim-assist — showing it
   // just because a position happens to be visible (teammate, flag-carrier)
@@ -581,13 +669,34 @@ export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: 
     : snap?.phase === 'ended' ? { icon: 'flagCheckered', text: 'Beendet' } : { icon: 'hourglass', text: '' };
   const frozenMs = snap?.me?.frozenRemainingMs ?? 0;
   const isCaptainSetup = snap?.phase === 'base_setup' && snap?.me?.isCaptain;
+  // Remaining time (not raw %) from a progress percentage + its known total
+  // dwell time (snap.timings) — the flow-ring on the map shows the % itself
+  // visually, this is just the "how long until it flips" text.
+  const pctToRemainingS = (pct: number, totalMs?: number): number | null =>
+    totalMs ? Math.max(0, Math.ceil(totalMs * (1 - pct / 100) / 1000)) : null;
+  const zerstorenLine = (): string | null => {
+    if (!snap || snap.subMode !== 'seek_destroy') return null;
+    if (snap.armed) {
+      const explodeS = Math.max(0, Math.ceil((snap.armed.explodeAt - snap.serverTime) / 1000));
+      const defuseS = snap.armed.defusePct ? pctToRemainingS(snap.armed.defusePct, snap.timings?.defuseDwellMs) : null;
+      return `Explosion in ${explodeS}s${defuseS !== null ? ` · entschärft in ${defuseS}s` : ''}`;
+    }
+    if (snap.capture) {
+      const totalMs = snap.destroyVariant === 'defuse' ? snap.timings?.plantDwellMs : snap.timings?.captureDwellMs;
+      const s = pctToRemainingS(snap.capture.pct, totalMs);
+      const verb = snap.destroyVariant === 'defuse' ? 'Scharf in' : 'Erobert in';
+      return s !== null ? `${verb} ${s}s` : null;
+    }
+    // No active progress: 'defuse' variant has fixed attacker/defender roles,
+    // 'instant' doesn't (either team can capture the active target).
+    return snap.destroyVariant === 'defuse' ? (snap.me?.team === 'a' ? 'Angreifer' : 'Verteidiger') : 'Ziel aktiv';
+  };
   const scoreLine: string | null = snap?.subMode === 'domination'
     ? `A ${snap.teamScore?.a ?? 0} : ${snap.teamScore?.b ?? 0} B · Ziel ${snap.targetScore}`
     : snap?.subMode === 'ctf'
     ? `A ${snap.captures?.a ?? 0} : ${snap.captures?.b ?? 0} B · Ziel ${snap.targetCaptures}`
     : snap?.subMode === 'seek_destroy'
-    ? (snap.bomb ? `${Math.max(0, Math.ceil((snap.bomb.explodeAt - snap.serverTime) / 1000))}s${snap.bomb.defusePct ? ` · Defuse ${snap.bomb.defusePct}%` : ''}`
-       : (snap.plantPct ? `Plant ${snap.plantPct}%` : (snap?.me?.team === 'a' ? 'Angreifer' : 'Verteidiger')))
+    ? zerstorenLine()
     : null;
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
@@ -683,10 +792,20 @@ export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: 
           <LineLayer id="hitboxCrossLine" style={{ lineColor: HOT_COLOR, lineWidth: 2.5 }} />
         </ShapeSource>
       )}
+      {portalGeoJSON.features.length > 0 && (
+        <ShapeSource id="portals" shape={portalGeoJSON as any}>
+          <FillLayer id="portalFill" style={{ fillColor: ['get', 'color'] as any, fillOpacity: ['get', 'op'] as any }} />
+        </ShapeSource>
+      )}
       {zonesGeoJSON.features.length > 0 && (
         <ShapeSource id="zones" shape={zonesGeoJSON as any}>
           <FillLayer id="zoneFill" style={{ fillColor: ['get', 'color'] as any, fillOpacity: 0.14 }} />
           <LineLayer id="zoneLine" style={{ lineColor: ['get', 'color'] as any, lineWidth: 2 }} />
+        </ShapeSource>
+      )}
+      {flowRingGeoJSON.features.length > 0 && (
+        <ShapeSource id="flowRings" shape={flowRingGeoJSON as any}>
+          <LineLayer id="flowRingLine" style={{ lineColor: ['get', 'color'] as any, lineWidth: 5, lineOpacity: 0.9 }} />
         </ShapeSource>
       )}
       {flagsGeoJSON.features.length > 0 && (

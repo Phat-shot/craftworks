@@ -242,6 +242,39 @@ console.log('\n═══ CTF ═══');
     assert.ok(typeof a1.lat === 'number', 'carrier position must be public');
   });
 
+  check('flag pickup progress is exposed with team attribution while being stolen', () => {
+    const gs2 = createGame('ctf_pickup',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf',
+        timings: { ...FAST, flagPickupDwellMs: 600 }, targetCaptures: 2, gameDurationMs: 600_000 } });
+    const baseA2 = shared.destinationPoint(MUC, 270, 120);
+    const baseB2 = shared.destinationPoint(MUC, 90, 120);
+    arops.actionArSetBase(gs2, 'A1', { lat: baseA2.lat, lon: baseA2.lon });
+    arops.actionArSetBase(gs2, 'B1', { lat: baseB2.lat, lon: baseB2.lon });
+    tel(gs2, 'A1', baseA2);
+    tel(gs2, 'B1', baseB2);
+    gs2.phaseStartTime = Date.now() - 1000;
+    tick(gs2, 100);
+    assert.equal(gs2.phase, 'live');
+
+    // A1 walks into B's base (enemy) to start stealing — gradual steps, same
+    // anti-teleport reasoning as the test above.
+    let pos = baseA2;
+    const brg = shared.bearingDeg(baseA2, baseB2);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseB2) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs2, 'A1', pos);
+    }
+    tick(gs2, 300); // partway through the 600ms dwell
+    const snap = arops.getAropsSnapshot(gs2, 'B1');
+    const flagB = snap.flags.find(f => f.team === 'b');
+    assert.ok(flagB.pickupPct > 0 && flagB.pickupPct < 100, `expected partial progress, got ${flagB.pickupPct}`);
+    assert.equal(flagB.pickupTeam, 'a', "A1 (enemy of team b) is stealing team b's flag");
+    const flagA = snap.flags.find(f => f.team === 'a');
+    assert.equal(flagA.pickupPct, 0);
+    assert.equal(flagA.pickupTeam, null);
+  });
+
   check('carrying the flag home captures (own flag home)', () => {
     // A1 walks home: plausible steps ~100m/12 samples won't matter — teleport check
     // needs plausible speed; use several samples
@@ -791,6 +824,16 @@ console.log('\n═══ SEEK & DESTROY ═══');
     tel(gs, 'B1', Z1);
     tick(gs, 400);
     assert.equal(gs.modeState.destroyed[0], false, 'contested — nobody captures');
+  });
+
+  check('capture progress is exposed in the snapshot with team attribution (for the flow-ring overlay)', () => {
+    const gs = mk();
+    tel(gs, 'B1', Z1);
+    tick(gs, 100); // partway through the dwell
+    const snap = arops.getAropsSnapshot(gs, 'A1');
+    assert.ok(snap.capture, 'capture progress should be present');
+    assert.equal(snap.capture.team, 'b');
+    assert.ok(snap.capture.pct > 0 && snap.capture.pct < 100, `expected partial pct, got ${snap.capture.pct}`);
   });
 
   check('instant variant: destroying every target without reactivation ends the match for the capturing team', () => {
