@@ -204,6 +204,15 @@ function registerPlatformHandlers(io, socket, db) {
           if (role === 'seeker' || role === 'hider') next.roles[uid] = role;
         }
       }
+      // Player classes (scout/sniper/bomber) — additive to role/team, see
+      // createAropsGame's ar.classes in arops.js. Was never whitelisted here
+      // at all before, so it never reached ar_settings from the lobby UI.
+      if (arSettings?.classes && typeof arSettings.classes === 'object') {
+        next.classes = {};
+        for (const [uid, cls] of Object.entries(arSettings.classes)) {
+          if (['scout', 'sniper', 'bomber'].includes(cls)) next.classes[uid] = cls;
+        }
+      }
       for (const k of ['hidingDurationMs', 'gameDurationMs', 'radarCooldownMs', 'proximityRangeM']) {
         if (Number.isFinite(arSettings?.[k])) next[k] = Math.max(0, +arSettings[k]);
       }

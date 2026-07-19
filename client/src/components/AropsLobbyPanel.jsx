@@ -1,6 +1,37 @@
 // AR Ops lobby panel: host draws the playfield on an OSM map,
 // assigns seeker/hider roles and sets timers. Non-hosts see everything read-only.
 import React, { useEffect, useRef, useState } from 'react';
+import { GAME_MODE_PROFILES, PLAYER_TYPE_PROFILES } from '@craftworks/arops-shared';
+
+// Minimal reusable tooltip (Phase 6 of the AR-Ops modes plan: "Tooltip-System") —
+// shows a Steckbrief's shortDescription on hover, no extra dependency. Icons/
+// short labels stay local UI config (not game data), but the actual
+// descriptive text comes from the single source of truth in
+// packages/arops-shared/src/profiles.ts, not a second hardcoded copy here.
+function Tip({ text, children }) {
+  const [show, setShow] = useState(false);
+  if (!text) return children;
+  return (
+    <span
+      style={{ position: 'relative', display: 'inline-flex' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      {children}
+      {show && (
+        <span style={{
+          position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+          marginBottom: 6, background: '#141020', border: '1px solid var(--border2)',
+          borderRadius: 6, padding: '6px 10px', fontSize: 11, color: 'var(--text2)',
+          width: 220, zIndex: 50, pointerEvents: 'none', lineHeight: 1.4,
+          boxShadow: '0 4px 12px rgba(0,0,0,.4)',
+        }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
 
 const HIDING_OPTIONS = [
   { label: '1 min', ms: 60_000 },
@@ -144,6 +175,21 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   const livesPerPlayer = ar.livesPerPlayer || 3;
   const teamOf = (uid) => effective?.teams?.[uid] || (ar.teams || {})[uid] || 'a';
   const seekerCount = members.filter(m => roleOf(m.id) === 'seeker').length;
+  // Player classes (scout/sniper/bomber) — additive to role/team, every
+  // mode, no host obligation to assign one (null = classless, unchanged
+  // combat stats). Tap-to-cycle: none -> scout -> sniper -> bomber -> none.
+  const CLASS_CYCLE = ['scout', 'sniper', 'bomber'];
+  const classOf = (uid) => (ar.classes || {})[uid] || null;
+  const cycleClass = (uid) => {
+    if (!isHost) return;
+    const cur = classOf(uid);
+    const idx = cur ? CLASS_CYCLE.indexOf(cur) : -1;
+    const next = idx === CLASS_CYCLE.length - 1 ? null : CLASS_CYCLE[idx + 1];
+    const classes = { ...(ar.classes || {}) };
+    if (next) classes[uid] = next; else delete classes[uid];
+    emitUpdate({ classes });
+  };
+  const CLASS_ICON = { scout: '🔭', sniper: '🎯', bomber: '💣' };
   const areaLabel = polyCheck?.areaM2
     ? (polyCheck.areaM2 >= 10_000 ? (polyCheck.areaM2 / 10_000).toFixed(1) + ' ha' : Math.round(polyCheck.areaM2) + ' m²')
     : null;
@@ -154,15 +200,19 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
         🛰️ AR Ops — Spielfeld{isHost ? ' (auf Karte tippen zum Zeichnen)' : ''}
       </div>
 
-      {/* Mode selector */}
+      {/* Mode selector — short labels/icons are local UI config, the
+          descriptive tooltip text comes straight from the Steckbrief
+          (GAME_MODE_PROFILES), not a second hardcoded copy. */}
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
         {SUB_MODES.map(m => (
-          <button key={m.id} className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ subMode: m.id })}
-            style={{ borderColor: subMode === m.id ? 'var(--gold)' : undefined,
-                     color: subMode === m.id ? 'var(--gold)' : undefined }}>
-            {m.label}
-          </button>
+          <Tip key={m.id} text={GAME_MODE_PROFILES[m.id]?.shortDescription}>
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ subMode: m.id })}
+              style={{ borderColor: subMode === m.id ? 'var(--gold)' : undefined,
+                       color: subMode === m.id ? 'var(--gold)' : undefined }}>
+              {m.label}
+            </button>
+          </Tip>
         ))}
       </div>
       {isHost && needsZones && (
@@ -255,6 +305,34 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
       </div>
       )}
 
+      {/* Spielerklassen (scout/sniper/bomber) — additiv zu Rolle/Team, in
+          jedem Modus wählbar, kein Zwang. Tooltip zeigt die Steckbrief-
+          Beschreibung der aktuell gewählten Klasse. */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
+        Klassen (optional, zusätzlich zu Rolle/Team)
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
+        {members.map(m => {
+          const cls = classOf(m.id);
+          const profile = cls ? PLAYER_TYPE_PROFILES[cls] : null;
+          return (
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+              <span style={{ flex: 1 }}>{m.username}{m.id === hostId ? ' 👑' : ''}</span>
+              <Tip text={profile ? profile.shortDescription : 'Keine Klasse — Standard-Schusswerte.'}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={!isHost}
+                  onClick={() => cycleClass(m.id)}
+                  style={{ minWidth: 92, color: cls ? 'var(--gold)' : undefined }}
+                >
+                  {cls ? `${CLASS_ICON[cls]} ${profile.name}` : '– Klasse'}
+                </button>
+              </Tip>
+            </div>
+          );
+        })}
+      </div>
+
       {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
           (ar_settings.hsVariant), keine eigenen Modi. */}
       {subMode === 'hide_and_seek' && (
@@ -265,18 +343,22 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
                      color: hsVariant === 'classic' ? 'var(--gold)' : undefined }}>
             🫥 Team
           </button>
-          <button className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ hsVariant: 'ffa' })}
-            style={{ borderColor: hsVariant === 'ffa' ? 'var(--gold)' : undefined,
-                     color: hsVariant === 'ffa' ? 'var(--gold)' : undefined }}>
-            🎯 Jeder gegen jeden
-          </button>
-          <button className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ hsVariant: 'the_ship' })}
-            style={{ borderColor: hsVariant === 'the_ship' ? 'var(--gold)' : undefined,
-                     color: hsVariant === 'the_ship' ? 'var(--gold)' : undefined }}>
-            🎭 The Ship
-          </button>
+          <Tip text={GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription}>
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ hsVariant: 'ffa' })}
+              style={{ borderColor: hsVariant === 'ffa' ? 'var(--gold)' : undefined,
+                       color: hsVariant === 'ffa' ? 'var(--gold)' : undefined }}>
+              🎯 Jeder gegen jeden
+            </button>
+          </Tip>
+          <Tip text={GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription}>
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ hsVariant: 'the_ship' })}
+              style={{ borderColor: hsVariant === 'the_ship' ? 'var(--gold)' : undefined,
+                       color: hsVariant === 'the_ship' ? 'var(--gold)' : undefined }}>
+              🎭 The Ship
+            </button>
+          </Tip>
         </div>
       )}
       {rolesApply && (

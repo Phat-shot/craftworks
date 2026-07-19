@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@craftworks/arops-shared": "^0.1.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^6.30.4",
