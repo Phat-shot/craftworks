@@ -5,10 +5,10 @@ import { GAME_MODE_PROFILES, PLAYER_TYPE_PROFILES, GLOSSARY } from '../src/profi
 // Mirrors the MODES keys in server/src/game/arops.js — kept as a literal list
 // here (not imported, arops-shared has no dependency on server) so this test
 // fails loudly if a mode gets added/renamed on one side but not the other.
-const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch', 'battle_royale'];
+const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch', 'battle_royale', 'the_ship'];
 const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sniper', 'bomber'];
 
-test('GAME_MODE_PROFILES: has exactly the four known AR Ops modes', () => {
+test('GAME_MODE_PROFILES: has exactly the known AR Ops modes', () => {
   assert.deepEqual(Object.keys(GAME_MODE_PROFILES).sort(), [...EXPECTED_MODE_IDS].sort());
 });
 
@@ -41,7 +41,7 @@ test('GAME_MODE_PROFILES: none of the four existing modes has submodes yet (none
 });
 
 test('GAME_MODE_PROFILES: partyMode matches arops.js usesTeams', () => {
-  for (const id of ['hide_and_seek', 'battle_royale']) {
+  for (const id of ['hide_and_seek', 'battle_royale', 'the_ship']) {
     assert.equal(GAME_MODE_PROFILES[id]!.partyMode, 'individual', `${id} should be individual (usesTeams: false)`);
   }
   for (const id of ['domination', 'ctf', 'seek_destroy', 'deathmatch']) {

@@ -555,6 +555,129 @@ console.log('\n═══ BATTLE ROYALE ═══');
   });
 }
 
+// ═══ THE SHIP ════════════════════════════════════════════════
+console.log('\n═══ THE SHIP ═══');
+{
+  function setupShip(sessionId, players, over = {}) {
+    return createGame(sessionId, players,
+      { ar_settings: { polygon: FIELD, subMode: 'the_ship', gameDurationMs: 600_000, hitCooldownMs: 50, ...over } });
+  }
+
+  check('no teams assigned; every player gets exactly one target, forming a single cycle over the whole roster', () => {
+    const gs = setupShip('ship_setup', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+      { userId: 'C', username: 'C' }, { userId: 'D', username: 'D' },
+    ]);
+    assert.equal(gs.players.A.team, null);
+    const targets = gs.modeState.targets;
+    assert.equal(Object.keys(targets).length, 4);
+    let cur = 'A', seen = new Set(), steps = 0;
+    while (!seen.has(cur) && steps < 10) { seen.add(cur); cur = targets[cur]; steps++; }
+    assert.equal(seen.size, 4, 'cycle must cover all 4 players');
+    assert.equal(cur, 'A', 'cycle must close back on itself');
+  });
+
+  check('target identity is private: only in the assigned hunter\'s own me-block, never in the public roster', () => {
+    const gs = setupShip('ship_priv', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+      { userId: 'C', username: 'C' }, { userId: 'D', username: 'D' },
+    ]);
+    const aTarget = gs.modeState.targets.A;
+    const snapA = arops.getAropsSnapshot(gs, 'A');
+    assert.equal(snapA.me.targetUserId, aTarget);
+    assert.equal(snapA.players.find(p => p.userId === aTarget).targetUserId, undefined,
+      'roster entries never carry targetUserId, only the me block does');
+    const snapB = arops.getAropsSnapshot(gs, 'B');
+    assert.notEqual(snapB.me.targetUserId, aTarget, 'targets are a bijection — nobody else shares A\'s target');
+  });
+
+  check('can only hit your assigned target — anyone else present is not even a candidate', () => {
+    const gs = setupShip('ship_hit', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' },
+    ]);
+    const realTarget = gs.modeState.targets.A;
+    const decoy = ['B', 'C'].find(u => u !== realTarget);
+    tel(gs, 'A', MUC);
+    tel(gs, decoy, MUC); // decoy right next to the shooter, but not their assigned target
+    TS += 1100;
+    const rMiss = arops.actionArHitAttempt(gs, 'A',
+      { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(rMiss.hit, false);
+    assert.equal(rMiss.reason, 'no_candidates', JSON.stringify(rMiss));
+
+    sleepMs(60); TS += 1100;
+    tel(gs, realTarget, MUC);
+    TS += 1100;
+    const rHit = arops.actionArHitAttempt(gs, 'A',
+      { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(rHit.hit, true, JSON.stringify(rHit));
+    assert.equal(rHit.targetId, realTarget);
+    assert.equal(gs.players[realTarget].status, 'found');
+  });
+
+  check('killing your target makes you inherit their target — the chain stays a single cycle over survivors', () => {
+    const gs = setupShip('ship_chain', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+      { userId: 'C', username: 'C' }, { userId: 'D', username: 'D' },
+    ]);
+    const t1 = gs.modeState.targets.A;
+    const t2 = gs.modeState.targets[t1];
+    tel(gs, 'A', MUC);
+    tel(gs, t1, MUC);
+    TS += 1100;
+    const r = arops.actionArHitAttempt(gs, 'A', { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players[t1].status, 'found');
+    assert.equal(gs.modeState.targets.A, t2, 'A inherits the eliminated target\'s own target');
+    assert.equal(gs.modeState.targets[t1], null);
+  });
+
+  check('eliminations cascade down to exactly one survivor, who wins by userId', () => {
+    const gs = setupShip('ship_win', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' },
+    ]);
+    for (const u of ['A', 'B', 'C']) tel(gs, u, MUC);
+    let rounds = 0;
+    while (!gs.gameOver && rounds < 10) {
+      const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+      const shooter = alive[0].userId;
+      sleepMs(60); TS += 1100;
+      const r = arops.actionArHitAttempt(gs, shooter,
+        { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+      assert.equal(r.hit, true, JSON.stringify(r));
+      rounds++;
+    }
+    assert.equal(gs.gameOver, true);
+    assert.ok(['A', 'B', 'C'].includes(gs.winner));
+    assert.equal(Object.values(gs.players).filter(p => p.status === 'alive').length, 1);
+  });
+
+  check('time limit: highest score wins, tie is a draw', () => {
+    const gs = setupShip('ship_time', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gs.players.A.score = 30;
+    gs.players.B.score = 10;
+    gs.phaseStartTime = Date.now() - 700_000;
+    tick(gs, 100);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'A');
+
+    const gsTie = setupShip('ship_time_tie', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gsTie.players.A.score = 20;
+    gsTie.players.B.score = 20;
+    gsTie.phaseStartTime = Date.now() - 700_000;
+    tick(gsTie, 100);
+    assert.equal(gsTie.gameOver, true);
+    assert.equal(gsTie.winner, 'draw');
+  });
+
+  check('solo debug session never auto-ends via checkWin just because "1 player is left"', () => {
+    const gs = setupShip('ship_solo', [{ userId: 'A', username: 'A' }], { debugMode: true });
+    tel(gs, 'A', MUC);
+    assert.equal(gs.modeState.targets.A, null, 'nobody to hunt with only one player');
+    assert.equal(gs.gameOver, false);
+  });
+}
+
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {

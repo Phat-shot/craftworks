@@ -10,7 +10,11 @@
 //   hide_and_seek — seekers photograph hiders; found = out
 //   domination    — hold host-placed zones, points per second
 //   ctf           — captains place bases, steal the enemy flag
-//   seek_destroy  — attackers plant at a site, defenders defuse
+//   seek_destroy  — "Zerstören": rotating multi-target list, instant
+//                   capture or arm/defuse variant (see MODES entry)
+//   deathmatch    — team TDM, on-hit is respawn (lives) or freeze
+//   battle_royale — free-for-all, permanent elimination, last one standing
+//   the_ship      — secret assassin-chain, one target each, kill = inherit
 //
 //  All timings scale with field size (shared scaleTimings).
 //  Team modes use FREEZE on hit: frozen players cannot shoot,
@@ -687,6 +691,91 @@ const MODES = {
       // A solo debug session (host alone, no bots) can't have a winner —
       // never auto-end it just because there's trivially "1 player left"
       // (same guard hide_and_seek uses for the analogous case).
+      if (Object.keys(gs.players).length < 2) return;
+      const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+      if (alive.length <= 1) {
+        endGame(gs, alive.length === 1 ? alive[0].userId : 'draw');
+      }
+    },
+    tick(gs, t) {
+      if (gs.phase !== 'live') return;
+      if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
+        const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+        if (alive.length === 0) return endGame(gs, 'draw');
+        const top = Math.max(...alive.map(p => p.score));
+        const leaders = alive.filter(p => p.score === top);
+        endGame(gs, leaders.length === 1 ? leaders[0].userId : 'draw');
+      }
+    },
+    onGameEnd() {},
+    snapshotExtras(gs) {
+      return { aliveCount: Object.values(gs.players).filter(p => p.status === 'alive').length };
+    },
+    revealPosition() { return false; },
+  },
+
+  // ── THE SHIP ──────────────────────────────────────────────
+  // Assassin-chain: no teams, no roles, no bases. Every player is secretly
+  // assigned exactly one other player as their sole target, and every
+  // player is exactly one other player's target — the whole roster forms
+  // a single cycle (built once in initState), never independent pairs, so
+  // a hit can never leave a survivor without a hunter or a target. On a
+  // kill, the shooter inherits the eliminated target's own target,
+  // splicing them out of the cycle and keeping it a single loop over
+  // whoever's left. Only the killer's identity leaks (public roster, same
+  // as any other mode) — a player's TARGET's identity is secret to
+  // everyone but that player, delivered via a new me-only snapshot field
+  // (me.targetUserId) that carries an identity, never a position — the
+  // plan's explicit requirement, deliberately not an overload of the
+  // existing revealPosition hook (which answers a different question:
+  // "is this player's location visible").
+  the_ship: {
+    usesTeams: false,
+    initialPhase: () => 'live',
+    shootPhases: ['live'],
+    phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
+    initState(gs) {
+      const ids = Object.keys(gs.players);
+      for (let i = ids.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+      }
+      const targets = {};
+      if (ids.length >= 2) {
+        ids.forEach((uid, i) => { targets[uid] = ids[(i + 1) % ids.length]; });
+      } else if (ids.length === 1) {
+        targets[ids[0]] = null; // solo debug session: nobody to hunt
+      }
+      gs.modeState = { targets };
+    },
+    // No allies at all — nobody's target assignment is shared, not even
+    // with that target themselves. Same "always true" shape Battle Royale
+    // uses so the snapshot's "teammates see each other" branch never fires.
+    isOpponentPair() { return true; },
+    canShoot(gs, p) {
+      if (!gs.modeState.targets[p.userId]) return 'no_target';
+      return null;
+    },
+    // The one place a mode restricts targetFilter to a single specific
+    // player instead of a whole category (team/role) — you can only ever
+    // hit your own assigned target, nobody else.
+    targetFilter(gs, shooter, c) { return c.userId === gs.modeState.targets[shooter.userId]; },
+    applyHit(gs, shooter, target, verdict, t) {
+      shooter.score += 10;
+      const ms = gs.modeState;
+      const inherited = ms.targets[target.userId];
+      target.status = 'found'; // eliminated — permanently out
+      ms.targets[target.userId] = null;
+      // Guards the only case a cycle splice could self-target: exactly 2
+      // players left (A→B→A) — hitting B would otherwise assign A as A's
+      // own target. Harmless in practice (checkWin ends the match the
+      // same tick since only A remains) but null is the honest value.
+      ms.targets[shooter.userId] = (inherited && inherited !== shooter.userId) ? inherited : null;
+      pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
+      this.checkWin(gs);
+    },
+    checkWin(gs) {
+      // Solo debug session (host alone, no bots) can't have a winner.
       if (Object.keys(gs.players).length < 2) return;
       const alive = Object.values(gs.players).filter(p => p.status === 'alive');
       if (alive.length <= 1) {
@@ -1648,6 +1737,12 @@ function getAropsSnapshot(gs, userId) {
       // reach it, per the AR-Ops modes plan (mobile UI, later phase).
       needsSpawn: me.status === 'downed',
       ownBase: me.team && gs.modeState.bases ? gs.modeState.bases[me.team] || null : null,
+      // The Ship: identity of the player's assigned target — NEVER their
+      // position (that's the whole point of the mode). The client resolves
+      // the username via the public roster, which itself only ever carries
+      // a position when independently revealed (never true here, since
+      // isOpponentPair is always true for this mode).
+      targetUserId: gs.modeState.targets ? (gs.modeState.targets[userId] || null) : null,
     } : null,
     players: roster,
     events: gs.events.slice(-15),

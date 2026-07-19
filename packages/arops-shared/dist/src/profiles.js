@@ -8,14 +8,13 @@
 //  arops.js implementiert; dieses Modul ist das Fundament, aus dem sie
 //  später abgeleitet werden sollen (siehe AR-Ops-Modi-Ausbau-Plan, Phase 1).
 //
-//  Umfang bewusst auf den jeweils bereits implementierten Stand begrenzt:
-//  hide_and_seek/domination/ctf/seek_destroy (Fundament) plus deathmatch und
-//  battle_royale (neu), die drei bestehenden Rollen (hider/seeker/
-//  team_member) und die drei Spielerklassen (scout/sniper/bomber, additiv
-//  zu Rolle/Team — kein Ersatz). "The Ship" und Zerstören (die geplante
-//  seek_destroy-Ablösung mit rotierenden Zielen) kommen erst mit ihrer
-//  jeweiligen Umsetzungsphase dazu — `submodes` ist deshalb noch für alle
-//  Modi leer, keiner hat heute echte Varianten.
+//  Umfang: alle sechs implementierten Modi (hide_and_seek/domination/ctf/
+//  seek_destroy alias "Zerstören"/deathmatch/battle_royale/the_ship), die
+//  drei bestehenden Rollen (hider/seeker/team_member) und die drei
+//  Spielerklassen (scout/sniper/bomber, additiv zu Rolle/Team — kein
+//  Ersatz). `submodes` ist für alle Modi leer — keiner hat heute echte
+//  Varianten (Battle Royale ist ein eigener Modus, keine Sub-Variante von
+//  Hide & Seek, siehe dessen eigener Kommentar in arops.js).
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GLOSSARY = exports.PLAYER_TYPE_PROFILES = exports.GAME_MODE_PROFILES = void 0;
@@ -219,6 +218,34 @@ exports.GAME_MODE_PROFILES = {
                 description: 'Mindestabstand zwischen zwei Schussversuchen desselben Spielers.' },
         ],
     },
+    the_ship: {
+        id: 'the_ship',
+        name: 'The Ship',
+        shortDescription: 'Geheime Attentats-Kette: jeder hat genau ein Ziel, niemand kennt seinen ' +
+            'eigenen Jäger. Nach einem Treffer erbt man das Ziel des Opfers.',
+        longDescription: 'Kein Team, keine Rolle, keine Basis. Zu Spielbeginn wird jedem Spieler ' +
+            'verdeckt genau ein anderer Spieler als Ziel zugewiesen — die gesamte ' +
+            'Teilnehmerliste bildet dabei eine einzige Kette (jeder ist gleichzeitig ' +
+            'Jäger von genau einem und Ziel von genau einem anderen). Nur das eigene ' +
+            'Ziel kann getroffen werden, jeder andere Spieler zählt schlicht nicht als ' +
+            'Treffer-Kandidat. Gelingt der Treffer, scheidet das Ziel endgültig aus, ' +
+            'und man erbt dessen bisheriges Ziel — die Kette bleibt so immer über die ' +
+            'verbliebenen Spieler geschlossen. Wer als letzter übrig bleibt, gewinnt; ' +
+            'beim Zeitlimit entscheidet der höhere Punktestand (Gleichstand = ' +
+            'Unentschieden). Die eigene Zielperson wird nur der/dem betreffenden ' +
+            'Spieler:in angezeigt (Identität, nie Position) — niemand sonst erfährt, ' +
+            'wer wen jagt.',
+        hasBases: false,
+        hasTargets: true, // das persönliche Attentats-Ziel jedes Spielers
+        partyMode: 'individual',
+        submodes: [],
+        parameters: [
+            { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
+                description: 'Zeitlimit; danach gewinnt der Spieler mit dem höchsten Punktestand.' },
+            { key: 'hitCooldownMs', name: 'Schuss-Cooldown', unit: 'ms',
+                description: 'Mindestabstand zwischen zwei Schussversuchen desselben Spielers.' },
+        ],
+    },
 };
 exports.PLAYER_TYPE_PROFILES = {
     hider: {
@@ -291,7 +318,8 @@ exports.GLOSSARY = [
     { term: 'Zone', definition: 'Ein host-platzierter Bereich auf der Karte (z.B. Domination-Kontrollpunkt oder Seek&Destroy-Zielort), den Spieler ' +
             'durch Verweilen einnehmen/nutzen können.' },
     { term: 'Base', definition: 'Der Heimatbereich eines Teams (z.B. in Capture the Flag) — Ausgangspunkt für die eigene Flagge/Basis-Mechaniken.' },
-    { term: 'Target', definition: 'Das jeweilige Ziel eines Modus — in Hide & Seek die Hider selbst, in Seek & Destroy der Bomben-Pflanzort.' },
+    { term: 'Target', definition: 'Das jeweilige Ziel eines Modus — in Hide & Seek die Hider selbst, in Zerstören der aktive Zielort, ' +
+            'in The Ship die geheim zugewiesene Person, die man jagen muss.' },
     { term: 'Captain', definition: 'Der erste einem Team zugeloste Spieler — in Capture the Flag verantwortlich für die Basis-Platzierung zu Rundenbeginn.' },
     { term: 'Cloak (Tarnung)', definition: 'Perk, der einen Spieler für eine begrenzte Zeit unsichtbar für gegnerisches Radar macht.' },
     { term: 'Drohne', definition: 'Perk (nur Hider in Hide & Seek): meldet, ob ein Seeker innerhalb eines bestimmten Radius ist — ohne dessen genaue Position zu verraten.' },
