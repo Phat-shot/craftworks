@@ -72,6 +72,32 @@ export async function loginGuest(username: string): Promise<User> {
   return data.user;
 }
 
+/** Real account registration (email+password) — additive to the guest path,
+ *  not a replacement. Server auto-verifies immediately if SMTP isn't
+ *  configured or the send fails (see server/src/routes/auth.js), so this
+ *  always succeeds regardless of email delivery — the caller doesn't need
+ *  to handle a "pending verification, can't log in yet" state at all;
+ *  `data.message` is purely informational (whether a real email went out).
+ */
+export async function registerAccount(email: string, username: string, password: string): Promise<{ message: string }> {
+  const data = await req('/auth/register', { email, username, password });
+  return { message: data.message };
+}
+
+/** Real account login (email+password) — persists tokens exactly like loginGuest. */
+export async function loginAccount(email: string, password: string): Promise<User> {
+  const data = await req('/auth/login', { email, password });
+  accessToken = data.access_token;
+  refreshToken = data.refresh_token;
+  currentUser = data.user;
+  await AsyncStorage.multiSet([
+    ['access_token', data.access_token],
+    ['refresh_token', data.refresh_token],
+    ['user', JSON.stringify(data.user)],
+  ]);
+  return data.user;
+}
+
 /** Try restoring a previous session from storage. */
 export async function restoreSession(): Promise<User | null> {
   const [[, tok], [, rtok], [, userJson]] = await AsyncStorage.multiGet(['access_token', 'refresh_token', 'user']);
