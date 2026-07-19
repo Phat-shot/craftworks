@@ -14,6 +14,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -25,18 +26,18 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import one.srz.aropswear.BuildConfig
 import one.srz.aropswear.model.PairingRepository
 
 /**
  * Shown until the phone scans our QR code and claims us (see MainActivity,
- * which swaps this out for RadarScreen once claimed). Tap the code to get a
- * fresh one — useful if the phone's scan attempt failed (e.g. the code
- * scrolled off screen mid-scan) or you want to pair a different phone.
+ * which swaps this out for RadarScreen once claimed).
  */
 @Composable
 fun PairingScreen() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val token by PairingRepository.token.collectAsState()
     val qrBitmap = remember(token) { encodeQr(token, 280) }
 
@@ -45,7 +46,7 @@ fun PairingScreen() {
     // app's process at the exact moment it arrived — poll the persistent
     // DataItem as a reliable fallback for as long as this screen is showing.
     // Restarts (so it checks immediately, not just every 5s) whenever the
-    // token changes, e.g. right after tapping the code to regenerate it.
+    // token changes, e.g. right after tapping the code and getting a fresh one.
     LaunchedEffect(token) {
         while (isActive) {
             PairingRepository.checkClaimViaDataLayer(context)
@@ -61,10 +62,24 @@ fun PairingScreen() {
         Image(
             bitmap = qrBitmap.asImageBitmap(),
             contentDescription = null,
-            modifier = Modifier.size(170.dp).clickable { PairingRepository.regenerateToken() },
+            // Tap: check RIGHT NOW whether the phone already wrote a claim
+            // for this token (don't just wait for the next 5s poll) — if
+            // one's there, PairingRepository.tryClaim flips `claimed` and
+            // MainActivity swaps to RadarScreen on its own. Only if nothing
+            // was found do we regenerate the token — regenerating
+            // unconditionally on every tap (the old behavior) would have
+            // thrown away a claim the phone already wrote but that this
+            // screen just hadn't picked up yet, making a slow/missed poll
+            // *worse* instead of giving the user a way to recover from it.
+            modifier = Modifier.size(170.dp).clickable {
+                scope.launch {
+                    val claimed = PairingRepository.checkClaimViaDataLayer(context)
+                    if (!claimed) PairingRepository.regenerateToken()
+                }
+            },
         )
         Text(
-            text = "Scannen · Tippen = neuer Code",
+            text = "Scannen · Tippen = prüfen/neu",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.padding(top = 4.dp),
