@@ -3,7 +3,7 @@
 // React hook: a memoized frame processor to hand to <Camera>, plus the most
 // recently decoded beacon as regular JS state GameScreen can read.
 import { useState } from 'react';
-import { useFrameProcessor, VisionCameraProxy } from 'react-native-vision-camera';
+import { useFrameProcessor, VisionCameraProxy, runAtTargetFps } from 'react-native-vision-camera';
 import { useRunOnJS } from 'react-native-worklets-core';
 
 export interface IrScanResult {
@@ -26,11 +26,17 @@ export function useIrScan() {
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
     if (plugin == null) return;
-    const result = plugin.call(frame);
-    if (result != null && typeof result === 'object' && 'deviceId' in result) {
-      // @ts-ignore — result is a plain worklet-side value, not typed
-      updateScan(result.deviceId, result.ts);
-    }
+    // The beacon's own bit timing is ~150ms (≈6.7Hz) — there's nothing to
+    // gain from calling the native plugin on every single camera frame
+    // (30-60/sec), only more native-call overhead/risk for no benefit.
+    runAtTargetFps(10, () => {
+      'worklet';
+      const result = plugin.call(frame);
+      if (result != null && typeof result === 'object' && 'deviceId' in result) {
+        // @ts-ignore — result is a plain worklet-side value, not typed
+        updateScan(result.deviceId, result.ts);
+      }
+    });
   }, [updateScan]);
 
   return { frameProcessor, lastScan };

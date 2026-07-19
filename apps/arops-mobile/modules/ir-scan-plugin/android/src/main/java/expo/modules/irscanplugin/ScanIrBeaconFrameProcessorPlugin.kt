@@ -49,19 +49,29 @@ class ScanIrBeaconFrameProcessorPlugin(
   private val history = ArrayDeque<Sample>()
 
   override fun callback(frame: Frame, params: Map<String, Any?>?): Any? {
-    val nowMs = System.currentTimeMillis()
-    val isOn = try {
-      isBeaconLit(frame)
+    // The whole body, not just isBeaconLit(), is wrapped — this plugin is
+    // new/untested against real hardware, and VisionCamera calls it on a
+    // native frame-processor thread where an uncaught exception (or worse,
+    // touching a Frame/Image the pipeline has already recycled) can bring
+    // the whole app down with a native crash instead of a catchable JS
+    // error. Fail-safe to "no scan yet" (null) rather than ever propagate.
+    return try {
+      val nowMs = System.currentTimeMillis()
+      val isOn = try {
+        isBeaconLit(frame)
+      } catch (e: Throwable) {
+        false
+      }
+
+      history.addLast(Sample(nowMs, isOn))
+      while (history.isNotEmpty() && nowMs - history.first().tsMs > HISTORY_WINDOW_MS) {
+        history.removeFirst()
+      }
+
+      decode(nowMs)
     } catch (e: Throwable) {
-      false
+      null
     }
-
-    history.addLast(Sample(nowMs, isOn))
-    while (history.isNotEmpty() && nowMs - history.first().tsMs > HISTORY_WINDOW_MS) {
-      history.removeFirst()
-    }
-
-    return decode(nowMs)
   }
 
   private fun isBeaconLit(frame: Frame): Boolean {
