@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
@@ -7,7 +7,7 @@ import { getSocket, getUser, fetchLobbyQr } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
-import { polygonAreaM2, scaleCoreConfig } from '@craftworks/arops-shared';
+import { polygonAreaM2, scaleCoreConfig, PLAYER_TYPE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
 import type { useTelemetry } from '../hooks/useTelemetry';
 
@@ -52,6 +52,9 @@ interface ArSettings {
   comicMap?: ComicMap;
   hitTrackingMode?: 'compass' | 'ir';
   irIds?: Record<string, number>;
+  // Player classes (scout/sniper/bomber) — additive to role/team, every
+  // mode, optional (unset = classless, unchanged combat stats).
+  classes?: Record<string, 'scout' | 'sniper' | 'bomber'>;
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
   autoScale?: boolean;
 }
@@ -281,6 +284,20 @@ export default function LobbyScreen({
     if (!isHost) return;
     const next = ((irIdOf(uid) ?? -1) + 1) % 256;
     emitUpdate({ irIds: { ...(ar.irIds || {}), [uid]: next } });
+  };
+  // Player classes (scout/sniper/bomber) — additive to role/team, every
+  // mode, no host obligation to assign one. Tap-to-cycle: none -> scout ->
+  // sniper -> bomber -> none, same pattern as the IR-ID cycle above.
+  const CLASS_CYCLE = ['scout', 'sniper', 'bomber'] as const;
+  const classOf = (uid: string) => ar.classes?.[uid];
+  const cycleClass = (uid: string) => {
+    if (!isHost) return;
+    const cur = classOf(uid);
+    const idx = cur ? CLASS_CYCLE.indexOf(cur) : -1;
+    const next = idx === CLASS_CYCLE.length - 1 ? undefined : CLASS_CYCLE[idx + 1];
+    const classes = { ...(ar.classes || {}) };
+    if (next) classes[uid] = next; else delete classes[uid];
+    emitUpdate({ classes });
   };
 
   const onMapPress = (feature: any) => {
@@ -843,6 +860,24 @@ export default function LobbyScreen({
                 <Text style={st.roleTag}>{irIdOf(item.id) !== undefined ? `IR ${irIdOf(item.id)}` : 'IR –'}</Text>
               </TouchableOpacity>
             )}
+            {/* Klasse (scout/sniper/bomber) — additiv zu Rolle/Team, jeder
+                Modus, optional. Tap zum Durchschalten wie IR-ID oben;
+                Long-Press zeigt die Steckbrief-Kurzbeschreibung (Tooltip-
+                Pattern für Touch-Geräte, siehe AR-Ops-Modi-Plan Phase 7). */}
+            <TouchableOpacity disabled={!isHost} style={st.roleTagRow}
+              onPress={() => cycleClass(item.id)}
+              onLongPress={() => {
+                const cls = classOf(item.id);
+                Alert.alert(
+                  cls ? PLAYER_TYPE_PROFILES[cls].name : 'Keine Klasse',
+                  cls ? PLAYER_TYPE_PROFILES[cls].shortDescription : 'Standard-Schusswerte, kein Klassen-Perk.'
+                );
+              }}>
+              <Icon name="shieldAccount" size={12} color={classOf(item.id) ? '#f0c840' : '#807050'} />
+              <Text style={[st.roleTag, classOf(item.id) && { color: '#f0c840' }]}>
+                {classOf(item.id) ? PLAYER_TYPE_PROFILES[classOf(item.id)!].name : '–'}
+              </Text>
+            </TouchableOpacity>
             <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}
               color={item.ready ? '#80ff40' : '#807050'} style={{ marginLeft: 8 }} />
             {isHost && item.isBot && (
