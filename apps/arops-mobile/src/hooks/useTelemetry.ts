@@ -33,7 +33,19 @@ export interface TelemetryState {
   geofence: 'inside' | 'warning' | 'outside' | null;
 }
 
-export function useTelemetry(socket: Socket | null, sessionId: string | null): TelemetryState & {
+/**
+ * @param enabled Gates the SENSOR side (GPS watch + magnetometer/accelerometer) —
+ *   defaults to true. Called once from App.tsx with `enabled` true from the
+ *   moment the Lobby screen is reachable (not just once GameScreen mounts),
+ *   so GPS/compass have as long as possible to lock in before a match
+ *   actually starts, instead of only starting cold at "Start Game". The
+ *   SEND side (socket emission) stays independently gated by `sessionId`
+ *   being non-null (only a real, started game session has an ar_ops game
+ *   state on the server for telemetry to land in — the lobby itself has no
+ *   such session yet) — callers pass `sessionId` as null while still in the
+ *   lobby even though `enabled` is already true.
+ */
+export function useTelemetry(socket: Socket | null, sessionId: string | null, enabled = true): TelemetryState & {
   /** Snapshot of the current fused sample — call at camera-trigger time. */
   snapshot: () => TelemetrySample | null;
   /** Manually tear down + recreate the compass sensors (retry button). */
@@ -74,6 +86,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
 
   // Permissions + watchers
   useEffect(() => {
+    if (!enabled) return;
     let posSub: Location.LocationSubscription | null = null;
     let magSub: ReturnType<typeof Magnetometer.addListener> | null = null;
     let accelSub: ReturnType<typeof Accelerometer.addListener> | null = null;
@@ -180,17 +193,25 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
       // own GPS, e.g. in Google Maps, works fine) — a silent, dead
       // subscription rather than an error. Since there's no failure event to
       // react to, we just notice the silence and tear down + recreate the
-      // subscription, a few times, instead of leaving the player stuck with
-      // no position and no feedback. The magnetometer/accelerometer are a
-      // much lower-level API than the old heading watcher, but get the same
+      // subscription instead of leaving the player stuck with no position
+      // and no feedback. The magnetometer/accelerometer are a much
+      // lower-level API than the old heading watcher, but get the same
       // safety net in case a given device's sensor stack still stalls.
+      // Retries indefinitely — never permanently gives up on its own (a
+      // capped retry count meant the player had to notice it was stuck and
+      // manually tap retryPosition/retryHeading; this way the status
+      // banners in the UI are purely informational, not something the
+      // player has to act on to keep the recovery going). Since this now
+      // starts as early as the Lobby screen instead of only once the game
+      // actually starts, indefinite retries also give GPS/compass much more
+      // real time to lock in before a match begins.
       watchdog = setInterval(() => {
         if (cancelled) return;
-        if (Date.now() - lastHeadingAt.current > 4000 && headingRetries.current < 5) {
+        if (Date.now() - lastHeadingAt.current > 4000) {
           headingRetries.current += 1;
           startHeading();
         }
-        if (Date.now() - lastPosAt.current > 4000 && posRetries.current < 5) {
+        if (Date.now() - lastPosAt.current > 4000) {
           posRetries.current += 1;
           startPosition();
         }
@@ -204,7 +225,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null): T
       accelSub?.remove();
       if (watchdog) clearInterval(watchdog);
     };
-  }, []);
+  }, [enabled]);
 
   // 1 Hz send loop
   useEffect(() => {

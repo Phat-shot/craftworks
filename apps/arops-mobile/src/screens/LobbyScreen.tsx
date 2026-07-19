@@ -9,6 +9,7 @@ import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
+import type { useTelemetry } from '../hooks/useTelemetry';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -86,8 +87,13 @@ const DEBUG_COOLDOWNS = {
 };
 
 export default function LobbyScreen({
-  lobbyId, isHost = false, lobbyCode, onGameStart,
-}: { lobbyId: string; isHost?: boolean; lobbyCode?: string; onGameStart: (sessionId: string) => void }) {
+  lobbyId, isHost = false, lobbyCode, onGameStart, telemetry,
+}: {
+  lobbyId: string; isHost?: boolean; lobbyCode?: string; onGameStart: (sessionId: string) => void;
+  // Shared instance from App.tsx (see its own comment) — already warming up
+  // GPS/compass here in the lobby, well before the match actually starts.
+  telemetry: ReturnType<typeof useTelemetry>;
+}) {
   const [members, setMembers] = useState<Member[]>([]);
   const [ar, setAr] = useState<ArSettings>({});
   const [polyErrs, setPolyErrs] = useState<string[]>([]);
@@ -143,6 +149,24 @@ export default function LobbyScreen({
   };
 
   useEffect(() => { loadMyPosition(); }, []);
+
+  // Once the shared telemetry hook (App.tsx) has a live GPS fix, prefer it
+  // over the one-shot fetch above — it keeps updating as accuracy improves,
+  // instead of staying frozen at whatever the very first fix happened to be.
+  useEffect(() => {
+    if (telemetry.sample) {
+      setMyPos({ lat: telemetry.sample.lat, lon: telemetry.sample.lon });
+      setMyPosErr(false);
+    }
+  }, [telemetry.sample]);
+
+  // Same "don't nag during the first few seconds" grace period GameScreen
+  // uses — GPS/compass warming up is normal right after opening the lobby.
+  const [initGraceOver, setInitGraceOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setInitGraceOver(true), 10_000);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     const socket = getSocket();
@@ -463,6 +487,22 @@ export default function LobbyScreen({
             <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
           )}
         </TouchableOpacity>
+        {/* GPS/Kompass wärmen hier schon vor, damit sie beim Spielstart
+            möglichst schon stehen (siehe useTelemetry) — reine Statusanzeige,
+            kein Handlungsbedarf; die Sensoren versuchen selbstständig
+            unbegrenzt weiter, ein Tap ist nur ein optionaler Sofort-Retry. */}
+        <View style={st.gpsStatusBadge}>
+          <TouchableOpacity style={st.gpsStatusRow} onPress={telemetry.retryPosition}>
+            <Icon name={telemetry.sample ? 'checkCircle' : 'satellite'} size={13}
+              color={telemetry.sample ? '#50d040' : (initGraceOver ? '#f0c840' : '#807050')} />
+            <Text style={st.gpsStatusTxt}>GPS</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={st.gpsStatusRow} onPress={telemetry.retryHeading}>
+            <Icon name={telemetry.heading !== null ? 'checkCircle' : 'compass'} size={13}
+              color={telemetry.heading !== null ? '#50d040' : (initGraceOver ? '#f0c840' : '#807050')} />
+            <Text style={st.gpsStatusTxt}>Kompass</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {ar.comicMap && (
@@ -752,6 +792,12 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
     alignItems: 'center', justifyContent: 'center',
   },
+  gpsStatusBadge: {
+    position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(20,16,32,.85)',
+    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, gap: 3,
+  },
+  gpsStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  gpsStatusTxt: { color: '#c0a0f0', fontSize: 11, fontWeight: '700' },
   comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
   comicStaleBadge: {
     position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,

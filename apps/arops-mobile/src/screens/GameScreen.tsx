@@ -41,6 +41,9 @@ interface Snap {
     cloakCooldownRemainingMs?: number; cloakActive?: boolean; cloakRemainingMs?: number;
     fakeMarkerCooldownRemainingMs?: number; fakeMarkerActive?: boolean; fakeMarkerRemainingMs?: number;
     aufscheuchenCooldownRemainingMs?: number;
+    // Team ping (map tap) — only ever the viewer's own team's pings, never
+    // the opponents' (see server's getAropsSnapshot, me.teamPings).
+    teamPings?: { lat: number; lon: number; byUserId: string; ts: number; expiresAt: number }[];
   } | null;
   players: { userId: string; username: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; accuracyM?: number; status: string }[];
   // Mode extras
@@ -95,8 +98,12 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
-export default function GameScreen({ sessionId, onExit, watchSync }: {
+export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: {
   sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
+  // Lifted to App.tsx (shared across Lobby + Game) so GPS/compass get a
+  // head start during the lobby instead of cold-starting here — see
+  // useTelemetry's own comment and App.tsx.
+  telemetry: ReturnType<typeof useTelemetry>;
 }) {
   useKeepAwake(); // screen lock would stop GPS → target_stale for everyone else
   const socket = getSocket();
@@ -108,7 +115,6 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
-  const telemetry = useTelemetry(socket, sessionId);
   // Continuously decodes the AR Ops IR-ID beacon (see hardware/esp32-ir)
   // from the camera feed while a camera-showing view is mounted — "beim
   // Schuss und davor" means this has to be running before the shot too, not
@@ -126,6 +132,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 
   const [viewPopupOpen, setViewPopupOpen] = useState(false);
   const [endRecapOpen, setEndRecapOpen] = useState(false);
+  // Measured (not guessed) so the settings FAB sits right above the action
+  // bar regardless of its actual height (varies when the captain-setup base
+  // row is shown) — see the bottomBar's onLayout below.
+  const [bottomBarH, setBottomBarH] = useState(100);
 
   // ── Debug overlay: live stats + enemy distance/hitbox, overlaid on the
   // existing view — not a separate full-screen panel.
@@ -218,6 +228,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'fake_marker' } });
   const useAufscheuchen = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'aufscheuchen' } });
+  // Team ping (map tap, see onMapPress) — silently no-op for teamless modes
+  // (no me.team means no teammates to ping; the server would reject it with
+  // 'no_team' anyway, but checking client-side avoids a pointless round-trip).
+  const usePing = (lat: number, lon: number) => {
+    if (!snap?.me?.team) return;
+    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'ping', lat, lon } });
+  };
 
   const setBase = (lat?: number, lon?: number) =>
     socket.emit('game:action', {
@@ -344,6 +361,20 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     }
     return { type: 'FeatureCollection' as const, features };
   }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies]);
+
+  // Team ping markers (map tap) — fade out as they approach expiry, same
+  // convention as the age-based fades above. snap.me.teamPings is already
+  // filtered server-side to the viewer's own team only (see arops.js).
+  const pingsGeoJSON = useMemo(() => {
+    const now = Date.now();
+    const features = (snap?.me?.teamPings || []).map(pg => {
+      const total = Math.max(1, pg.expiresAt - pg.ts);
+      const op = Math.max(0.15, Math.min(1, (pg.expiresAt - now) / total));
+      return { type: 'Feature' as const, properties: { op },
+        geometry: { type: 'Point' as const, coordinates: [pg.lon, pg.lat] } };
+    });
+    return { type: 'FeatureCollection' as const, features };
+  }, [JSON.stringify(snap?.me?.teamPings)]);
 
   // Host-configurable in the Lobby (Reichweite/Breite) — falls back to the
   // shared defaults until the snapshot carries a per-lobby override. "Breite"
@@ -595,9 +626,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   }
 
   const onMapPress = (feature: any) => {
-    if (!isCaptainSetup) return;
     const c = feature?.geometry?.coordinates;
-    if (Array.isArray(c)) setBase(c[1], c[0]);
+    if (!Array.isArray(c)) return;
+    if (isCaptainSetup) { setBase(c[1], c[0]); return; }
+    // Any other tap on the map (outside base-setup) drops a team ping —
+    // see usePing above.
+    usePing(c[1], c[0]);
   };
   // The comic map is a nice-to-have (host-generated, needs OpenStreetMap's rate-
   // limited Overpass API) — if it was never generated or the fetch failed, fall
@@ -668,6 +702,14 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <CircleLayer id="actorDots" style={{
             circleRadius: 9, circleColor: ['get', 'color'] as any,
             circleStrokeWidth: 2, circleStrokeColor: '#ffffff', circleOpacity: ['get', 'op'] as any,
+          }} />
+        </ShapeSource>
+      )}
+      {pingsGeoJSON.features.length > 0 && (
+        <ShapeSource id="pings" shape={pingsGeoJSON as any}>
+          <CircleLayer id="pingRings" style={{
+            circleRadius: 16, circleColor: 'transparent',
+            circleStrokeWidth: 3, circleStrokeColor: '#40e0ff', circleStrokeOpacity: ['get', 'op'] as any,
           }} />
         </ShapeSource>
       )}
@@ -1029,9 +1071,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       {/* Views-Popup: Kartenmodus, Schussbereich, Debug. Uhr-Kopplung läuft
           nur noch übers Hauptmenü — hier nur noch ein reiner Status-Icon
           oben links (siehe watchStatusFab unten), kein Kopplungs-Einstieg
-          mehr. */}
+          mehr. Als Flyout links neben dem (jetzt direkt über der Action-Bar
+          sitzenden) Settings-Button verankert, statt einer vollbreiten
+          Leiste über der Bar. */}
       {viewPopupOpen && (
-        <View style={st.viewPopup}>
+        <View style={[st.viewPopup, { bottom: bottomBarH + 8 }]}>
           <View style={st.modeRow}>
             {MODES.map(m => (
               <TouchableOpacity key={m.id}
@@ -1073,15 +1117,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       </View>
 
       {/* Floating settings toggle — pulled out of the bottom bar so that bar
-          can stay exactly Perk1 | Schuss | Perk2, symmetric. */}
+          can stay exactly Perk1 | Schuss | Perk2, symmetric. Sits directly
+          above the action bar (measured height, see bottomBarH) instead of
+          floating over the map/overlapping the bar's own buttons. */}
       <TouchableOpacity
-        style={[st.settingsFab, viewPopupOpen && st.modeBtnActive]}
+        style={[st.settingsFab, { bottom: bottomBarH + 8 }, viewPopupOpen && st.modeBtnActive]}
         onPress={() => setViewPopupOpen(o => !o)}>
         <Icon name="settings" size={20} color={viewPopupOpen ? '#f0c840' : '#c0a0f0'} />
       </TouchableOpacity>
 
       {/* Bottom bar: Perk1 | Schuss | Perk2 */}
-      <View style={st.bottomBar}>
+      <View style={st.bottomBar} onLayout={e => setBottomBarH(e.nativeEvent.layout.height)}>
         {isCaptainSetup && (
           <TouchableOpacity style={[st.baseBtn, st.btnRow, st.baseBtnRow]} onPress={() => setBase()}>
             <Icon name="flag" size={14} color="#f0c840" />
@@ -1151,8 +1197,12 @@ const st = StyleSheet.create({
   },
   endExitTxt: { color: '#0a0810', fontWeight: '900', fontSize: 15 },
   viewPopup: {
-    backgroundColor: '#1a1428', borderTopWidth: 1, borderTopColor: '#2a2040',
-    paddingHorizontal: 16, paddingVertical: 10, gap: 8,
+    // Floating flyout anchored to the left of the settings FAB (right: 60 —
+    // FAB width 42 + margin) instead of a full-width bar; `bottom` is set
+    // inline to match the FAB's own measured offset above the action bar.
+    position: 'absolute', right: 60, backgroundColor: '#1a1428',
+    borderWidth: 1, borderColor: '#2a2040', borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 8, gap: 8, zIndex: 20,
   },
   debugBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
@@ -1180,7 +1230,9 @@ const st = StyleSheet.create({
   actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
   settingsFab: {
-    position: 'absolute', right: 14, bottom: 14, width: 42, height: 38, borderRadius: 8,
+    // `bottom` here is just a fallback for the first render before bottomBarH
+    // is measured — the actual value is always overridden inline (bottomBarH + 8).
+    position: 'absolute', right: 14, bottom: 108, width: 42, height: 38, borderRadius: 8,
     backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
