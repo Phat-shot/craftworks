@@ -36,7 +36,16 @@ interface ArSettings {
   cloakCooldownMs?: number;
   fakeMarkerCooldownMs?: number;
   aufscheuchenCooldownMs?: number;
-  foundMode?: 'spectator' | 'seeker';
+  foundMode?: 'spectator' | 'seeker' | 'freeze';
+  // Hide & Seek variant: 'classic' (default, seeker/hider) or 'the_ship'
+  // (secret assassin-chain, no roles — see server's MODES.hide_and_seek).
+  hsVariant?: 'classic' | 'the_ship';
+  // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
+  destroyVariant?: 'instant' | 'defuse';
+  destroyReactivate?: boolean;
+  // Deathmatch: on-hit consequence + lives (respawn variant only).
+  deathmatchOnHit?: 'respawn' | 'freeze';
+  livesPerPlayer?: number;
   bots?: { id: string; username: string }[];
   debugMode?: boolean;
   comicMap?: ComicMap;
@@ -63,8 +72,14 @@ const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
   { id: 'domination', icon: 'target', label: 'Herrschaft' },
   { id: 'ctf', icon: 'flag', label: 'Flagge' },
   { id: 'seek_destroy', icon: 'bomb', label: 'Sprengen' },
+  { id: 'deathmatch', icon: 'skull', label: 'Deathmatch' },
+  { id: 'battle_royale', icon: 'crosshair', label: 'Jeder gegen jeden' },
 ];
 const NEEDS_ZONES: Record<string, number> = { domination: 2, seek_destroy: 1 };
+// Modes with real team assignment — everything else (hide_and_seek incl. its
+// The Ship variant, battle_royale) has no teams at all (usesTeams: false
+// server-side, see arops.js's MODES table).
+const TEAM_MODES = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
 const POLY_ERR_DE: Record<string, string> = {
   too_few_points: 'Mind. 3 Wegpunkte setzen',
   self_intersecting: 'Fläche überschneidet sich — Punkte der Reihe nach im Kreis setzen',
@@ -234,8 +249,15 @@ export default function LobbyScreen({
   const polygon = ar.polygon || [];
   const zones = ar.zones || [];
   const subMode = ar.subMode || 'hide_and_seek';
-  const teamMode = subMode !== 'hide_and_seek';
+  const teamMode = TEAM_MODES.includes(subMode);
+  const hsVariant = ar.hsVariant === 'the_ship' ? 'the_ship' : 'classic';
+  // The Ship has no roles at all (not seeker/hider, not team) — role/team
+  // assignment UI only makes sense for the classic variant.
+  const rolesApply = subMode === 'hide_and_seek' && hsVariant !== 'the_ship';
   const foundMode = ar.foundMode || 'spectator';
+  const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
+  const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
+  const livesPerPlayer = ar.livesPerPlayer || 3;
   const bots = ar.bots || [];
   const debugMode = ar.debugMode || false;
   const hitTrackingMode = ar.hitTrackingMode || 'compass';
@@ -439,6 +461,22 @@ export default function LobbyScreen({
           ))}
         </View>
       )}
+      {/* The Ship: eine Variante von Hide & Seek (ar_settings.hsVariant), kein
+          eigener Modus — daher ein Umschalter statt eines SUB_MODES-Eintrags. */}
+      {isHost && subMode === 'hide_and_seek' && (
+        <View style={st.rowBtns}>
+          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'classic' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ hsVariant: 'classic' })}>
+            <Icon name="ghost" size={13} color={hsVariant === 'classic' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Klassisch</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'the_ship' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ hsVariant: 'the_ship' })}>
+            <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship (geheime Ziele)</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <View style={st.divider} />
 
       {isHost && (
@@ -638,7 +676,7 @@ export default function LobbyScreen({
               </View>
             </>
           )}
-          {subMode === 'hide_and_seek' && (
+          {rolesApply && (
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>Gefunden:</Text>
               <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
@@ -651,6 +689,54 @@ export default function LobbyScreen({
                 <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
                 <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: 'freeze' })}>
+                <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {subMode === 'seek_destroy' && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Zerstören:</Text>
+              <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ destroyVariant: 'instant' })}>
+                <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ destroyVariant: 'defuse' })}>
+                <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.smallBtnActive]}
+                onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
+                <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {subMode === 'deathmatch' && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Treffer:</Text>
+              <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'respawn' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ deathmatchOnHit: 'respawn' })}>
+                <Text style={[st.smallTxt, deathmatchOnHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'freeze' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ deathmatchOnHit: 'freeze' })}>
+                <Icon name="snowflake" size={13} color={deathmatchOnHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+                <Text style={[st.smallTxt, deathmatchOnHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {subMode === 'deathmatch' && deathmatchOnHit === 'respawn' && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Leben:</Text>
+              {[1, 3, 5].map(n => (
+                <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
+                  onPress={() => emitUpdate({ livesPerPlayer: n })}>
+                  <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           )}
 
@@ -666,14 +752,16 @@ export default function LobbyScreen({
       <View style={st.divider} />
       <View style={st.sectionRow}>
         <Icon name="people" size={13} color="#e0c080" />
-        <Text style={st.section}>Spieler {isHost ? (teamMode ? '(Team antippen)' : '(Rolle antippen)') : ''}</Text>
+        <Text style={st.section}>
+          Spieler {isHost ? (teamMode ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
+        </Text>
       </View>
     </View>
   );
 
   const footer = (
     <View>
-      {me && displayMembers.length > 0 && (
+      {me && displayMembers.length > 0 && (teamMode || rolesApply) && (
         <View style={st.roleRow}>
           <Icon name={teamMode ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
             size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : '#e0c080'} />
@@ -682,6 +770,12 @@ export default function LobbyScreen({
               ? `Dein Team: ${teamOf(me.id) === 'a' ? 'A' : 'B'}`
               : `Deine Rolle: ${roleOf(me.id) === 'seeker' ? 'Seeker' : 'Hider'}`}
           </Text>
+        </View>
+      )}
+      {me && displayMembers.length > 0 && !teamMode && !rolesApply && (
+        <View style={st.roleRow}>
+          <Icon name="mask" size={14} color="#e0c080" />
+          <Text style={st.role}>Dein Ziel wird nur dir angezeigt, sobald das Spiel startet</Text>
         </View>
       )}
       {!!startErr && (
@@ -726,12 +820,12 @@ export default function LobbyScreen({
                   {teamOf(item.id) === 'a' ? 'Team A' : 'Team B'}
                 </Text>
               </TouchableOpacity>
-            ) : (
+            ) : rolesApply ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleRole(item.id)}>
                 <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color="#c0a0f0" />
                 <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? 'Seeker' : 'Hider'}</Text>
               </TouchableOpacity>
-            )}
+            ) : null}
             {hitTrackingMode === 'ir' && (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => cycleIrId(item.id)}>
                 <Icon name="flash" size={12} color="#f0c840" />

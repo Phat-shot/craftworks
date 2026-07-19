@@ -17,8 +17,18 @@ const SUB_MODES = [
   { id: 'hide_and_seek', label: '🫥 Hide & Seek', zones: 0 },
   { id: 'domination',    label: '🎯 Domination',  zones: 2 },
   { id: 'ctf',           label: '🚩 CTF',          zones: 0 },
-  { id: 'seek_destroy',  label: '💣 Seek & Destroy', zones: 1 },
+  { id: 'seek_destroy',  label: '💣 Zerstören', zones: 1 },
+  { id: 'deathmatch',    label: '💀 Deathmatch', zones: 0 },
+  { id: 'battle_royale', label: '🎯 Jeder gegen jeden', zones: 0 },
 ];
+// Modes with real team assignment — everything else (hide_and_seek incl. its
+// The Ship variant, battle_royale) has no teams at all (usesTeams: false
+// server-side, see server/src/game/arops.js's MODES table).
+const TEAM_MODES = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
+// Modes with a captain-driven base_setup phase (see arops.js) — only these
+// two actually place a base; domination/seek_destroy never did despite the
+// old caption implying otherwise for every team mode.
+const HAS_CAPTAIN_BASE = ['ctf', 'deathmatch'];
 const ERR_LABELS = {
   too_few_points: 'Mindestens 3 Wegpunkte setzen',
   self_intersecting: 'Fläche überschneidet sich selbst',
@@ -121,8 +131,17 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   }, [JSON.stringify(polygon), JSON.stringify(zones), polyCheck?.ok]);
 
   const subMode = ar.subMode || 'hide_and_seek';
-  const isTeamMode = subMode !== 'hide_and_seek';
+  const isTeamMode = TEAM_MODES.includes(subMode);
   const needsZones = subMode === 'domination' || subMode === 'seek_destroy';
+  const hasCaptainBase = HAS_CAPTAIN_BASE.includes(subMode);
+  const hsVariant = ar.hsVariant === 'the_ship' ? 'the_ship' : 'classic';
+  // The Ship has no roles at all (not seeker/hider, not team) — the
+  // per-player role toggle only makes sense for the classic variant.
+  const rolesApply = subMode === 'hide_and_seek' && hsVariant !== 'the_ship';
+  const foundMode = ar.foundMode || 'spectator';
+  const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
+  const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
+  const livesPerPlayer = ar.livesPerPlayer || 3;
   const teamOf = (uid) => effective?.teams?.[uid] || (ar.teams || {})[uid] || 'a';
   const seekerCount = members.filter(m => roleOf(m.id) === 'seeker').length;
   const areaLabel = polyCheck?.areaM2
@@ -182,8 +201,8 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
         <div className="alert alert-success" style={{ marginBottom: 10, fontSize: 11 }}>✓ Spielfeld gültig</div>
       )}
 
-      {/* Roles (H&S) or Teams (team modes) */}
-      {!isTeamMode ? (<>
+      {/* Roles (H&S classic) / Teams (team modes) / neither (The Ship, Battle Royale) */}
+      {rolesApply ? (<>
       <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
         Rollen ({seekerCount} Seeker / {members.length - seekerCount} Hider)
       </div>
@@ -205,10 +224,10 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           );
         })}
       </div>
-      </>) : (<>
+      </>) : isTeamMode ? (<>
       <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
         Teams {subMode === 'seek_destroy' ? '(A = Angreifer, B = Verteidiger)' : ''}
-        {' · Captain setzt die CTF-Base'}
+        {hasCaptainBase ? ' · Captain setzt die Basis' : ''}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
         {members.map(m => {
@@ -228,10 +247,94 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           );
         })}
       </div>
+      </>) : (
+      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 12 }}>
+        {subMode === 'hide_and_seek'
+          ? '🎭 The Ship: jeder bekommt beim Start ein geheimes Ziel zugewiesen — keine Rollen/Teams in der Lobby.'
+          : '🎯 Jeder gegen jeden — keine Rollen/Teams in der Lobby.'}
+      </div>
+      )}
+
+      {/* The Ship: eine Variante von Hide & Seek (ar_settings.hsVariant), kein
+          eigener Modus. */}
+      {subMode === 'hide_and_seek' && (
+        <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ hsVariant: 'classic' })}
+            style={{ borderColor: hsVariant === 'classic' ? 'var(--gold)' : undefined,
+                     color: hsVariant === 'classic' ? 'var(--gold)' : undefined }}>
+            🫥 Klassisch
+          </button>
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ hsVariant: 'the_ship' })}
+            style={{ borderColor: hsVariant === 'the_ship' ? 'var(--gold)' : undefined,
+                     color: hsVariant === 'the_ship' ? 'var(--gold)' : undefined }}>
+            🎭 The Ship
+          </button>
+        </div>
+      )}
+      {rolesApply && (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Gefunden:</span>
+          {[['spectator', '👻 Zuschauer'], ['seeker', '🔁 Weiterspielen'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
+            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ foundMode: id })}
+              style={{ borderColor: foundMode === id ? 'var(--gold)' : undefined,
+                       color: foundMode === id ? 'var(--gold)' : undefined }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {subMode === 'seek_destroy' && (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Zerstören:</span>
+          {[['instant', 'Symmetrisch'], ['defuse', 'Entschärfen']].map(([id, label]) => (
+            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ destroyVariant: id })}
+              style={{ borderColor: destroyVariant === id ? 'var(--gold)' : undefined,
+                       color: destroyVariant === id ? 'var(--gold)' : undefined }}>
+              {label}
+            </button>
+          ))}
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}
+            style={{ borderColor: ar.destroyReactivate ? 'var(--gold)' : undefined,
+                     color: ar.destroyReactivate ? 'var(--gold)' : undefined }}>
+            🔁 Ziele reaktivieren
+          </button>
+        </div>
+      )}
+      {subMode === 'deathmatch' && (<>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Treffer:</span>
+          {[['respawn', 'Leben verlieren'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
+            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ deathmatchOnHit: id })}
+              style={{ borderColor: deathmatchOnHit === id ? 'var(--gold)' : undefined,
+                       color: deathmatchOnHit === id ? 'var(--gold)' : undefined }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {deathmatchOnHit === 'respawn' && (
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 10, color: 'var(--text3)' }}>Leben:</span>
+            {[1, 3, 5].map(n => (
+              <button key={n} className="btn btn-ghost btn-sm" disabled={!isHost}
+                onClick={() => emitUpdate({ livesPerPlayer: n })}
+                style={{ borderColor: livesPerPlayer === n ? 'var(--gold)' : undefined,
+                         color: livesPerPlayer === n ? 'var(--gold)' : undefined }}>
+                {n}
+              </button>
+            ))}
+          </div>
+        )}
       </>)}
 
       {/* Timers */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: rolesApply ? '1fr 1fr' : '1fr', gap: 10 }}>
+        {rolesApply && (
         <div>
           <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text2)', marginBottom: 4 }}>Versteck-Vorsprung</div>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -246,6 +349,7 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
             ))}
           </div>
         </div>
+        )}
         <div>
           <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text2)', marginBottom: 4 }}>Spieldauer</div>
           <div style={{ display: 'flex', gap: 4 }}>
