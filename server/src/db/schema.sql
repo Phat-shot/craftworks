@@ -477,3 +477,9 @@ ALTER TABLE game_sessions ADD COLUMN IF NOT EXISTS pve_config JSONB DEFAULT NULL
 
 -- Brand: store resolved workshopConfig with skins
 ALTER TABLE brand_maps ADD COLUMN IF NOT EXISTS game_config JSONB DEFAULT NULL;
+
+-- Platform-wide admin flag (distinct from brand_members.role, which is
+-- scoped to a single brand) — gates platform-level actions like creating
+-- new brands. No user has this by default; set manually after deploy:
+--   UPDATE users SET is_admin=true WHERE email='...';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;

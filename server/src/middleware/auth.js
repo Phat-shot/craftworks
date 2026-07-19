@@ -1,22 +1,13 @@
-const jwt = require('jsonwebtoken');
-const db = require('../db/pool');
+const { verifyToken } = require('../auth/verifyToken');
 
 async function requireAuth(req, res, next) {
   try {
     const token = req.headers.authorization?.split(' ')[1]
                 || req.cookies?.access_token;
-    if (!token) return res.status(401).json({ error: 'unauthorized' });
-
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const { rows } = await db.query(
-      'SELECT id, email, username, language, avatar_color, email_verified, is_guest FROM users WHERE id=$1',
-      [payload.sub]
-    );
-    if (!rows[0]) return res.status(401).json({ error: 'user_not_found' });
-    req.user = rows[0];
+    req.user = await verifyToken(token);
     next();
   } catch (e) {
-    return res.status(401).json({ error: 'token_invalid' });
+    return res.status(401).json({ error: e.code || 'token_invalid' });
   }
 }
 
@@ -26,4 +17,9 @@ function requireVerified(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireVerified };
+function requireAdmin(req, res, next) {
+  if (!req.user.is_admin) return res.status(403).json({ error: 'admin_only' });
+  next();
+}
+
+module.exports = { requireAuth, requireVerified, requireAdmin };

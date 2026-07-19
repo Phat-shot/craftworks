@@ -1,5 +1,5 @@
 'use strict';
-const jwt         = require('jsonwebtoken');
+const { verifyToken } = require('./auth/verifyToken');
 const engine      = require('./game/engine');
 const gameManager = require('./game/game_manager');
 const { RACES, TDB, getTowersForRace } = require('./game/towers');
@@ -60,14 +60,9 @@ module.exports = function setupSocket(io, db) {
     try {
       const token = socket.handshake.auth?.token
                  || socket.handshake.headers?.authorization?.split(' ')[1];
-      if (!token) return next(new Error('unauthorized'));
-      const payload = jwt.verify(token, process.env.JWT_SECRET);
-      const { rows } = await db.query(
-        'SELECT id, username, avatar_color, is_guest FROM users WHERE id=$1', [payload.sub]);
-      if (!rows[0]) return next(new Error('user_not_found'));
-      socket.user = rows[0];
+      socket.user = await verifyToken(token);
       next();
-    } catch { next(new Error('invalid_token')); }
+    } catch (e) { next(new Error(e.code || 'token_invalid')); }
   });
 
   io.on('connection', async (socket) => {
