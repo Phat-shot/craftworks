@@ -37,9 +37,10 @@ interface ArSettings {
   fakeMarkerCooldownMs?: number;
   aufscheuchenCooldownMs?: number;
   foundMode?: 'spectator' | 'seeker' | 'freeze';
-  // Hide & Seek variant: 'classic' (default, seeker/hider) or 'the_ship'
-  // (secret assassin-chain, no roles — see server's MODES.hide_and_seek).
-  hsVariant?: 'classic' | 'the_ship';
+  // Hide & Seek variant: 'classic' (default, seeker/hider), 'ffa' (Jeder
+  // gegen jeden — no roles/teams) or 'the_ship' (secret assassin-chain, no
+  // roles) — see server's MODES.hide_and_seek.
+  hsVariant?: 'classic' | 'ffa' | 'the_ship';
   // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
   destroyVariant?: 'instant' | 'defuse';
   destroyReactivate?: boolean;
@@ -67,17 +68,17 @@ const WIDTH_PRESETS = [
 ];
 const RANGE_PRESETS = [30, 50, 75, 100];
 
+// Short labels — 5 modes need to fit on one line (host screen real estate).
 const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
-  { id: 'hide_and_seek', icon: 'ghost', label: 'Verstecken' },
-  { id: 'domination', icon: 'target', label: 'Herrschaft' },
-  { id: 'ctf', icon: 'flag', label: 'Flagge' },
-  { id: 'seek_destroy', icon: 'bomb', label: 'Sprengen' },
+  { id: 'hide_and_seek', icon: 'ghost', label: 'H&S' },
+  { id: 'domination', icon: 'target', label: 'Domination' },
+  { id: 'ctf', icon: 'flag', label: 'CtF' },
+  { id: 'seek_destroy', icon: 'bomb', label: 'Detonation' },
   { id: 'deathmatch', icon: 'skull', label: 'Deathmatch' },
-  { id: 'battle_royale', icon: 'crosshair', label: 'Jeder gegen jeden' },
 ];
 const NEEDS_ZONES: Record<string, number> = { domination: 2, seek_destroy: 1 };
-// Modes with real team assignment — everything else (hide_and_seek incl. its
-// The Ship variant, battle_royale) has no teams at all (usesTeams: false
+// Modes with real team assignment — hide_and_seek (all 3 variants: classic,
+// ffa "Jeder gegen jeden", the_ship) has no teams at all (usesTeams: false
 // server-side, see arops.js's MODES table).
 const TEAM_MODES = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
 const POLY_ERR_DE: Record<string, string> = {
@@ -250,10 +251,10 @@ export default function LobbyScreen({
   const zones = ar.zones || [];
   const subMode = ar.subMode || 'hide_and_seek';
   const teamMode = TEAM_MODES.includes(subMode);
-  const hsVariant = ar.hsVariant === 'the_ship' ? 'the_ship' : 'classic';
-  // The Ship has no roles at all (not seeker/hider, not team) — role/team
-  // assignment UI only makes sense for the classic variant.
-  const rolesApply = subMode === 'hide_and_seek' && hsVariant !== 'the_ship';
+  const hsVariant = ['ffa', 'the_ship'].includes(ar.hsVariant || '') ? ar.hsVariant! : 'classic';
+  // ffa/The Ship have no roles at all (not seeker/hider, not team) —
+  // role/team assignment UI only makes sense for the classic variant.
+  const rolesApply = subMode === 'hide_and_seek' && hsVariant === 'classic';
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
@@ -461,19 +462,25 @@ export default function LobbyScreen({
           ))}
         </View>
       )}
-      {/* The Ship: eine Variante von Hide & Seek (ar_settings.hsVariant), kein
-          eigener Modus — daher ein Umschalter statt eines SUB_MODES-Eintrags. */}
+      {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
+          (ar_settings.hsVariant), keine eigenen Modi — daher ein Umschalter
+          statt weiterer SUB_MODES-Einträge. */}
       {isHost && subMode === 'hide_and_seek' && (
         <View style={st.rowBtns}>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'classic' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'classic' })}>
             <Icon name="ghost" size={13} color={hsVariant === 'classic' ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Klassisch</Text>
+            <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Team</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'ffa' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ hsVariant: 'ffa' })}>
+            <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, hsVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'the_ship' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'the_ship' })}>
             <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship (geheime Ziele)</Text>
+            <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -774,8 +781,12 @@ export default function LobbyScreen({
       )}
       {me && displayMembers.length > 0 && !teamMode && !rolesApply && (
         <View style={st.roleRow}>
-          <Icon name="mask" size={14} color="#e0c080" />
-          <Text style={st.role}>Dein Ziel wird nur dir angezeigt, sobald das Spiel startet</Text>
+          <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color="#e0c080" />
+          <Text style={st.role}>
+            {hsVariant === 'the_ship'
+              ? 'Dein Ziel wird nur dir angezeigt, sobald das Spiel startet'
+              : 'Jeder gegen jeden — keine festen Rollen oder Teams'}
+          </Text>
         </View>
       )}
       {!!startErr && (

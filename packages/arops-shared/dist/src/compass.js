@@ -31,8 +31,7 @@
 //  pick whichever axis matches how the phone is actually being held.
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CAMERA_FORWARD_AXIS = exports.TOP_EDGE_AXIS = void 0;
-exports.tiltCompensatedHeadingDeg = tiltCompensatedHeadingDeg;
+exports.tiltCompensatedHeadingDeg = exports.CAMERA_FORWARD_AXIS = exports.TOP_EDGE_AXIS = void 0;
 /** Device's top-edge direction — meaningful when held flat (map reading). */
 exports.TOP_EDGE_AXIS = { x: 0, y: 1, z: 0 };
 /** Back camera's viewing direction — meaningful when held upright (AR/shooting). */
@@ -83,3 +82,4 @@ function tiltCompensatedHeadingDeg(accel, mag, axis) {
         heading += 360;
     return heading;
 }
+exports.tiltCompensatedHeadingDeg = tiltCompensatedHeadingDeg;

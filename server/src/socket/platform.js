@@ -207,11 +207,36 @@ function registerPlatformHandlers(io, socket, db) {
       for (const k of ['hidingDurationMs', 'gameDurationMs', 'radarCooldownMs', 'proximityRangeM']) {
         if (Number.isFinite(arSettings?.[k])) next[k] = Math.max(0, +arSettings[k]);
       }
-      // Mode selection + mode-specific settings
-      const SUB_MODES = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy'];
+      // Mode selection + mode-specific settings. Whitelist MUST be kept in
+      // sync with server/src/game/arops.js's MODES table and the DEFAULTS/
+      // cfg parsing in createAropsGame — any field missing here gets
+      // silently dropped (never reaches ar_settings, never reaches the
+      // actual match), which from the host's perspective looks exactly
+      // like "nothing happens when I tap this setting".
+      const SUB_MODES = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch'];
       if (SUB_MODES.includes(arSettings?.subMode)) next.subMode = arSettings.subMode;
-      if (arSettings?.foundMode === 'seeker' || arSettings?.foundMode === 'spectator') {
+      if (['seeker', 'spectator', 'freeze'].includes(arSettings?.foundMode)) {
         next.foundMode = arSettings.foundMode;
+      }
+      // Hide & Seek variant: 'classic' (default), 'ffa' (Jeder gegen jeden)
+      // or 'the_ship' — see MODES.hide_and_seek in arops.js.
+      if (['classic', 'ffa', 'the_ship'].includes(arSettings?.hsVariant)) {
+        next.hsVariant = arSettings.hsVariant;
+      }
+      // Zerstören (seek_destroy): capture variant + whether targets reset
+      // after a full cycle instead of ending the match.
+      if (['instant', 'defuse'].includes(arSettings?.destroyVariant)) {
+        next.destroyVariant = arSettings.destroyVariant;
+      }
+      if (typeof arSettings?.destroyReactivate === 'boolean') {
+        next.destroyReactivate = arSettings.destroyReactivate;
+      }
+      // Deathmatch: on-hit consequence + lives (respawn variant only).
+      if (['respawn', 'freeze'].includes(arSettings?.deathmatchOnHit)) {
+        next.deathmatchOnHit = arSettings.deathmatchOnHit;
+      }
+      if (Number.isFinite(arSettings?.livesPerPlayer)) {
+        next.livesPerPlayer = Math.min(10, Math.max(1, Math.round(+arSettings.livesPerPlayer)));
       }
       if (typeof arSettings?.debugMode === 'boolean') next.debugMode = arSettings.debugMode;
       if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {

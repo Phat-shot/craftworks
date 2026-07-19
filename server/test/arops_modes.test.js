@@ -471,7 +471,8 @@ console.log('\n═══ TEAM PING ═══');
   check('teamless modes (no team) cannot ping — nobody to ping', () => {
     const gs = createGame('ping_noteam',
       [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }],
-      { ar_settings: { polygon: FIELD, subMode: 'battle_royale', gameDurationMs: 600_000 } });
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', hsVariant: 'ffa', gameDurationMs: 600_000 } });
+    tick(gs, 10); // ffa has no hiding phase — one tick reaches 'seeking'
     const r = arops.actionArUsePerk(gs, 'A', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
     assert.equal(r.ok, false);
     assert.equal(r.err, 'no_team');
@@ -581,12 +582,18 @@ console.log('\n═══ DEATHMATCH ═══');
   });
 }
 
-// ═══ BATTLE ROYALE ══════════════════════════════════════════
+// ═══ BATTLE ROYALE ("Jeder gegen jeden", Hide & Seek variant) ══
 console.log('\n═══ BATTLE ROYALE ═══');
 {
   function setupBR(sessionId, players, over = {}) {
-    return createGame(sessionId, players,
-      { ar_settings: { polygon: FIELD, subMode: 'battle_royale', gameDurationMs: 600_000, hitCooldownMs: 50, ...over } });
+    const gs = createGame(sessionId, players, { ar_settings: {
+      polygon: FIELD, subMode: 'hide_and_seek', hsVariant: 'ffa',
+      gameDurationMs: 600_000, hitCooldownMs: 50, ...over,
+    } });
+    // 'ffa' has no hiding phase — one tick flips hiding -> seeking regardless
+    // of hidingDurationMs (see MODES.hide_and_seek's tick()).
+    tick(gs, 10);
+    return gs;
   }
 
   check('no teams, no roles assigned (unlike Hide & Seek, no seeker/hider concept here)', () => {
@@ -643,6 +650,16 @@ console.log('\n═══ BATTLE ROYALE ═══');
     tick(gsTie, 100);
     assert.equal(gsTie.gameOver, true);
     assert.equal(gsTie.winner, 'draw');
+  });
+
+  check('classic Hide & Seek is unaffected by the ffa variant: roles assigned, hiding phase respected', () => {
+    const gs = createGame('br_regression', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+    ], { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', hidingDurationMs: 100_000, gameDurationMs: 600_000 } });
+    assert.equal(gs.phase, 'hiding');
+    assert.notEqual(gs.players.A.role, undefined);
+    tick(gs, 10);
+    assert.equal(gs.phase, 'hiding', 'classic variant still respects hidingDurationMs, unlike ffa/the_ship');
   });
 
   check('solo debug session never auto-ends via checkWin just because "1 player is left"', () => {

@@ -7,15 +7,14 @@
 //  arops.js implementiert; dieses Modul ist das Fundament, aus dem sie
 //  später abgeleitet werden sollen (siehe AR-Ops-Modi-Ausbau-Plan, Phase 1).
 //
-//  Umfang: alle sechs implementierten Modi (hide_and_seek/domination/ctf/
-//  seek_destroy alias "Zerstören"/deathmatch/battle_royale), die drei
-//  bestehenden Rollen (hider/seeker/team_member) und die drei Spielerklassen
-//  (scout/sniper/bomber, additiv zu Rolle/Team — kein Ersatz). "The Ship"
-//  ist KEIN eigener Modus, sondern eine Variante von hide_and_seek
-//  (ar_settings.hsVariant='the_ship', siehe dessen submodes-Eintrag unten
-//  und der zugehörige Kommentar in arops.js's MODES.hide_and_seek) — Battle
-//  Royale dagegen bleibt ein eigener Modus (kein hide_and_seek-Submode),
-//  siehe dessen eigener Kommentar in arops.js.
+//  Umfang: alle fünf implementierten Modi (hide_and_seek/domination/ctf/
+//  seek_destroy alias "Zerstören"/deathmatch), die drei bestehenden Rollen
+//  (hider/seeker/team_member) und die drei Spielerklassen (scout/sniper/
+//  bomber, additiv zu Rolle/Team — kein Ersatz). Weder "Jeder gegen jeden"
+//  (ffa) noch "The Ship" sind eigene Modi — beide sind Varianten von
+//  hide_and_seek (ar_settings.hsVariant='ffa'|'the_ship', siehe dessen
+//  submodes-Einträge unten und der zugehörige Kommentar in arops.js's
+//  MODES.hide_and_seek).
 // ═══════════════════════════════════════════════════════════
 
 /** Team-basiert (zwei Seiten gegeneinander) oder individuelle Rollen ohne
@@ -82,6 +81,10 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
     hasTargets: true, // die Hider selbst sind die Ziele
     partyMode: 'individual',
     submodes: [
+      { id: 'ffa', name: 'Jeder gegen jeden',
+        shortDescription:
+          'Kein Team, keine Rolle — jeder ist Gegner von jedem. Ein Treffer scheidet endgültig ' +
+          'aus (kein Einfrieren). Aktiviert über die Host-Einstellung "hsVariant".' },
       { id: 'the_ship', name: 'The Ship',
         shortDescription:
           'Geheime Attentats-Kette statt Seeker/Hider-Rollen: jeder hat genau ein Ziel, ' +
@@ -89,9 +92,9 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
     ],
     parameters: [
       { key: 'hidingDurationMs', name: 'Versteckzeit', unit: 'ms',
-        description: 'Dauer der Versteckphase, bevor der Seeker aktiv suchen/schießen darf. Ohne Wirkung bei hsVariant "the_ship" (keine Versteckphase).' },
+        description: 'Dauer der Versteckphase, bevor der Seeker aktiv suchen/schießen darf. Ohne Wirkung bei hsVariant "ffa"/"the_ship" (keine Versteckphase).' },
       { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
-        description: 'Zeitlimit der Suchphase — läuft es ab, gewinnen die überlebenden Hider (bzw. bei "The Ship" der höhere Punktestand).' },
+        description: 'Zeitlimit der Suchphase — läuft es ab, gewinnen die überlebenden Hider (bzw. bei "ffa"/"The Ship" der höhere Punktestand).' },
       { key: 'hitCooldownMs', name: 'Schuss-Cooldown', unit: 'ms',
         description: 'Mindestabstand zwischen zwei Schussversuchen desselben Spielers.' },
       { key: 'radarCooldownMs', name: 'Radar-Cooldown', unit: 'ms',
@@ -110,8 +113,8 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
         description: 'Wie lange alle Hider danach einen Näherungs-Alarm erhalten (nur klassische Variante).' },
       { key: 'foundMode', name: 'Schicksal bei Fund', unit: 'enum (spectator/seeker/freeze)',
         description: 'Was mit einem gefundenen Hider passiert (nur klassische Variante): ausscheiden, zur Seeker-Seite wechseln, oder einfrieren.' },
-      { key: 'hsVariant', name: 'Variante', unit: 'enum (classic/the_ship)',
-        description: 'Klassisches Seeker/Hider-Gameplay oder "The Ship" (geheime Attentats-Kette, siehe submodes).' },
+      { key: 'hsVariant', name: 'Variante', unit: 'enum (classic/ffa/the_ship)',
+        description: 'Klassisches Seeker/Hider-Gameplay, "Jeder gegen jeden" oder "The Ship" (siehe submodes).' },
     ],
   },
   domination: {
@@ -251,31 +254,6 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
         description: 'Zeitfenster für die Kapitäne, ihre Basis zu platzieren (in ar_settings.timings).' },
       { key: 'spawnCheckDwellMs', name: 'Spawn-Verweildauer', unit: 'ms',
         description: 'Wie lange ein "downed" Spieler ununterbrochen in der eigenen Basis stehen muss, um wieder mitzuspielen (in ar_settings.timings).' },
-    ],
-  },
-  battle_royale: {
-    id: 'battle_royale',
-    name: 'Battle Royale',
-    shortDescription:
-      'Jeder gegen jeden, keine Teams. Ein Treffer scheidet endgültig aus — letzter ' +
-      'Überlebender gewinnt.',
-    longDescription:
-      'Kein Team, keine Rolle, keine Basis: jeder Spieler ist Gegner jedes anderen. ' +
-      'Ein Treffer scheidet den Getroffenen sofort und endgültig aus dem Match aus ' +
-      '(anders als Deathmatch — kein Einfrieren, kein Wiederbeleben). Sobald nur noch ' +
-      'ein Spieler übrig ist, gewinnt dieser sofort. Läuft die Zeit ab, gewinnt der ' +
-      'Spieler mit dem höchsten Punktestand (Gleichstand = Unentschieden). Dasselbe ' +
-      'Konzept wie Hide & Seeks "Jeder gegen jeden"-Variante — beide nutzen denselben ' +
-      'Modus.',
-    hasBases: false,
-    hasTargets: false,
-    partyMode: 'individual',
-    submodes: [],
-    parameters: [
-      { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
-        description: 'Zeitlimit; danach gewinnt der Spieler mit dem höchsten Punktestand.' },
-      { key: 'hitCooldownMs', name: 'Schuss-Cooldown', unit: 'ms',
-        description: 'Mindestabstand zwischen zwei Schussversuchen desselben Spielers.' },
     ],
   },
 };

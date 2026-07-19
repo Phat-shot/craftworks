@@ -1246,7 +1246,13 @@ export default function GameScreen({ sessionId, onExit, watchSync, telemetry }: 
       </TouchableOpacity>
 
       {/* Bottom bar: Perk1 | Schuss | Perk2 */}
-      <View style={st.bottomBar} onLayout={e => setBottomBarH(e.nativeEvent.layout.height)}>
+      <View style={st.bottomBar} onLayout={e => {
+        // Guard against redundant updates — onLayout can fire again after the
+        // resulting re-render even when the height didn't meaningfully
+        // change, which would otherwise re-render in a tight loop.
+        const h = e.nativeEvent.layout.height;
+        setBottomBarH(prev => Math.abs(prev - h) < 1 ? prev : h);
+      }}>
         {isCaptainSetup && (
           <TouchableOpacity style={[st.baseBtn, st.btnRow, st.baseBtnRow]} onPress={() => setBase()}>
             <Icon name="flag" size={14} color="#f0c840" />

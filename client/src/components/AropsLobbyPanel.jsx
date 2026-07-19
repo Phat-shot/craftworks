@@ -13,16 +13,16 @@ const DURATION_OPTIONS = [
   { label: '20 min', ms: 1_200_000 },
   { label: '30 min', ms: 1_800_000 },
 ];
+// Short labels — 5 modes need to fit on one line.
 const SUB_MODES = [
-  { id: 'hide_and_seek', label: '🫥 Hide & Seek', zones: 0 },
-  { id: 'domination',    label: '🎯 Domination',  zones: 2 },
-  { id: 'ctf',           label: '🚩 CTF',          zones: 0 },
-  { id: 'seek_destroy',  label: '💣 Zerstören', zones: 1 },
+  { id: 'hide_and_seek', label: '🫥 H&S',        zones: 0 },
+  { id: 'domination',    label: '🎯 Domination', zones: 2 },
+  { id: 'ctf',           label: '🚩 CtF',        zones: 0 },
+  { id: 'seek_destroy',  label: '💣 Detonation', zones: 1 },
   { id: 'deathmatch',    label: '💀 Deathmatch', zones: 0 },
-  { id: 'battle_royale', label: '🎯 Jeder gegen jeden', zones: 0 },
 ];
-// Modes with real team assignment — everything else (hide_and_seek incl. its
-// The Ship variant, battle_royale) has no teams at all (usesTeams: false
+// Modes with real team assignment — hide_and_seek (all 3 variants: classic,
+// ffa "Jeder gegen jeden", the_ship) has no teams at all (usesTeams: false
 // server-side, see server/src/game/arops.js's MODES table).
 const TEAM_MODES = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
 // Modes with a captain-driven base_setup phase (see arops.js) — only these
@@ -134,10 +134,10 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   const isTeamMode = TEAM_MODES.includes(subMode);
   const needsZones = subMode === 'domination' || subMode === 'seek_destroy';
   const hasCaptainBase = HAS_CAPTAIN_BASE.includes(subMode);
-  const hsVariant = ar.hsVariant === 'the_ship' ? 'the_ship' : 'classic';
-  // The Ship has no roles at all (not seeker/hider, not team) — the
+  const hsVariant = ['ffa', 'the_ship'].includes(ar.hsVariant) ? ar.hsVariant : 'classic';
+  // ffa/The Ship have no roles at all (not seeker/hider, not team) — the
   // per-player role toggle only makes sense for the classic variant.
-  const rolesApply = subMode === 'hide_and_seek' && hsVariant !== 'the_ship';
+  const rolesApply = subMode === 'hide_and_seek' && hsVariant === 'classic';
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
@@ -249,21 +249,27 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
       </div>
       </>) : (
       <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 12 }}>
-        {subMode === 'hide_and_seek'
+        {hsVariant === 'the_ship'
           ? '🎭 The Ship: jeder bekommt beim Start ein geheimes Ziel zugewiesen — keine Rollen/Teams in der Lobby.'
           : '🎯 Jeder gegen jeden — keine Rollen/Teams in der Lobby.'}
       </div>
       )}
 
-      {/* The Ship: eine Variante von Hide & Seek (ar_settings.hsVariant), kein
-          eigener Modus. */}
+      {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
+          (ar_settings.hsVariant), keine eigenen Modi. */}
       {subMode === 'hide_and_seek' && (
         <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
           <button className="btn btn-ghost btn-sm" disabled={!isHost}
             onClick={() => emitUpdate({ hsVariant: 'classic' })}
             style={{ borderColor: hsVariant === 'classic' ? 'var(--gold)' : undefined,
                      color: hsVariant === 'classic' ? 'var(--gold)' : undefined }}>
-            🫥 Klassisch
+            🫥 Team
+          </button>
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ hsVariant: 'ffa' })}
+            style={{ borderColor: hsVariant === 'ffa' ? 'var(--gold)' : undefined,
+                     color: hsVariant === 'ffa' ? 'var(--gold)' : undefined }}>
+            🎯 Jeder gegen jeden
           </button>
           <button className="btn btn-ghost btn-sm" disabled={!isHost}
             onClick={() => emitUpdate({ hsVariant: 'the_ship' })}

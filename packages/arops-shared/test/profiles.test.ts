@@ -5,7 +5,7 @@ import { GAME_MODE_PROFILES, PLAYER_TYPE_PROFILES, GLOSSARY } from '../src/profi
 // Mirrors the MODES keys in server/src/game/arops.js — kept as a literal list
 // here (not imported, arops-shared has no dependency on server) so this test
 // fails loudly if a mode gets added/renamed on one side but not the other.
-const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch', 'battle_royale'];
+const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch'];
 const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sniper', 'bomber'];
 
 test('GAME_MODE_PROFILES: has exactly the known AR Ops modes', () => {
@@ -39,10 +39,10 @@ test('GAME_MODE_PROFILES: every entry is well-formed', () => {
   }
 });
 
-test('GAME_MODE_PROFILES: only hide_and_seek has a submode today ("The Ship", ar_settings.hsVariant)', () => {
+test('GAME_MODE_PROFILES: only hide_and_seek has submodes today ("ffa"/"The Ship", ar_settings.hsVariant)', () => {
   for (const [key, profile] of Object.entries(GAME_MODE_PROFILES)) {
     if (key === 'hide_and_seek') {
-      assert.deepEqual(profile.submodes.map(sm => sm.id), ['the_ship']);
+      assert.deepEqual(profile.submodes.map(sm => sm.id), ['ffa', 'the_ship']);
     } else {
       assert.deepEqual(profile.submodes, [], `${key}: expected no submodes`);
     }
@@ -50,9 +50,7 @@ test('GAME_MODE_PROFILES: only hide_and_seek has a submode today ("The Ship", ar
 });
 
 test('GAME_MODE_PROFILES: partyMode matches arops.js usesTeams', () => {
-  for (const id of ['hide_and_seek', 'battle_royale']) {
-    assert.equal(GAME_MODE_PROFILES[id]!.partyMode, 'individual', `${id} should be individual (usesTeams: false)`);
-  }
+  assert.equal(GAME_MODE_PROFILES.hide_and_seek!.partyMode, 'individual', 'hide_and_seek should be individual (usesTeams: false, all 3 variants)');
   for (const id of ['domination', 'ctf', 'seek_destroy', 'deathmatch']) {
     assert.equal(GAME_MODE_PROFILES[id]!.partyMode, 'team', `${id} should be team-based`);
   }

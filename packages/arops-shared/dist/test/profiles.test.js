@@ -9,7 +9,7 @@ const profiles_1 = require("../src/profiles");
 // Mirrors the MODES keys in server/src/game/arops.js — kept as a literal list
 // here (not imported, arops-shared has no dependency on server) so this test
 // fails loudly if a mode gets added/renamed on one side but not the other.
-const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch', 'battle_royale'];
+const EXPECTED_MODE_IDS = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch'];
 const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sniper', 'bomber'];
 (0, node_test_1.test)('GAME_MODE_PROFILES: has exactly the known AR Ops modes', () => {
     strict_1.default.deepEqual(Object.keys(profiles_1.GAME_MODE_PROFILES).sort(), [...EXPECTED_MODE_IDS].sort());
@@ -39,10 +39,10 @@ const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sn
         }
     }
 });
-(0, node_test_1.test)('GAME_MODE_PROFILES: only hide_and_seek has a submode today ("The Ship", ar_settings.hsVariant)', () => {
+(0, node_test_1.test)('GAME_MODE_PROFILES: only hide_and_seek has submodes today ("ffa"/"The Ship", ar_settings.hsVariant)', () => {
     for (const [key, profile] of Object.entries(profiles_1.GAME_MODE_PROFILES)) {
         if (key === 'hide_and_seek') {
-            strict_1.default.deepEqual(profile.submodes.map(sm => sm.id), ['the_ship']);
+            strict_1.default.deepEqual(profile.submodes.map(sm => sm.id), ['ffa', 'the_ship']);
         }
         else {
             strict_1.default.deepEqual(profile.submodes, [], `${key}: expected no submodes`);
@@ -50,9 +50,7 @@ const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sn
     }
 });
 (0, node_test_1.test)('GAME_MODE_PROFILES: partyMode matches arops.js usesTeams', () => {
-    for (const id of ['hide_and_seek', 'battle_royale']) {
-        strict_1.default.equal(profiles_1.GAME_MODE_PROFILES[id].partyMode, 'individual', `${id} should be individual (usesTeams: false)`);
-    }
+    strict_1.default.equal(profiles_1.GAME_MODE_PROFILES.hide_and_seek.partyMode, 'individual', 'hide_and_seek should be individual (usesTeams: false, all 3 variants)');
     for (const id of ['domination', 'ctf', 'seek_destroy', 'deathmatch']) {
         strict_1.default.equal(profiles_1.GAME_MODE_PROFILES[id].partyMode, 'team', `${id} should be team-based`);
     }

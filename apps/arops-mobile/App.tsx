@@ -40,7 +40,10 @@ export default function App() {
   // Sensors free-run from the moment there's an actual screen to show
   // (not during boot/login); the socket SEND side stays independently
   // gated by sessionId being non-null (only 'game' has a real session).
-  const telemetryEnabled = route.name !== 'boot' && route.name !== 'login';
+  // Lobby onward, not the whole app — starting this at 'menu'/'join' would
+  // request GPS/compass permissions before the player has even created or
+  // joined a lobby, for no benefit (nothing needs it yet).
+  const telemetryEnabled = route.name === 'lobby' || route.name === 'game';
   const telemetry = useTelemetry(getSocket(), route.name === 'game' ? route.sessionId : null, telemetryEnabled);
 
   // A match used to close the whole app on back-press (Android's default

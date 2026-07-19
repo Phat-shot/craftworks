@@ -7,14 +7,15 @@
 //  per-player privacy-preserving snapshots.
 //
 //  MODES (plugins in the MODES table below):
-//   hide_and_seek — seekers photograph hiders; found = out
+//   hide_and_seek — 3 variants via ar_settings.hsVariant: 'classic'
+//                   (seekers photograph hiders; found = out), 'ffa'
+//                   (jeder gegen jeden, permanent elimination), 'the_ship'
+//                   (secret assassin-chain, one target each, kill = inherit)
 //   domination    — hold host-placed zones, points per second
 //   ctf           — captains place bases, steal the enemy flag
 //   seek_destroy  — "Zerstören": rotating multi-target list, instant
 //                   capture or arm/defuse variant (see MODES entry)
 //   deathmatch    — team TDM, on-hit is respawn (lives) or freeze
-//   battle_royale — free-for-all, permanent elimination, last one standing
-//   the_ship      — secret assassin-chain, one target each, kill = inherit
 //
 //  All timings scale with field size (shared scaleTimings).
 //  Team modes use FREEZE on hit: frozen players cannot shoot,
@@ -149,21 +150,31 @@ const MODES = {
       return gs.phase === 'hiding' ? gs.cfg.hidingDurationMs
         : gs.phase === 'seeking' ? gs.cfg.gameDurationMs : 0;
     },
-    // "The Ship" (gs.cfg.hsVariant === 'the_ship'): a Hide & Seek variant,
-    // not a separate mode — secret assassin-chain target assignment instead
-    // of seeker/hider roles. Every player is secretly assigned exactly one
-    // other player as their sole target, and is exactly one other player's
-    // target — the whole roster forms a single cycle (built once here),
-    // never independent pairs, so a hit can never leave a survivor without
-    // a hunter or a target. On a kill, the shooter inherits the eliminated
-    // target's own target, splicing them out of the cycle and keeping it a
-    // single loop over whoever's left. Only the killer's identity leaks
-    // (public roster, same as any other mode) — a player's TARGET's
-    // identity is secret to everyone but that player, delivered via a
-    // me-only snapshot field (me.targetUserId, see getAropsSnapshot) that
-    // carries an identity, never a position — deliberately not an overload
-    // of the revealPosition hook below (which answers a different
-    // question: "is this player's location visible").
+    // Hide & Seek has three variants (gs.cfg.hsVariant), all under this one
+    // subMode — not three separate modes:
+    //  'classic' (default) — seeker/hider roles, as always.
+    //  'ffa' ("Jeder gegen jeden") — no teams, no roles; every other player
+    //    is always a valid target, a hit eliminates permanently (no
+    //    freeze/respawn). Last player standing wins; time limit falls back
+    //    to highest score (tie -> draw).
+    //  'the_ship' — secret assassin-chain target assignment. Every player is
+    //    secretly assigned exactly one other player as their sole target,
+    //    and is exactly one other player's target — the whole roster forms
+    //    a single cycle (built once here), never independent pairs, so a
+    //    hit can never leave a survivor without a hunter or a target. On a
+    //    kill, the shooter inherits the eliminated target's own target,
+    //    splicing them out of the cycle and keeping it a single loop over
+    //    whoever's left. Only the killer's identity leaks (public roster,
+    //    same as any other mode) — a player's TARGET's identity is secret
+    //    to everyone but that player, delivered via a me-only snapshot
+    //    field (me.targetUserId, see getAropsSnapshot) that carries an
+    //    identity, never a position — deliberately not an overload of the
+    //    revealPosition hook below (which answers a different question:
+    //    "is this player's location visible").
+    // 'ffa' and 'the_ship' share the same "no teams/roles" shape (checkWin,
+    // onGameEnd, snapshotExtras, isOpponentPair) — only canShoot/
+    // targetFilter/applyHit and the geofence-elimination branch below
+    // actually differ between them.
     initState(gs) {
       if (gs.cfg.hsVariant !== 'the_ship') return;
       const ids = Object.keys(gs.players);
@@ -183,14 +194,16 @@ const MODES = {
       if (gs.cfg.hsVariant === 'the_ship') {
         return gs.modeState.targets[p.userId] ? null : 'no_target';
       }
+      if (gs.cfg.hsVariant === 'ffa') return null; // anyone can shoot anyone
       if (p.role !== 'seeker') return 'role_cannot_shoot';
       return null;
     },
     // The Ship restricts targetFilter to a single specific player instead
     // of a whole category — you can only ever hit your own assigned
-    // target, nobody else.
+    // target, nobody else. 'ffa' has no category restriction at all.
     targetFilter(gs, shooter, c) {
       if (gs.cfg.hsVariant === 'the_ship') return c.userId === gs.modeState.targets[shooter.userId];
+      if (gs.cfg.hsVariant === 'ffa') return true;
       return c.role === 'hider';
     },
     applyHit(gs, shooter, target, verdict, t) {
@@ -209,6 +222,13 @@ const MODES = {
         this.checkWin(gs);
         return;
       }
+      if (gs.cfg.hsVariant === 'ffa') {
+        shooter.score += 10;
+        target.status = 'found'; // eliminated — permanent, no freeze/respawn
+        pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
+        this.checkWin(gs);
+        return;
+      }
       foundHider(gs, target, t, shooter.userId);
       shooter.score += 10;
       pushEvent(gs, 'player_found', {
@@ -222,7 +242,7 @@ const MODES = {
       // Solo debug sessions (host alone, no bots) can't have a winner — never
       // auto-end them just because there are trivially "0 left".
       if (Object.keys(gs.players).length < 2) return;
-      if (gs.cfg.hsVariant === 'the_ship') {
+      if (gs.cfg.hsVariant !== 'classic') {
         const alive = Object.values(gs.players).filter(p => p.status === 'alive');
         if (alive.length <= 1) endGame(gs, alive.length === 1 ? alive[0].userId : 'draw');
         return;
@@ -232,33 +252,33 @@ const MODES = {
       if (hidersLeft === 0) endGame(gs, 'seekers');
     },
     tick(gs, t) {
-      // The Ship has no hiding phase (no hider role to hide from) — it
-      // skips straight through to the shootable phase on the very first
-      // tick, same phase machinery as classic, just zero-length.
+      // 'ffa'/'the_ship' have no hiding phase (no hider role to hide from) —
+      // they skip straight through to the shootable phase on the very
+      // first tick, same phase machinery as classic, just zero-length.
       if (gs.phase === 'hiding') {
-        const hidingDone = gs.cfg.hsVariant === 'the_ship' || t - gs.phaseStartTime >= gs.cfg.hidingDurationMs;
+        const hidingDone = gs.cfg.hsVariant !== 'classic' || t - gs.phaseStartTime >= gs.cfg.hidingDurationMs;
         if (hidingDone) {
           gs.phase = 'seeking';
           gs.phaseStartTime = t;
           pushEvent(gs, 'phase_change', { phase: 'seeking' });
         }
       } else if (gs.phase === 'seeking' && t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
-        if (gs.cfg.hsVariant === 'the_ship') {
-          // No teams/hiders to compare — same score-at-time-limit tiebreak
-          // as Battle Royale (tie -> draw).
+        if (gs.cfg.hsVariant === 'classic') {
+          endGame(gs, 'hiders');
+        } else {
+          // No teams/hiders to compare — highest score wins (tie -> draw).
           const alive = Object.values(gs.players).filter(p => p.status === 'alive');
           if (alive.length === 0) { endGame(gs, 'draw'); return; }
           const top = Math.max(...alive.map(p => p.score));
           const leaders = alive.filter(p => p.score === top);
           endGame(gs, leaders.length === 1 ? leaders[0].userId : 'draw');
-        } else {
-          endGame(gs, 'hiders');
         }
         return;
       }
       // Geofence: exposure + auto-elimination for whoever leaves too long.
       // Classic: only hiders (seekers have nothing to hide from). The Ship:
-      // everyone, spliced out of the assassin chain same as a kill.
+      // everyone, spliced out of the assassin chain same as a kill. 'ffa':
+      // everyone, plain permanent elimination (no chain to splice).
       for (const p of Object.values(gs.players)) {
         if (p.status !== 'alive' || p.outsideSince === null) continue;
         const outsideFor = t - p.outsideSince;
@@ -273,6 +293,11 @@ const MODES = {
           pushEvent(gs, 'player_eliminated', { userId: p.userId, byUserId: null, reason: 'left_field' });
           this.checkWin(gs);
           if (gs.gameOver) return;
+        } else if (gs.cfg.hsVariant === 'ffa') {
+          p.status = 'found';
+          pushEvent(gs, 'player_eliminated', { userId: p.userId, byUserId: null, reason: 'left_field' });
+          this.checkWin(gs);
+          if (gs.gameOver) return;
         } else if (p.role === 'hider') {
           foundHider(gs, p, t, null);
           pushEvent(gs, 'player_found', { userId: p.userId, byUserId: null, reason: 'left_field' });
@@ -282,13 +307,13 @@ const MODES = {
       }
     },
     onGameEnd(gs) {
-      if (gs.cfg.hsVariant === 'the_ship') return;
+      if (gs.cfg.hsVariant !== 'classic') return;
       for (const p of Object.values(gs.players)) {
         if (p.role === 'hider' && p.status === 'alive') p.score += 20;
       }
     },
     snapshotExtras(gs) {
-      if (gs.cfg.hsVariant === 'the_ship') {
+      if (gs.cfg.hsVariant !== 'classic') {
         return { aliveCount: Object.values(gs.players).filter(p => p.status === 'alive').length };
       }
       return {
@@ -297,7 +322,7 @@ const MODES = {
       };
     },
     isOpponentPair(gs, a, b) {
-      if (gs.cfg.hsVariant === 'the_ship') return true;
+      if (gs.cfg.hsVariant !== 'classic') return true;
       return a.role !== b.role;
     },
     revealPosition() { return false; },
@@ -775,57 +800,6 @@ const MODES = {
     revealPosition() { return false; },
   },
 
-  // ── BATTLE ROYALE ─────────────────────────────────────────
-  // Free-for-all: no teams, no roles, no bases — every other player is
-  // always an opponent (isOpponentPair always true, so the snapshot's
-  // "teammates see each other" reveal path never fires; nobody has any
-  // ally at all). A hit eliminates permanently (classic BR convention —
-  // no freeze/respawn here, unlike Deathmatch). Last player alive wins;
-  // at the time limit, highest score wins (tie -> draw). Shared concept
-  // reused by Hide & Seek's own "Battle Royale" variant (see the AR-Ops
-  // modes plan) — both route to this same subMode rather than each
-  // reimplementing it.
-  battle_royale: {
-    usesTeams: false,
-    initialPhase: () => 'live',
-    shootPhases: ['live'],
-    phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
-    initState() {},
-    isOpponentPair() { return true; },
-    canShoot() { return null; },
-    targetFilter() { return true; },
-    applyHit(gs, shooter, target, verdict, t) {
-      shooter.score += 10;
-      target.status = 'found'; // eliminated — permanent, no freeze/respawn
-      pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
-      this.checkWin(gs);
-    },
-    checkWin(gs) {
-      // A solo debug session (host alone, no bots) can't have a winner —
-      // never auto-end it just because there's trivially "1 player left"
-      // (same guard hide_and_seek uses for the analogous case).
-      if (Object.keys(gs.players).length < 2) return;
-      const alive = Object.values(gs.players).filter(p => p.status === 'alive');
-      if (alive.length <= 1) {
-        endGame(gs, alive.length === 1 ? alive[0].userId : 'draw');
-      }
-    },
-    tick(gs, t) {
-      if (gs.phase !== 'live') return;
-      if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
-        const alive = Object.values(gs.players).filter(p => p.status === 'alive');
-        if (alive.length === 0) return endGame(gs, 'draw');
-        const top = Math.max(...alive.map(p => p.score));
-        const leaders = alive.filter(p => p.score === top);
-        endGame(gs, leaders.length === 1 ? leaders[0].userId : 'draw');
-      }
-    },
-    onGameEnd() {},
-    snapshotExtras(gs) {
-      return { aliveCount: Object.values(gs.players).filter(p => p.status === 'alive').length };
-    },
-    revealPosition() { return false; },
-  },
 };
 
 function dropFlag(gs, flagTeam, carrier, t) {
@@ -852,7 +826,7 @@ function fieldCentroid(polygon, offsetFrac = 0) {
 // at the exact moment their own setup phase ends. tickSpawnRespawn() then
 // runs every core tick regardless of mode — for modes with no
 // gs.modeState.bases at all (domination, seek_destroy/Zerstören,
-// hide_and_seek, battle_royale, the_ship), every player's `team` is either
+// hide_and_seek incl. its ffa/the_ship variants), every player's `team` is either
 // null or `gs.modeState.bases` is absent, so both functions are no-ops.
 function isInOwnBase(gs, p) {
   if (!p.team || !gs.modeState.bases) return false;
@@ -941,10 +915,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
   cfg.autoScale = autoScale;
   cfg.foundMode = ['seeker', 'freeze'].includes(ar.foundMode) ? ar.foundMode : 'spectator';
   cfg.debugMode = ar.debugMode === true;
-  // Hide & Seek variant: 'classic' (default, seeker/hider roles) or
-  // 'the_ship' (secret assassin-chain — no roles, see the MODES.hide_and_seek
-  // entry). A Hide & Seek variant, not its own mode — same subMode either way.
-  cfg.hsVariant = ar.hsVariant === 'the_ship' ? 'the_ship' : 'classic';
+  // Hide & Seek variant: 'classic' (default, seeker/hider roles), 'ffa'
+  // ("Jeder gegen jeden" — no teams/roles, permanent elimination) or
+  // 'the_ship' (secret assassin-chain — no roles). All three are variants,
+  // not separate modes — same subMode either way, see MODES.hide_and_seek.
+  cfg.hsVariant = ['ffa', 'the_ship'].includes(ar.hsVariant) ? ar.hsVariant : 'classic';
   // Deathmatch: on-hit consequence — 'respawn' (lose a life, downed until
   // the base/respawn checkpoint dwell revives it) is the mode's identity;
   // 'freeze' reuses the plain team-mode freeze mechanic instead (no lives
@@ -1041,10 +1016,9 @@ function createAropsGame(sessionId, players, workshopConfig) {
   });
   // Every normal (classic) Hide & Seek match needs at least one seeker —
   // but a solo debug session (host testing the hider view alone) should be
-  // able to explicitly opt out, and The Ship variant has no seeker/hider
-  // role concept at all (role is simply unused there), same reasoning as
-  // Battle Royale's own usesTeams:false-but-roleless case.
-  if (subMode === 'hide_and_seek' && cfg.hsVariant !== 'the_ship' && seekerCount === 0 && !cfg.debugMode) {
+  // able to explicitly opt out, and the 'ffa'/'the_ship' variants have no
+  // seeker/hider role concept at all (role is simply unused there).
+  if (subMode === 'hide_and_seek' && cfg.hsVariant === 'classic' && seekerCount === 0 && !cfg.debugMode) {
     const first = Object.values(playerState)[0];
     if (first) first.role = 'seeker';
   }
