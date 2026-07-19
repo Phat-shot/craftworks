@@ -7,6 +7,7 @@
 const { RACES } = require('../game/towers');
 const aropsShared = require('@craftworks/arops-shared');
 const { COMIC_MAP_COOLDOWN_MS, fetchComicMapFeatures } = require('../game/comic_map');
+const users = require('../repositories/users');
 
 // Per-lobby Cooldown für Comic-Map-Regeneration — Module-Scope-Map, EINMAL
 // pro Serverprozess angelegt (nicht pro Verbindung), sonst würde jeder neue
@@ -356,7 +357,7 @@ function registerPlatformHandlers(io, socket, db) {
   // ── DISCONNECT ────────────────────────
   socket.on('disconnect', async () => {
     console.log(`🔌 ${username} disconnected`);
-    await db.query('UPDATE users SET online=false, last_seen=NOW() WHERE id=$1', [userId]);
+    await users.setOnline(userId, false);
     notifyFollowers(io, db, userId, { event: 'user:offline', userId });
   });
 }

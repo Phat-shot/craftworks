@@ -2,25 +2,12 @@
 // Workshop content CRUD: buildings, units, custom races
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { RACES: BUILTIN_RACES, TDB: BUILTIN_BUILDINGS } = require('../game/towers');
 const { EBASE, EBASE_HP } = require('../game/engine');
 
 const router = express.Router();
 
-const jwt2 = require('jsonwebtoken');
-// Optional auth: attach user if token present, return 200 not 401 when missing
-const optionalAuth = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (token && req.db) {
-      const payload = jwt2.verify(token, process.env.JWT_SECRET);
-      const { rows } = await req.db.query('SELECT id FROM users WHERE id=$1', [payload.sub]);
-      if (rows[0]) req.user = rows[0];
-    }
-  } catch {}
-  next();
-};
 const validate = (req, res, next) => {
   const errs = validationResult(req);
   if (!errs.isEmpty()) {

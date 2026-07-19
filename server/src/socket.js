@@ -1,5 +1,6 @@
 'use strict';
 const { verifyToken } = require('./auth/verifyToken');
+const users = require('./repositories/users');
 const { registerPlatformHandlers, notifyFollowers } = require('./socket/platform');
 const { registerGameHandlers } = require('./socket/game');
 
@@ -19,7 +20,7 @@ module.exports = function setupSocket(io, db) {
     console.log(`🔌 ${username} connected (${socket.id})`);
 
     socket.join(`user:${userId}`);
-    await db.query('UPDATE users SET online=true, last_seen=NOW() WHERE id=$1', [userId]);
+    await users.setOnline(userId, true);
     socket.join(`user:${userId}`); // personal room for VS/TA per-player ticks
     notifyFollowers(io, db, userId, { event: 'user:online', userId, username });
 

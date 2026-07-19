@@ -37,4 +37,19 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireVerified, requireAdmin };
+// Attaches req.user if a valid token is present, but never rejects the
+// request — used by routes that behave differently for logged-in vs.
+// anonymous callers (e.g. workshop content listing "mine" vs. public).
+// Was independently reimplemented in routes/workshop.js and
+// routes/workshop_content.js (own jwt.verify + raw `SELECT id FROM users`),
+// same duplication requireAuth/socket.js's io.use had before verifyToken().
+/** @type {import('express').RequestHandler} */
+async function optionalAuth(req, res, next) {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (token) req.user = await verifyToken(token);
+  } catch { /* no token, or invalid — proceed unauthenticated */ }
+  return next();
+}
+
+module.exports = { requireAuth, requireVerified, requireAdmin, optionalAuth };
