@@ -36,6 +36,11 @@ export interface ModeTimings {
    *  spatial value here — a hardcoded constant would silently misbehave on
    *  field sizes other than whatever it was tuned against. */
   revealTrapRadiusM: number;
+  /** Base/respawn checkpoint (any mode with team bases): continuous dwell
+   *  time inside one's own base needed to spawn in — either catching up
+   *  after missing the phase-1-end muster, or the phase-2-start revive
+   *  window. Same field-size-scaling rationale as every other dwell here. */
+  spawnCheckDwellMs: number;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -57,6 +62,7 @@ export function scaleTimings(areaM2: number): ModeTimings {
     defuseDwellMs:        clamp((L / 40) * 1000, 6_000, 15_000),
     bombTimerMs:          clamp(((L / 1.4) + 30) * 1200, 90_000, 300_000),
     revealTrapRadiusM:    clamp(L * 0.15, 15, 60),
+    spawnCheckDwellMs:    clamp((L / 40) * 1000, 5_000, 15_000),
   };
 }
 

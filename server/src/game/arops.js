@@ -82,6 +82,11 @@ function foundHider(gs, target, t, byUserId) {
   target.foundAt = t;
   if (gs.cfg.foundMode === 'seeker') {
     target.role = 'seeker';
+  } else if (gs.cfg.foundMode === 'freeze') {
+    // "Sucher kann Finder freezen": found doesn't remove the hider from the
+    // match or flip their role — they're just temporarily out of action,
+    // exactly like team-mode freeze, and resume hiding once it expires.
+    applyFreeze(gs, target, byUserId, t);
   } else {
     target.status = 'found';
   }
@@ -316,6 +321,7 @@ const MODES = {
           gs.phase = 'live';
           gs.phaseStartTime = t;
           pushEvent(gs, 'phase_change', { phase: 'live' });
+          applySpawnCheckpoint(gs, t);
         }
         return;
       }
@@ -517,6 +523,60 @@ function fieldCentroid(polygon, offsetFrac = 0) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  BASE/RESPAWN CHECKPOINT (any mode with team bases — CTF, Deathmatch)
+// ═══════════════════════════════════════════════════════════
+// Generic, mode-agnostic primitive: modes that store bases in
+// gs.modeState.bases[team] (CTF, Deathmatch) can call applySpawnCheckpoint()
+// at the exact moment their own setup phase ends. tickSpawnRespawn() then
+// runs every core tick regardless of mode — for modes with no
+// gs.modeState.bases at all (domination, seek_destroy/Zerstören,
+// hide_and_seek, battle_royale, the_ship), every player's `team` is either
+// null or `gs.modeState.bases` is absent, so both functions are no-ops.
+function isInOwnBase(gs, p) {
+  if (!p.team || !gs.modeState.bases) return false;
+  const base = gs.modeState.bases[p.team];
+  if (!base || !p.lastAccepted) return false;
+  return shared.haversineMeters(p.lastAccepted, base) <= gs.timings.zoneRadiusM;
+}
+
+// Called by a mode's tick() at the instant its setup phase ends. Anyone not
+// standing in their own base right then doesn't get removed from the match
+// — they're marked 'downed' and can still catch up via tickSpawnRespawn's
+// dwell window below (late-spawn is allowed, no hard cutoff, per the
+// AR-Ops modes plan).
+function applySpawnCheckpoint(gs, t) {
+  for (const p of Object.values(gs.players)) {
+    if (!p.team) continue;
+    if (!isInOwnBase(gs, p)) {
+      p.status = 'downed';
+      p.spawnDwellMs = 0;
+      pushEvent(gs, 'player_needs_spawn', { userId: p.userId });
+    }
+  }
+}
+
+// Core tick (mode-agnostic, alongside the geofence-exposure loop) — any
+// downed player who dwells CONTINUOUSLY in their own base for
+// spawnCheckDwellMs spawns in (status -> 'alive'). Leaving the base resets
+// progress, same convention as every other dwell mechanic here
+// (capture/plant/defuse/flag pickup).
+function tickSpawnRespawn(gs, t, dtMs) {
+  for (const p of Object.values(gs.players)) {
+    if (p.status !== 'downed') continue;
+    if (isInOwnBase(gs, p)) {
+      p.spawnDwellMs = (p.spawnDwellMs || 0) + dtMs;
+      if (p.spawnDwellMs >= gs.timings.spawnCheckDwellMs) {
+        p.status = 'alive';
+        p.spawnDwellMs = 0;
+        pushEvent(gs, 'player_spawned', { userId: p.userId });
+      }
+    } else {
+      p.spawnDwellMs = 0;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  SESSION CREATION
 // ═══════════════════════════════════════════════════════════
 function createAropsGame(sessionId, players, workshopConfig) {
@@ -557,7 +617,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
     if (typeof ar[k] === 'number') cfg[k] = ar[k];
   }
   cfg.autoScale = autoScale;
-  cfg.foundMode = ar.foundMode === 'seeker' ? 'seeker' : 'spectator';
+  cfg.foundMode = ['seeker', 'freeze'].includes(ar.foundMode) ? ar.foundMode : 'spectator';
   cfg.debugMode = ar.debugMode === true;
 
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG };
@@ -578,11 +638,20 @@ function createAropsGame(sessionId, players, workshopConfig) {
     }
   }
 
-  // Zones (domination points / bomb sites), host-placed
-  const zones = (Array.isArray(ar.zones) ? ar.zones : [])
+  // Zones (domination points / bomb sites / Zerstören targets) — host-placed
+  // via ar.zones, or generated via ar.randomZoneCount (e.g. a repeated tap
+  // on the mode in the lobby increasing the requested count, see the
+  // AR-Ops modes plan) using the shared generateRandomZones helper. Random
+  // only kicks in when the host placed no zones by hand.
+  let zones = (Array.isArray(ar.zones) ? ar.zones : [])
     .filter(z => z && Number.isFinite(z.lat) && Number.isFinite(z.lon))
     .slice(0, 8)
     .map((z, i) => ({ id: 'z' + (i + 1), lat: +z.lat, lon: +z.lon, radiusM: timings.zoneRadiusM }));
+  if (zones.length === 0 && Number.isFinite(ar.randomZoneCount) && ar.randomZoneCount > 0) {
+    zones = shared.generateRandomZones(
+      polygon, Math.min(8, Math.round(ar.randomZoneCount)), timings.zoneRadiusM * 3, timings.zoneRadiusM
+    );
+  }
   if (subMode === 'domination' || subMode === 'seek_destroy') {
     const minZones = subMode === 'domination' ? 2 : 1;
     if (zones.length < minZones) throw new Error('need_zones');
@@ -630,6 +699,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
       cloakUntil: 0, fakeMarkers: null, fakeMarkerUntil: 0, fakeProximityUntil: 0,
       frozenUntil: 0, freezeAnchor: null, freezeViolations: 0,
       trap: null, trapAlert: null, // Scout's Reveal-Trap perk state
+      spawnDwellMs: 0, // Base/respawn checkpoint (CTF, Deathmatch)
     };
   });
   // Every normal match needs at least one seeker — but a solo debug session
@@ -790,6 +860,7 @@ function actionArHitAttempt(gs, userId, data) {
   const shooter = gs.players[userId];
   if (!shooter) return { ok: false, err: 'not_in_game' };
   if (gs.gameOver) return { ok: false, err: 'game_over' };
+  if (shooter.status === 'downed') return { ok: false, err: 'downed' };
   if (!mode.shootPhases.includes(gs.phase)) return { ok: false, err: 'wrong_phase' };
   const t = now();
   if (isFrozen(shooter, t)) {
@@ -977,6 +1048,7 @@ function actionArUsePerk(gs, userId, data) {
   const p = gs.players[userId];
   if (!p) return { ok: false, err: 'not_in_game' };
   if (gs.gameOver) return { ok: false, err: 'game_over' };
+  if (p.status === 'downed') return { ok: false, err: 'downed' };
   if (!mode.shootPhases.includes(gs.phase)) return { ok: false, err: 'wrong_phase' };
   const t = now();
   const perk = data?.perk;
@@ -1194,6 +1266,9 @@ function tickArops(gs) {
     }
   }
 
+  // Base/respawn checkpoint (no-op for modes without gs.modeState.bases)
+  tickSpawnRespawn(gs, t, dtMs);
+
   mode.tick(gs, t, dtMs);
   if (gs.gameOver) return;
 
@@ -1347,6 +1422,11 @@ function getAropsSnapshot(gs, userId) {
       // Only ever populated for the trap's own owner — never leaks who
       // triggered someone else's trap to anyone but that trap's owner.
       trapAlert: me.trapAlert ? { ...me.trapAlert } : null,
+      // Base/respawn checkpoint (CTF, Deathmatch) — lets the client
+      // highlight the player's own base prominently when they need to
+      // reach it, per the AR-Ops modes plan (mobile UI, later phase).
+      needsSpawn: me.status === 'downed',
+      ownBase: me.team && gs.modeState.bases ? gs.modeState.bases[me.team] || null : null,
     } : null,
     players: roster,
     events: gs.events.slice(-15),

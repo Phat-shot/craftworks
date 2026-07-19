@@ -205,13 +205,30 @@ console.log('\n═══ CTF ═══');
   check('valid base set; timeout starts live phase', () => {
     const r = arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
     assert.equal(r.ok, true);
+    // Both players in their own base right as base_setup ends — otherwise
+    // the base/respawn checkpoint (applySpawnCheckpoint) marks them
+    // 'downed', and zonePresence excludes non-alive players from every
+    // subsequent flag check below.
+    tel(gs, 'A1', baseA);
+    tel(gs, 'B1', baseB);
     gs.phaseStartTime = Date.now() - 1000; // > 500ms baseSettingMs
     tick(gs, 100);
     assert.equal(gs.phase, 'live');
+    assert.equal(gs.players.A1.status, 'alive', 'A1 was in its own base at the checkpoint');
+    assert.equal(gs.players.B1.status, 'alive', 'B1 was in its own base at the checkpoint');
   });
 
   check('enemy dwell in base steals the flag', () => {
-    tel(gs, 'A1', baseB);         // A1 stands in B's base
+    // A1 walks from its own base to B's base — gradual steps, not a single
+    // jump: A1 now has a real prior position (baseA, set by the checkpoint
+    // above), so a one-sample teleport across the field would get rejected
+    // as implausible movement, same as anywhere else telemetry is fed here.
+    let pos = baseA;
+    const brg = shared.bearingDeg(baseA, baseB);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseB) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
     tick(gs, 200);
     assert.equal(gs.modeState.flags.b.state, 'home', 'not yet');
     tick(gs, 200);
@@ -270,6 +287,103 @@ console.log('\n═══ CTF ═══');
     tick(gs, 100);
     assert.equal(gs.modeState.flags.b.state, 'home');
     assert.ok(gs.events.some(e => e.type === 'flag_returned'));
+  });
+}
+
+// ═══ BASE/RESPAWN CHECKPOINT ════════════════════════════════
+console.log('\n═══ Base/Respawn Checkpoint (CTF) ═══');
+{
+  const gs = createGame('spawn1',
+    [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+    { ar_settings: { polygon: FIELD, subMode: 'ctf',
+      timings: { ...FAST, spawnCheckDwellMs: 300 }, targetCaptures: 2, gameDurationMs: 600_000 } });
+
+  const baseA = shared.destinationPoint(MUC, 270, 120);
+  const baseB = shared.destinationPoint(MUC, 90, 120);
+  arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
+  arops.actionArSetBase(gs, 'B1', { lat: baseB.lat, lon: baseB.lon });
+
+  check('player NOT in their base when phase 1 ends becomes downed, not removed from the match', () => {
+    // B1 is in its own base; A1 never sent any telemetry at all (no position).
+    tel(gs, 'B1', baseB);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    assert.equal(gs.phase, 'live');
+    assert.equal(gs.players.A1.status, 'downed', 'A1 never confirmed being in its base');
+    assert.equal(gs.players.B1.status, 'alive', 'B1 was in its own base at the checkpoint');
+  });
+
+  check('a downed player cannot shoot or use perks', () => {
+    TS += 1100;
+    const r1 = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA.lat, lon: baseA.lon, ts: TS, accuracyM: 5, headingDeg: 0 },
+    });
+    assert.equal(r1.ok, false);
+    assert.equal(r1.err, 'downed');
+    const r2 = arops.actionArUsePerk(gs, 'A1', { perk: 'radar' });
+    assert.equal(r2.ok, false);
+    assert.equal(r2.err, 'downed');
+  });
+
+  check('a downed player does not count for zone presence (e.g. cannot steal the enemy flag)', () => {
+    // A1 wanders into B1's base while still downed (A1 has no prior
+    // position yet, so start from the field center).
+    let pos = gs.players.A1.lastAccepted || MUC;
+    const brg = shared.bearingDeg(pos, baseB);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseB) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
+    tick(gs, 400);
+    assert.equal(gs.modeState.flags.b.state, 'home', 'downed A1 must not be able to steal the flag');
+  });
+
+  check('late-spawn allowed: dwelling in own base for spawnCheckDwellMs revives the player', () => {
+    // Walk A1 back to its own base.
+    let pos = gs.players.A1.lastAccepted;
+    const brg = shared.bearingDeg(pos, baseA);
+    for (let i = 0; i < 30 && shared.haversineMeters(pos, baseA) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
+    assert.equal(gs.players.A1.status, 'downed', 'not yet — just arrived, hasn\'t dwelled');
+    tick(gs, 350); // > spawnCheckDwellMs (300)
+    assert.equal(gs.players.A1.status, 'alive', 'A1 dwelled in its own base long enough to spawn in');
+    assert.ok(gs.events.some(e => e.type === 'player_spawned' && e.userId === 'A1'));
+  });
+
+  check('leaving the base before the dwell completes resets progress', () => {
+    const gs2 = createGame('spawn2',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf',
+        timings: { ...FAST, spawnCheckDwellMs: 1000 }, targetCaptures: 2, gameDurationMs: 600_000 } });
+    const bA = shared.destinationPoint(MUC, 270, 120);
+    const bB = shared.destinationPoint(MUC, 90, 120);
+    arops.actionArSetBase(gs2, 'A1', { lat: bA.lat, lon: bA.lon });
+    arops.actionArSetBase(gs2, 'B1', { lat: bB.lat, lon: bB.lon });
+    tel(gs2, 'B1', bB);
+    gs2.phaseStartTime = Date.now() - 1000;
+    tick(gs2, 100);
+    assert.equal(gs2.players.A1.status, 'downed');
+
+    tel(gs2, 'A1', bA);
+    tick(gs2, 400); // partial dwell, not yet enough
+    assert.equal(gs2.players.A1.status, 'downed');
+    assert.ok(gs2.players.A1.spawnDwellMs > 0);
+
+    // Step outside the base — progress must reset, not just pause.
+    const outside = shared.destinationPoint(bA, 0, 200);
+    tel(gs2, 'A1', outside);
+    tick(gs2, 100);
+    assert.equal(gs2.players.A1.spawnDwellMs, 0, 'leaving the base resets dwell progress');
+  });
+
+  check('needsSpawn/ownBase are exposed in the snapshot for the downed player themselves', () => {
+    const snap = arops.getAropsSnapshot(gs, 'A1');
+    // A1 is alive again by this point (respawned in the earlier check), so
+    // needsSpawn should be false and ownBase should still be populated.
+    assert.equal(snap.me.needsSpawn, false);
+    assert.ok(snap.me.ownBase && typeof snap.me.ownBase.lat === 'number');
   });
 }
 

@@ -28,6 +28,11 @@ export interface ModeTimings {
      *  spatial value here — a hardcoded constant would silently misbehave on
      *  field sizes other than whatever it was tuned against. */
     revealTrapRadiusM: number;
+    /** Base/respawn checkpoint (any mode with team bases): continuous dwell
+     *  time inside one's own base needed to spawn in — either catching up
+     *  after missing the phase-1-end muster, or the phase-2-start revive
+     *  window. Same field-size-scaling rationale as every other dwell here. */
+    spawnCheckDwellMs: number;
 }
 /** Compute all mode timings from the playfield area. */
 export declare function scaleTimings(areaM2: number): ModeTimings;

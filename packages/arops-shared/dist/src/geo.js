@@ -1,6 +1,17 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.isSelfIntersecting = exports.segmentsIntersect = exports.distanceToPolygonEdgeM = exports.pointSegmentDistance = exports.polygonAreaM2 = exports.pointInPolygon = exports.toLocalXY = exports.destinationPoint = exports.angleDeltaDeg = exports.bearingDeg = exports.haversineMeters = exports.EARTH_RADIUS_M = void 0;
+exports.EARTH_RADIUS_M = void 0;
+exports.haversineMeters = haversineMeters;
+exports.bearingDeg = bearingDeg;
+exports.angleDeltaDeg = angleDeltaDeg;
+exports.destinationPoint = destinationPoint;
+exports.toLocalXY = toLocalXY;
+exports.pointInPolygon = pointInPolygon;
+exports.polygonAreaM2 = polygonAreaM2;
+exports.pointSegmentDistance = pointSegmentDistance;
+exports.distanceToPolygonEdgeM = distanceToPolygonEdgeM;
+exports.segmentsIntersect = segmentsIntersect;
+exports.isSelfIntersecting = isSelfIntersecting;
 exports.EARTH_RADIUS_M = 6371008.8;
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -14,7 +25,6 @@ function haversineMeters(a, b) {
         Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLam / 2) ** 2;
     return 2 * exports.EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(s)));
 }
-exports.haversineMeters = haversineMeters;
 /** Initial bearing from `from` to `to`, degrees 0–360 (0 = true north, 90 = east). */
 function bearingDeg(from, to) {
     const phi1 = from.lat * DEG2RAD;
@@ -25,13 +35,11 @@ function bearingDeg(from, to) {
         Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLam);
     return (Math.atan2(y, x) * RAD2DEG + 360) % 360;
 }
-exports.bearingDeg = bearingDeg;
 /** Smallest absolute difference between two angles in degrees (0–180). */
 function angleDeltaDeg(a, b) {
     const d = Math.abs(a - b) % 360;
     return d > 180 ? 360 - d : d;
 }
-exports.angleDeltaDeg = angleDeltaDeg;
 /** Destination point given start, initial bearing (deg) and distance (m). */
 function destinationPoint(origin, bearing, distanceM) {
     const delta = distanceM / exports.EARTH_RADIUS_M;
@@ -47,7 +55,6 @@ function destinationPoint(origin, bearing, distanceM) {
         lon: ((lam2 * RAD2DEG + 540) % 360) - 180,
     };
 }
-exports.destinationPoint = destinationPoint;
 /** Project a point to a local ENU-style plane centered on `origin` (meters). */
 function toLocalXY(p, origin) {
     return {
@@ -55,7 +62,6 @@ function toLocalXY(p, origin) {
         y: (p.lat - origin.lat) * DEG2RAD * exports.EARTH_RADIUS_M,
     };
 }
-exports.toLocalXY = toLocalXY;
 /** Ray-casting point-in-polygon on the local plane. Boundary counts as inside. */
 function pointInPolygon(point, polygon) {
     if (polygon.length < 3)
@@ -82,7 +88,6 @@ function pointInPolygon(point, polygon) {
     }
     return inside;
 }
-exports.pointInPolygon = pointInPolygon;
 /** Polygon area in m² (shoelace on the local plane). Vertex order does not matter. */
 function polygonAreaM2(polygon) {
     if (polygon.length < 3)
@@ -97,7 +102,6 @@ function polygonAreaM2(polygon) {
     }
     return Math.abs(sum) / 2;
 }
-exports.polygonAreaM2 = polygonAreaM2;
 /** Distance from point to segment on the local plane (meters). */
 function pointSegmentDistance(p, a, b) {
     const abx = b.x - a.x;
@@ -110,7 +114,6 @@ function pointSegmentDistance(p, a, b) {
     const cy = a.y + t * aby;
     return Math.hypot(p.x - cx, p.y - cy);
 }
-exports.pointSegmentDistance = pointSegmentDistance;
 /** Minimum distance from a point to the polygon boundary in meters (always ≥ 0). */
 function distanceToPolygonEdgeM(point, polygon) {
     if (polygon.length < 2)
@@ -126,7 +129,6 @@ function distanceToPolygonEdgeM(point, polygon) {
     }
     return min;
 }
-exports.distanceToPolygonEdgeM = distanceToPolygonEdgeM;
 // ── Segment intersection (for self-intersection validation) ──
 function orientation(p, q, r) {
     const v = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
@@ -158,7 +160,6 @@ function segmentsIntersect(p1, q1, p2, q2) {
         return true;
     return false;
 }
-exports.segmentsIntersect = segmentsIntersect;
 /** True if the polygon outline crosses itself (non-adjacent edges intersect). */
 function isSelfIntersecting(polygon) {
     const n = polygon.length;
@@ -181,4 +182,3 @@ function isSelfIntersecting(polygon) {
     }
     return false;
 }
-exports.isSelfIntersecting = isSelfIntersecting;
