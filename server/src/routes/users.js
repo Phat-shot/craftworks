@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { requireAuth } = require('../middleware/auth');
-const { db } = require('../index');
+const db = require('../db/pool');
 
 // ── ME ───────────────────────────────────
 router.get('/me', requireAuth, (req, res) => res.json(req.user));

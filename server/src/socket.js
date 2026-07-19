@@ -4,7 +4,7 @@ const engine      = require('./game/engine');
 const gameManager = require('./game/game_manager');
 const { RACES, TDB, getTowersForRace } = require('./game/towers');
 const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('./game/data/maps');
-const aropsShared = require('../../packages/arops-shared/dist/src');
+const aropsShared = require('@craftworks/arops-shared');
 
 // Enrich TA workshopConfig with server-side sequences (never sent through client)
 function enrichTaConfig(wc) {

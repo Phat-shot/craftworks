@@ -6,9 +6,11 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "test": "node --test \"test/*.test.js\"",
     "migrate": "psql $DATABASE_URL -f src/db/schema.sql"
   },
   "dependencies": {
+    "@craftworks/arops-shared": "^0.1.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cookie-parser": "^1.4.6",

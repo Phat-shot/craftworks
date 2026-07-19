@@ -47,7 +47,7 @@ angewendet wird (Tabellen anlegen bzw. `ADD COLUMN IF NOT EXISTS` nachziehen).
 | **Brands** | White-Label-Feature für Organisationen: eigene Logo-Assets, gebrandete Maps, „Challenges“ mit Leaderboard und Token-Einreichung |
 | **DSGVO** | Impressum/Datenschutz-Seite (`client/src/pages/Legal.jsx`), Consent-Log in der DB |
 | **Sprachen** | Deutsch + Englisch (i18next, inline Ressourcen) |
-| **Echtzeit** | Ein Socket.io-Server, zwei Namespaces an Verantwortung: `socket/index.js` (Plattform: Chat/Lobby/Gruppen) und `socket.js` (Spiel-Sessions, pro Session ein Worker-Thread via `game_manager.js`) |
+| **Echtzeit** | Ein Socket.io-Server, aktuell ein einziger Handler (`socket.js`) für Plattform (Chat/Lobby/Gruppen) UND Spiel-Sessions zusammen (pro RTS-Session ein Worker-Thread via `game_manager.js`) — die saubere Trennung der beiden Verantwortlichkeiten ist Teil der laufenden Backend-Modernisierung (Phase 3, siehe Plan), noch nicht umgesetzt |
 
 **Bekannte offene Punkte auf Plattform-Ebene** (siehe [Offene Ideen](#offene-ideen--ausblick)
 weiter unten für den vollständigen Review):
@@ -244,8 +244,7 @@ server {
 │   └── wear-apk.yml             Wear-OS-APK (arops-wear) → Release-Asset
 ├── server/src/
 │   ├── index.js                 Express-Bootstrap + Auto-Migration
-│   ├── socket.js                Spiel-Sessions (RTS-Modi + Comic-Map-Bridge)
-│   ├── socket/index.js           Plattform-Socket (Chat/Lobby/Gruppen)
+│   ├── socket.js                Plattform (Chat/Lobby/Gruppen) + Spiel-Sessions in einer Datei
 │   ├── middleware/auth.js        JWT
 │   ├── routes/                  REST API (auth, users, chat, groups, lobbies,
 │   │                             games, legal, brands, workshop*)

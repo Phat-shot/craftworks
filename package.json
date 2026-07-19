@@ -1,0 +1,26 @@
+{
+  "name": "craftworks",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Craftworks platform monorepo — server, web client, and the shared AR Ops geometry package. apps/arops-mobile is deliberately NOT a workspace member here: it consumes packages/arops-shared as a vendored tarball (see CLAUDE.md), not a workspace link.",
+  "workspaces": [
+    "server",
+    "client",
+    "packages/arops-shared"
+  ],
+  "scripts": {
+    "lint": "eslint server client",
+    "format": "prettier --check server client",
+    "format:write": "prettier --write server client",
+    "test": "npm run test --workspace=server && npm run test --workspace=packages/arops-shared"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.5"
+  }
+}

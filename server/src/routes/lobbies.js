@@ -2,7 +2,7 @@ const router  = require('express').Router();
 const QRCode  = require('qrcode');
 const { nanoid } = require('nanoid');
 const { requireAuth, requireVerified } = require('../middleware/auth');
-const { db }  = require('../index');
+const db      = require('../db/pool');
 
 // ══ GROUPS ═══════════════════════════════
 

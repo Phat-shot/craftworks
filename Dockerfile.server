@@ -18,13 +18,25 @@ RUN npm run build
 FROM node:20-alpine
 WORKDIR /app
 
-COPY server/package.json ./
-RUN npm install --omit=dev --silent
+# packages/arops-shared is an npm workspace member now (root package.json),
+# not a registry package — a plain `npm install` scoped to just
+# server/package.json would try to fetch @craftworks/arops-shared from the
+# public npm registry and fail (404, it's private/unpublished). Installing
+# from the repo root with --workspace=server instead resolves it as a local
+# workspace link. npm needs every member's package.json present to resolve
+# the workspace topology, even though only server's own deps get installed
+# here (client's own dependencies are irrelevant to this stage/image).
+COPY package.json package-lock.json ./
+COPY server/package.json server/package.json
+COPY client/package.json client/package.json
+COPY packages/arops-shared/package.json packages/arops-shared/package.json
+RUN npm install --workspace=server --omit=dev --silent
 
-COPY server/ ./
-COPY packages/ /packages/
-COPY --from=client-build /client/build ./client/build
+COPY server/ server/
+COPY packages/arops-shared/ packages/arops-shared/
+COPY --from=client-build /client/build ./server/client/build
 
 ENV NODE_ENV=production
+WORKDIR /app/server
 EXPOSE 4000
 CMD ["node", "src/index.js"]

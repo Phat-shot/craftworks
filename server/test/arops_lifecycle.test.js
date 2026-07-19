@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════
 const assert = require('assert');
 const arops = require('../src/game/arops');
-const shared = require('../../packages/arops-shared/dist/src');
+const shared = require('@craftworks/arops-shared');
 
 // These tests predate "Auto" mode (field-size-derived timings/hitConfig,
 // ON by default) and are deliberately about the STABLE, known DEFAULTS/

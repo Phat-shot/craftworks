@@ -5,7 +5,7 @@ const { nanoid }= require('nanoid');
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const nodemailer= require('nodemailer');
-const { db }    = require('../index');
+const db        = require('../db/pool');
 const crypto    = require('crypto');
 
 const authLimiter = rateLimit({ windowMs: 15*60_000, max: 20 });

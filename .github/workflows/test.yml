@@ -1,0 +1,23 @@
+name: Test
+# Läuft bei jedem Push und PR gegen test/main — schnelles Feedback für
+# Contributor-Branches, unabhängig vom (Secrets-gated) Docker-Build in
+# docker.yml. docker.yml führt denselben Lint+Test-Schritt zusätzlich
+# selbst noch einmal aus, bevor es tatsächlich ein Image pusht (siehe
+# den `test`-Job dort) — needs: funktioniert nur innerhalb einer
+# Workflow-Datei, deshalb kein direkter Verweis von dort auf diesen Job.
+on:
+  push:
+    branches: [main, test]
+  pull_request:
+    branches: [main, test]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run lint
+      - run: npm test

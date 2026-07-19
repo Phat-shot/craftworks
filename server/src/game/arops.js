@@ -16,7 +16,7 @@
 //  Team modes use FREEZE on hit: frozen players cannot shoot,
 //  capture, carry or plant; moving >15 m extends the freeze.
 // ═══════════════════════════════════════════════════════════
-const shared = require('../../../packages/arops-shared/dist/src');
+const shared = require('@craftworks/arops-shared');
 
 const BUFFER_CAP = 40;
 const EVENT_CAP = 50;

@@ -7,12 +7,11 @@ const helmet      = require('helmet');
 const compression = require('compression');
 const cookieParser= require('cookie-parser');
 const rateLimit   = require('express-rate-limit');
-const { Pool }    = require('pg');
 const fs          = require('fs');
 const path        = require('path');
 
 // ── Database ─────────────────────────────────
-const db = new Pool({ connectionString: process.env.DATABASE_URL });
+const db = require('./db/pool');
 module.exports.db = db;
 
 // ── Auto-migrate: run schema.sql if tables missing ──
