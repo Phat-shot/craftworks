@@ -18,3 +18,24 @@ export declare function pickTargetSample(samples: readonly TelemetrySample[], ts
 export declare function hitToleranceDeg(distanceM: number, accuracySumM: number, cfg?: HitConfig): number;
 /** Validate a hit attempt. Deterministic; identical results on app and server. */
 export declare function validateHit(attempt: HitAttempt, cfg?: HitConfig): HitVerdict;
+/**
+ * Sniper-class hit test: a fixed LATERAL tolerance (meters, perpendicular
+ * distance from the shooter's aim ray) instead of an angular cone that
+ * widens with distance — a hitscan/laser shape. `lateralToleranceM` is the
+ * caller's job to pick (the already field-size-scaled `hitHalfWidthM` from
+ * `scaleCoreConfig`, see packages/arops-shared/src/timings.ts, is the right
+ * source value — don't invent a new scaled constant for this).
+ *
+ * Same HitVerdict shape as validateHit so callers can treat the two
+ * interchangeably; `angleDeltaDeg`/`toleranceDeg` are repurposed here to
+ * carry the lateral offset/tolerance in meters, not degrees (documented via
+ * `reason: 'outside_lateral'` so callers can tell the two models apart).
+ */
+export declare function validateHitLateral(attempt: HitAttempt, cfg: HitConfig | undefined, lateralToleranceM: number): HitVerdict;
+/**
+ * Bomber-class hit test: omnidirectional — any bearing within range counts,
+ * no aiming at all. Deliberately does NOT check `shooter.headingDeg` (unlike
+ * validateHit/validateHitLateral): a class built entirely around "no aiming
+ * needed" shouldn't reject a shot just because the compass is unavailable.
+ */
+export declare function validateHitOmni(attempt: HitAttempt, cfg?: HitConfig): HitVerdict;

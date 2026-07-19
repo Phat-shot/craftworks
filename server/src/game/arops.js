@@ -47,6 +47,9 @@ const DEFAULTS = {
   fakeMarkerDurationMs: 45_000,
   aufscheuchenCooldownMs: 45_000,
   aufscheuchenDurationMs: 6_000,
+  revealTrapCooldownMs: 60_000,   // Scout class perk (any mode)
+  revealTrapDurationMs: 20_000,   // how long a placed trap stays armed
+  revealTrapRevealMs: 8_000,      // how long the triggered reveal stays visible to the owner
 };
 
 function now() { return Date.now(); }
@@ -67,8 +70,6 @@ function applyFreeze(gs, target, byUserId, t) {
   pushEvent(gs, 'player_frozen', { userId: target.userId, byUserId, durationMs: gs.timings.freezeMs });
 }
 
-function isTeamMode(gs) { return gs.subMode !== 'hide_and_seek'; }
-
 /**
  * Mark a hider as found. Host-configurable fate (ar_settings.foundMode):
  *  'spectator' (default) — status flips to 'found', excluded from further play.
@@ -86,8 +87,15 @@ function foundHider(gs, target, t, byUserId) {
   }
 }
 
+// Delegates to the current mode's own isOpponentPair hook instead of a
+// hardcoded string check against 'hide_and_seek' — a mode is NOT
+// necessarily team-based just because it isn't literally hide_and_seek
+// (Deathmatch, The Ship: neither team-based, and any name other than
+// 'hide_and_seek' would have wrongly fallen into the team branch here,
+// comparing two `undefined` teams as equal → every player treated as a
+// "teammate" → position leak to everyone, see MODES[x].usesTeams instead).
 function opponentOf(gs, a, b) {
-  return isTeamMode(gs) ? a.team !== b.team : a.role !== b.role;
+  return MODES[gs.subMode].isOpponentPair(gs, a, b);
 }
 
 /** Players currently counting for zone presence: alive, unfrozen, in-field, fresh. */
@@ -184,6 +192,7 @@ const MODES = {
           .filter(p => p.role === 'hider' && p.status === 'alive').length,
       };
     },
+    isOpponentPair(gs, a, b) { return a.role !== b.role; },
     revealPosition() { return false; },
   },
 
@@ -255,6 +264,7 @@ const MODES = {
         })),
       };
     },
+    isOpponentPair(gs, a, b) { return a.team !== b.team; },
     revealPosition() { return false; },
   },
 
@@ -393,6 +403,7 @@ const MODES = {
         } : null,
       };
     },
+    isOpponentPair(gs, a, b) { return a.team !== b.team; },
     // Flag carriers are visible to EVERYONE (classic CTF rule)
     revealPosition(gs, viewer, p) {
       const ms = gs.modeState;
@@ -484,6 +495,7 @@ const MODES = {
           ? Math.min(100, Math.round(100 * ms.plantProg.ms / gs.timings.plantDwellMs)) : 0,
       };
     },
+    isOpponentPair(gs, a, b) { return a.team !== b.team; },
     revealPosition() { return false; },
   },
 };
@@ -580,6 +592,12 @@ function createAropsGame(sessionId, players, workshopConfig) {
 
   const roles = ar.roles || {};
   const teamOverride = ar.teams || {};
+  // Player classes (Scout/Sniper/Bomber) — additive to role/team, not a
+  // replacement. No entry = today's unmodified behavior (shared gs.hitConfig,
+  // cone hit-test, no class-exclusive perk access). See
+  // packages/arops-shared/src/profiles.ts's PLAYER_TYPE_PROFILES for the
+  // combat-stat rationale behind each class.
+  const classOverride = ar.classes || {};
   const playerState = {};
   const captains = { a: null, b: null };
   let seekerCount = 0;
@@ -592,9 +610,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
           ? teamOverride[p.userId] : (idx % 2 === 0 ? 'a' : 'b'))
       : null;
     if (team && !captains[team]) captains[team] = p.userId;
+    const playerClass = ['scout', 'sniper', 'bomber'].includes(classOverride[p.userId])
+      ? classOverride[p.userId] : null;
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      role, team, isBot: !!p.isBot,
+      role, team, class: playerClass, isBot: !!p.isBot,
       status: 'alive',
       foundBy: null, foundAt: null,
       score: 0,
@@ -602,10 +622,14 @@ function createAropsGame(sessionId, players, workshopConfig) {
       strikes: 0, suspicious: false,
       geofence: 'inside', outsideSince: null, exposed: false, exposedAt: null,
       lastHitAttemptAt: 0,
-      perks: { radarLastUsed: 0, droneLastUsed: 0, cloakLastUsed: 0, fakeMarkerLastUsed: 0, aufscheuchenLastUsed: 0 },
+      perks: {
+        radarLastUsed: 0, droneLastUsed: 0, cloakLastUsed: 0, fakeMarkerLastUsed: 0,
+        aufscheuchenLastUsed: 0, revealTrapLastUsed: 0,
+      },
       proximityAlert: false,
       cloakUntil: 0, fakeMarkers: null, fakeMarkerUntil: 0, fakeProximityUntil: 0,
       frozenUntil: 0, freezeAnchor: null, freezeViolations: 0,
+      trap: null, trapAlert: null, // Scout's Reveal-Trap perk state
     };
   });
   // Every normal match needs at least one seeker — but a solo debug session
@@ -710,6 +734,49 @@ function actionArTelemetry(gs, userId, data) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  PLAYER CLASSES (Scout/Sniper/Bomber — additive to role/team)
+// ═══════════════════════════════════════════════════════════
+// Derives the effective per-shooter hit-test shape from the match-wide
+// gs.hitConfig + the shooter's class. No class (null) = gs.hitConfig
+// unchanged, cone model — today's exact behavior. Single source of truth
+// for both actionArHitAttempt (actual validation) and getAropsSnapshot
+// (what the client displays), so the two can never drift apart.
+//
+// Sniper's lateral tolerance is derived from hitConfig.baseConeHalfAngleDeg
+// via the inverse of the auto-scale conversion used when building hitConfig
+// (see createAropsGame: baseConeHalfAngleDeg = atan(hitHalfWidthM/10) * 180/PI)
+// rather than a separate stored value — this way it automatically follows
+// ANY change to baseConeHalfAngleDeg (auto-scaled or host-manual override),
+// not just the auto-scaled path.
+function effectiveHitInfo(hitConfig, playerClass) {
+  if (playerClass === 'sniper') {
+    const lateralToleranceM = Math.tan(hitConfig.baseConeHalfAngleDeg * Math.PI / 180) * 10;
+    return { hitShape: 'lateral', hitRangeM: hitConfig.maxRangeM * 2, lateralToleranceM };
+  }
+  if (playerClass === 'bomber') {
+    return { hitShape: 'omni', hitRangeM: hitConfig.maxRangeM * 0.25 };
+  }
+  if (playerClass === 'scout') {
+    // "Shotgun" wide corridor — 3x the baseline cone half-angle, capped at
+    // maxToleranceDeg (the same ceiling every shooter's effective tolerance
+    // is already capped at, see hitToleranceDeg in packages/arops-shared/
+    // src/hit.ts — widening past that ceiling would have no further effect).
+    const wideConeHalfAngleDeg = Math.min(hitConfig.maxToleranceDeg, hitConfig.baseConeHalfAngleDeg * 3);
+    return { hitShape: 'cone', hitRangeM: hitConfig.maxRangeM, hitConeHalfAngleDeg: wideConeHalfAngleDeg };
+  }
+  return { hitShape: 'cone', hitRangeM: hitConfig.maxRangeM, hitConeHalfAngleDeg: hitConfig.baseConeHalfAngleDeg };
+}
+
+function validateHitForShooter(shooter, attempt, hitConfig) {
+  const info = effectiveHitInfo(hitConfig, shooter.class);
+  const cfg = { ...hitConfig, maxRangeM: info.hitRangeM };
+  if (info.hitShape === 'lateral') return shared.validateHitLateral(attempt, cfg, info.lateralToleranceM);
+  if (info.hitShape === 'omni') return shared.validateHitOmni(attempt, cfg);
+  cfg.baseConeHalfAngleDeg = info.hitConeHalfAngleDeg; // default or Scout's widened cone
+  return shared.validateHit(attempt, cfg);
+}
+
+// ═══════════════════════════════════════════════════════════
 //  HIT ATTEMPT (core; mode decides gating + consequence)
 // ═══════════════════════════════════════════════════════════
 // A beacon broadcast cycle is ~2.1s (see hardware/esp32-ir firmware) — this
@@ -738,7 +805,11 @@ function actionArHitAttempt(gs, userId, data) {
 
   const trigger = data?.sample;
   if (!validSample(trigger)) return { ok: false, err: 'bad_sample' };
-  if (trigger.headingDeg === null || trigger.headingDeg === undefined) {
+  // Bomber's whole design premise is "no aiming needed" (360° omnidirectional
+  // hit-test, see effectiveHitInfo) — requiring a working compass would
+  // contradict that, so this universal gate is the one place classes make an
+  // exception to an otherwise shooter-agnostic check.
+  if (shooter.class !== 'bomber' && (trigger.headingDeg === null || trigger.headingDeg === undefined)) {
     return { ok: false, err: 'no_heading' };
   }
   if (shooter.lastAccepted && !shared.isMovementPlausible(shooter.lastAccepted, trigger)) {
@@ -763,7 +834,7 @@ function actionArHitAttempt(gs, userId, data) {
   for (const c of candidates) {
     const targetSample = pickTargetSample(c.buffer, trigger.ts);
     if (!targetSample) continue;
-    const verdict = shared.validateHit({
+    const verdict = validateHitForShooter(shooter, {
       shooterId: userId, targetId: c.userId,
       shooter: {
         lat: trigger.lat, lon: trigger.lon, ts: trigger.ts,
@@ -776,6 +847,12 @@ function actionArHitAttempt(gs, userId, data) {
     } else if (!verdict.hit) {
       reasonCounts[verdict.reason] = (reasonCounts[verdict.reason] || 0) + 1;
     }
+    // Note: for a lateral-shape shooter (Sniper), angleDeltaDeg/toleranceDeg
+    // below actually carry METERS, not degrees (see validateHitLateral) — the
+    // near-miss diagnostic math still works numerically (same unit compared
+    // to itself), but the field NAMES are misleading for that shooter until
+    // the client-side near-miss display is updated to be shape-aware
+    // (planned for the mobile UI phase, not yet part of this change).
     if (!verdict.hit && verdict.angleDeltaDeg !== null && verdict.toleranceDeg !== null) {
       if (verdict.angleDeltaDeg <= verdict.toleranceDeg * 2) {
         if (!nearMiss || verdict.angleDeltaDeg / verdict.toleranceDeg < nearMiss.ratio) {
@@ -934,7 +1011,16 @@ function actionArUsePerk(gs, userId, data) {
 
   // Drone / Cloak / Fake-Marker / Aufscheuchen are Hide & Seek's hider/seeker
   // asymmetry — 'role' is a vestigial field in team modes, so gate explicitly.
-  if (['drone', 'cloak', 'fake_marker', 'aufscheuchen'].includes(perk) && gs.subMode !== 'hide_and_seek') {
+  // fake_marker/cloak get an ADDITIONAL access path here: the Sniper/Bomber
+  // classes reuse them cross-mode (see PLAYER_TYPE_PROFILES in
+  // packages/arops-shared/src/profiles.ts), on top of — not instead of —
+  // the Hider-in-hide_and_seek role path checked below. Drone/Aufscheuchen
+  // stay role/mode-exclusive; no class reuses them.
+  const classOverridesModeGate =
+    (perk === 'fake_marker' && p.class === 'sniper') ||
+    (perk === 'cloak' && p.class === 'bomber');
+  if (['drone', 'cloak', 'fake_marker', 'aufscheuchen'].includes(perk)
+      && gs.subMode !== 'hide_and_seek' && !classOverridesModeGate) {
     return { ok: false, err: 'wrong_mode' };
   }
 
@@ -955,7 +1041,7 @@ function actionArUsePerk(gs, userId, data) {
   }
 
   if (perk === 'cloak') {
-    if (p.role !== 'hider') return { ok: false, err: 'perk_wrong_role' };
+    if (p.role !== 'hider' && p.class !== 'bomber') return { ok: false, err: 'perk_wrong_role' };
     const elapsed = t - p.perks.cloakLastUsed;
     if (p.perks.cloakLastUsed && elapsed < gs.cfg.cloakCooldownMs) {
       return { ok: false, err: 'cooldown', remainingMs: gs.cfg.cloakCooldownMs - elapsed };
@@ -967,7 +1053,7 @@ function actionArUsePerk(gs, userId, data) {
   }
 
   if (perk === 'fake_marker') {
-    if (p.role !== 'hider') return { ok: false, err: 'perk_wrong_role' };
+    if (p.role !== 'hider' && p.class !== 'sniper') return { ok: false, err: 'perk_wrong_role' };
     const elapsed = t - p.perks.fakeMarkerLastUsed;
     if (p.perks.fakeMarkerLastUsed && elapsed < gs.cfg.fakeMarkerCooldownMs) {
       return { ok: false, err: 'cooldown', remainingMs: gs.cfg.fakeMarkerCooldownMs - elapsed };
@@ -992,6 +1078,26 @@ function actionArUsePerk(gs, userId, data) {
       if (h.role === 'hider' && h.status === 'alive') h.fakeProximityUntil = t + gs.cfg.aufscheuchenDurationMs;
     }
     pushEvent(gs, 'aufscheuchen_used', { userId });
+    return { ok: true };
+  }
+
+  // Scout class perk, any mode — placed at the player's current position,
+  // triggers passively (see tickArops) rather than as an immediate-effect
+  // action like the perks above: an opponent has to actually walk into
+  // range before anything is revealed.
+  if (perk === 'reveal_trap') {
+    if (p.class !== 'scout') return { ok: false, err: 'perk_wrong_role' };
+    const elapsed = t - p.perks.revealTrapLastUsed;
+    if (p.perks.revealTrapLastUsed && elapsed < gs.cfg.revealTrapCooldownMs) {
+      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.revealTrapCooldownMs - elapsed };
+    }
+    if (!p.lastAccepted) return { ok: false, err: 'no_position' };
+    p.perks.revealTrapLastUsed = t;
+    p.trap = {
+      lat: p.lastAccepted.lat, lon: p.lastAccepted.lon,
+      armedUntil: t + gs.cfg.revealTrapDurationMs,
+    };
+    pushEvent(gs, 'reveal_trap_placed', { userId });
     return { ok: true };
   }
 
@@ -1108,6 +1214,29 @@ function tickArops(gs) {
     // Aufscheuchen: seeker-faked alert, indistinguishable from a real one
     if (t < (p.fakeProximityUntil || 0)) p.proximityAlert = true;
   }
+
+  // Reveal-Trap (Scout, any mode) — passive trigger check. An armed trap
+  // reveals the first opponent to come within range to its owner, then is
+  // consumed (one-shot; re-placing costs the cooldown again). Mode-agnostic,
+  // same as radar/proximity, so it lives in the core tick, not a mode.tick.
+  for (const p of Object.values(gs.players)) {
+    if (p.trapAlert && t >= p.trapAlert.expiresAt) p.trapAlert = null;
+    if (!p.trap) continue;
+    if (t >= p.trap.armedUntil) { p.trap = null; continue; }
+    for (const o of Object.values(gs.players)) {
+      if (o.userId === p.userId || o.status !== 'alive' || !opponentOf(gs, p, o) || !o.lastAccepted) continue;
+      if (isCloaked(o, t)) continue; // Cloak defeats detection sensors, not point-blank hits
+      if (shared.haversineMeters(p.trap, o.lastAccepted) <= gs.timings.revealTrapRadiusM) {
+        p.trapAlert = {
+          lat: o.lastAccepted.lat, lon: o.lastAccepted.lon,
+          triggeredAt: t, expiresAt: t + gs.cfg.revealTrapRevealMs,
+        };
+        p.trap = null;
+        pushEvent(gs, 'reveal_trap_triggered', { userId: p.userId, byUserId: o.userId });
+        break;
+      }
+    }
+  }
 }
 
 function endGame(gs, winner) {
@@ -1134,7 +1263,7 @@ function getAropsSnapshot(gs, userId) {
   const roster = Object.values(gs.players).map(p => {
     const entry = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
-      role: p.role, team: p.team, status: p.status, foundBy: p.foundBy, score: p.score,
+      role: p.role, team: p.team, class: p.class, status: p.status, foundBy: p.foundBy, score: p.score,
       suspicious: p.suspicious,
       frozen: isFrozen(p, t),
     };
@@ -1164,6 +1293,12 @@ function getAropsSnapshot(gs, userId) {
     hitTrackingMode: gs.hitTrackingMode,
     // Host-configured shot range/cone width, exposed so the client overlay
     // matches whatever is actually being validated (see hitConfig above).
+    // These two stay match-wide/unclassed for backward compat with the
+    // current mobile UI (which doesn't yet render per-class aim overlays,
+    // see the mobile UI phase of the AR-Ops modes plan) — the viewer's OWN
+    // effective values (which may differ if they have a class) are in
+    // `me` below instead; validation itself (actionArHitAttempt) is always
+    // authoritative regardless of what any client renders.
     hitRangeM: gs.hitConfig.maxRangeM,
     hitConeHalfAngleDeg: gs.hitConfig.baseConeHalfAngleDeg,
     winner: gs.winner,
@@ -1178,13 +1313,18 @@ function getAropsSnapshot(gs, userId) {
       zoneRadiusM: gs.timings.zoneRadiusM,
     },
     me: me ? {
-      role: me.role, team: me.team, status: me.status, score: me.score,
+      role: me.role, team: me.team, class: me.class, status: me.status, score: me.score,
       isCaptain: me.team ? gs.captains[me.team] === userId : false,
       geofence: me.geofence, exposed: me.exposed,
       strikes: me.strikes,
       proximityAlert: me.proximityAlert,
       frozenRemainingMs: Math.max(0, (me.frozenUntil || 0) - t),
       freezeViolations: me.freezeViolations,
+      // Own effective hit-test shape (differs from the top-level match-wide
+      // hitRangeM/hitConeHalfAngleDeg above if this player has a class —
+      // see effectiveHitInfo, the single source of truth shared with
+      // actionArHitAttempt's actual validation).
+      ...effectiveHitInfo(gs.hitConfig, me.class),
       radarCooldownRemainingMs: Math.max(0,
         gs.cfg.radarCooldownMs - (t - me.perks.radarLastUsed)),
       hitCooldownRemainingMs: Math.max(0,
@@ -1201,6 +1341,12 @@ function getAropsSnapshot(gs, userId) {
       fakeMarkerRemainingMs: Math.max(0, (me.fakeMarkerUntil || 0) - t),
       aufscheuchenCooldownRemainingMs: Math.max(0,
         gs.cfg.aufscheuchenCooldownMs - (t - me.perks.aufscheuchenLastUsed)),
+      revealTrapCooldownRemainingMs: Math.max(0,
+        gs.cfg.revealTrapCooldownMs - (t - me.perks.revealTrapLastUsed)),
+      trapArmed: !!me.trap,
+      // Only ever populated for the trap's own owner — never leaks who
+      // triggered someone else's trap to anyone but that trap's owner.
+      trapAlert: me.trapAlert ? { ...me.trapAlert } : null,
     } : null,
     players: roster,
     events: gs.events.slice(-15),

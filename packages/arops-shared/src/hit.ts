@@ -141,3 +141,114 @@ export function validateHit(
     distanceM, angleDeltaDeg: delta, toleranceDeg: tolerance, timeSkewMs,
   };
 }
+
+/**
+ * Sniper-class hit test: a fixed LATERAL tolerance (meters, perpendicular
+ * distance from the shooter's aim ray) instead of an angular cone that
+ * widens with distance — a hitscan/laser shape. `lateralToleranceM` is the
+ * caller's job to pick (the already field-size-scaled `hitHalfWidthM` from
+ * `scaleCoreConfig`, see packages/arops-shared/src/timings.ts, is the right
+ * source value — don't invent a new scaled constant for this).
+ *
+ * Same HitVerdict shape as validateHit so callers can treat the two
+ * interchangeably; `angleDeltaDeg`/`toleranceDeg` are repurposed here to
+ * carry the lateral offset/tolerance in meters, not degrees (documented via
+ * `reason: 'outside_lateral'` so callers can tell the two models apart).
+ */
+export function validateHitLateral(
+  attempt: HitAttempt,
+  cfg: HitConfig = DEFAULT_HIT_CONFIG,
+  lateralToleranceM: number
+): HitVerdict {
+  const { shooter, target } = attempt;
+  const distanceM = haversineMeters(shooter, target);
+  const timeSkewMs = Math.abs(shooter.ts - target.ts);
+
+  const fail = (reason: HitVerdict['reason']): HitVerdict => ({
+    hit: false, reason, confidence: 0,
+    distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+  });
+
+  if (shooter.headingDeg === null || shooter.headingDeg === undefined || Number.isNaN(shooter.headingDeg)) {
+    return fail('no_heading');
+  }
+  if (timeSkewMs > cfg.maxTimeSkewMs) {
+    return fail('time_skew');
+  }
+  if (distanceM > cfg.maxRangeM) {
+    return fail('out_of_range');
+  }
+
+  const targetBearing = bearingDeg(shooter, target);
+  const delta = angleDeltaDeg(shooter.headingDeg, targetBearing);
+  const lateralM = distanceM * Math.sin(delta / RAD2DEG);
+
+  if (lateralM > lateralToleranceM) {
+    return {
+      hit: false, reason: 'outside_lateral', confidence: 0,
+      distanceM, angleDeltaDeg: lateralM, toleranceDeg: lateralToleranceM, timeSkewMs,
+    };
+  }
+
+  const accSum = Math.max(0, shooter.accuracyM) + Math.max(0, target.accuracyM);
+  const lateralScore = 1 - lateralM / lateralToleranceM;
+  const freshScore = 1 - timeSkewMs / cfg.maxTimeSkewMs;
+  const gpsScore = Math.max(0, 1 - accSum / 30);
+  const confidence = 0.6 * lateralScore + 0.25 * freshScore + 0.15 * gpsScore;
+
+  if (confidence < cfg.minConfidence) {
+    return {
+      hit: false, reason: 'low_confidence', confidence,
+      distanceM, angleDeltaDeg: lateralM, toleranceDeg: lateralToleranceM, timeSkewMs,
+    };
+  }
+
+  return {
+    hit: true, reason: null, confidence,
+    distanceM, angleDeltaDeg: lateralM, toleranceDeg: lateralToleranceM, timeSkewMs,
+  };
+}
+
+/**
+ * Bomber-class hit test: omnidirectional — any bearing within range counts,
+ * no aiming at all. Deliberately does NOT check `shooter.headingDeg` (unlike
+ * validateHit/validateHitLateral): a class built entirely around "no aiming
+ * needed" shouldn't reject a shot just because the compass is unavailable.
+ */
+export function validateHitOmni(
+  attempt: HitAttempt,
+  cfg: HitConfig = DEFAULT_HIT_CONFIG
+): HitVerdict {
+  const { shooter, target } = attempt;
+  const distanceM = haversineMeters(shooter, target);
+  const timeSkewMs = Math.abs(shooter.ts - target.ts);
+
+  const fail = (reason: HitVerdict['reason']): HitVerdict => ({
+    hit: false, reason, confidence: 0,
+    distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+  });
+
+  if (timeSkewMs > cfg.maxTimeSkewMs) {
+    return fail('time_skew');
+  }
+  if (distanceM > cfg.maxRangeM) {
+    return fail('out_of_range');
+  }
+
+  const accSum = Math.max(0, shooter.accuracyM) + Math.max(0, target.accuracyM);
+  const freshScore = 1 - timeSkewMs / cfg.maxTimeSkewMs;
+  const gpsScore = Math.max(0, 1 - accSum / 30);
+  const confidence = 0.6 * freshScore + 0.4 * gpsScore;
+
+  if (confidence < cfg.minConfidence) {
+    return {
+      hit: false, reason: 'low_confidence', confidence,
+      distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+    };
+  }
+
+  return {
+    hit: true, reason: null, confidence,
+    distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+  };
+}

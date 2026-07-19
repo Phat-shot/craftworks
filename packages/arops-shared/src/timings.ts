@@ -31,6 +31,11 @@ export interface ModeTimings {
   defuseDwellMs: number;
   /** S&D: time from plant to detonation. */
   bombTimerMs: number;
+  /** Scout's Reveal-Trap perk: radius within which an opponent triggers the
+   *  trap and gets revealed to its owner. Field-size-scaled like every other
+   *  spatial value here — a hardcoded constant would silently misbehave on
+   *  field sizes other than whatever it was tuned against. */
+  revealTrapRadiusM: number;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -51,6 +56,7 @@ export function scaleTimings(areaM2: number): ModeTimings {
     plantDwellMs:         clamp((L / 30) * 1000, 8_000, 20_000),
     defuseDwellMs:        clamp((L / 40) * 1000, 6_000, 15_000),
     bombTimerMs:          clamp(((L / 1.4) + 30) * 1200, 90_000, 300_000),
+    revealTrapRadiusM:    clamp(L * 0.15, 15, 60),
   };
 }
 
@@ -159,4 +165,51 @@ export function validateZones(
     }
   }
   return { ok: errors.length === 0, errors };
+}
+
+// ── Random zone/target generation (host "random" toggle) ───────────────────
+// A public, multi-point counterpart to server/src/game/arops.js's private,
+// single-point `randomPointInPolygon` (used there only for fake-marker
+// decoys and bot spawn — deliberately left untouched, its 2 call sites don't
+// need pairwise separation). This one is for a different, new use case:
+// hosts generating several well-separated random targets/zones at once
+// (planned for the Zerstören mode rework and Domination's "random targets"
+// toggle) — not wired into any mode yet, just the reusable primitive.
+export function generateRandomZones(
+  polygon: LatLon[],
+  count: number,
+  minSeparationM: number,
+  radiusM: number,
+  maxAttemptsPerZone = 30
+): Zone[] {
+  if (!polygon || polygon.length < 3 || count <= 0) return [];
+
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const v of polygon) {
+    if (v.lat < minLat) minLat = v.lat;
+    if (v.lat > maxLat) maxLat = v.lat;
+    if (v.lon < minLon) minLon = v.lon;
+    if (v.lon > maxLon) maxLon = v.lon;
+  }
+
+  const zones: Zone[] = [];
+  for (let i = 0; i < count; i++) {
+    let placed: LatLon | null = null;
+    for (let attempt = 0; attempt < maxAttemptsPerZone; attempt++) {
+      const cand: LatLon = {
+        lat: minLat + Math.random() * (maxLat - minLat),
+        lon: minLon + Math.random() * (maxLon - minLon),
+      };
+      if (!pointInPolygon(cand, polygon)) continue;
+      if (zones.some(z => haversineMeters(cand, z) < minSeparationM)) continue;
+      placed = cand;
+      break;
+    }
+    // A field too small/crowded for the requested count+separation simply
+    // yields fewer zones than asked — callers decide whether that's an
+    // error (e.g. re-prompt the host) or an acceptable partial result.
+    if (!placed) break;
+    zones.push({ id: 'rz' + (i + 1), lat: placed.lat, lon: placed.lon, radiusM });
+  }
+  return zones;
 }

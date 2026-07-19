@@ -1,8 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.pickTargetSample = pickTargetSample;
-exports.hitToleranceDeg = hitToleranceDeg;
-exports.validateHit = validateHit;
+exports.validateHitOmni = exports.validateHitLateral = exports.validateHit = exports.hitToleranceDeg = exports.pickTargetSample = void 0;
 // ═══════════════════════════════════════════════════════════
 //  AR OPS — hit validation
 //
@@ -59,6 +57,7 @@ function pickTargetSample(samples, ts) {
     }
     return nearest;
 }
+exports.pickTargetSample = pickTargetSample;
 const RAD2DEG = 180 / Math.PI;
 /**
  * Angular tolerance (half-angle of the accepted cone) for a given
@@ -74,6 +73,7 @@ function hitToleranceDeg(distanceM, accuracySumM, cfg = types_1.DEFAULT_HIT_CONF
     const gpsAngle = Math.atan2(accuracySumM, distanceM) * RAD2DEG;
     return Math.min(cfg.maxToleranceDeg, cfg.baseConeHalfAngleDeg + gpsAngle);
 }
+exports.hitToleranceDeg = hitToleranceDeg;
 /** Validate a hit attempt. Deterministic; identical results on app and server. */
 function validateHit(attempt, cfg = types_1.DEFAULT_HIT_CONFIG) {
     const { shooter, target } = attempt;
@@ -125,3 +125,96 @@ function validateHit(attempt, cfg = types_1.DEFAULT_HIT_CONFIG) {
         distanceM, angleDeltaDeg: delta, toleranceDeg: tolerance, timeSkewMs,
     };
 }
+exports.validateHit = validateHit;
+/**
+ * Sniper-class hit test: a fixed LATERAL tolerance (meters, perpendicular
+ * distance from the shooter's aim ray) instead of an angular cone that
+ * widens with distance — a hitscan/laser shape. `lateralToleranceM` is the
+ * caller's job to pick (the already field-size-scaled `hitHalfWidthM` from
+ * `scaleCoreConfig`, see packages/arops-shared/src/timings.ts, is the right
+ * source value — don't invent a new scaled constant for this).
+ *
+ * Same HitVerdict shape as validateHit so callers can treat the two
+ * interchangeably; `angleDeltaDeg`/`toleranceDeg` are repurposed here to
+ * carry the lateral offset/tolerance in meters, not degrees (documented via
+ * `reason: 'outside_lateral'` so callers can tell the two models apart).
+ */
+function validateHitLateral(attempt, cfg = types_1.DEFAULT_HIT_CONFIG, lateralToleranceM) {
+    const { shooter, target } = attempt;
+    const distanceM = (0, geo_1.haversineMeters)(shooter, target);
+    const timeSkewMs = Math.abs(shooter.ts - target.ts);
+    const fail = (reason) => ({
+        hit: false, reason, confidence: 0,
+        distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+    });
+    if (shooter.headingDeg === null || shooter.headingDeg === undefined || Number.isNaN(shooter.headingDeg)) {
+        return fail('no_heading');
+    }
+    if (timeSkewMs > cfg.maxTimeSkewMs) {
+        return fail('time_skew');
+    }
+    if (distanceM > cfg.maxRangeM) {
+        return fail('out_of_range');
+    }
+    const targetBearing = (0, geo_1.bearingDeg)(shooter, target);
+    const delta = (0, geo_1.angleDeltaDeg)(shooter.headingDeg, targetBearing);
+    const lateralM = distanceM * Math.sin(delta / RAD2DEG);
+    if (lateralM > lateralToleranceM) {
+        return {
+            hit: false, reason: 'outside_lateral', confidence: 0,
+            distanceM, angleDeltaDeg: lateralM, toleranceDeg: lateralToleranceM, timeSkewMs,
+        };
+    }
+    const accSum = Math.max(0, shooter.accuracyM) + Math.max(0, target.accuracyM);
+    const lateralScore = 1 - lateralM / lateralToleranceM;
+    const freshScore = 1 - timeSkewMs / cfg.maxTimeSkewMs;
+    const gpsScore = Math.max(0, 1 - accSum / 30);
+    const confidence = 0.6 * lateralScore + 0.25 * freshScore + 0.15 * gpsScore;
+    if (confidence < cfg.minConfidence) {
+        return {
+            hit: false, reason: 'low_confidence', confidence,
+            distanceM, angleDeltaDeg: lateralM, toleranceDeg: lateralToleranceM, timeSkewMs,
+        };
+    }
+    return {
+        hit: true, reason: null, confidence,
+        distanceM, angleDeltaDeg: lateralM, toleranceDeg: lateralToleranceM, timeSkewMs,
+    };
+}
+exports.validateHitLateral = validateHitLateral;
+/**
+ * Bomber-class hit test: omnidirectional — any bearing within range counts,
+ * no aiming at all. Deliberately does NOT check `shooter.headingDeg` (unlike
+ * validateHit/validateHitLateral): a class built entirely around "no aiming
+ * needed" shouldn't reject a shot just because the compass is unavailable.
+ */
+function validateHitOmni(attempt, cfg = types_1.DEFAULT_HIT_CONFIG) {
+    const { shooter, target } = attempt;
+    const distanceM = (0, geo_1.haversineMeters)(shooter, target);
+    const timeSkewMs = Math.abs(shooter.ts - target.ts);
+    const fail = (reason) => ({
+        hit: false, reason, confidence: 0,
+        distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+    });
+    if (timeSkewMs > cfg.maxTimeSkewMs) {
+        return fail('time_skew');
+    }
+    if (distanceM > cfg.maxRangeM) {
+        return fail('out_of_range');
+    }
+    const accSum = Math.max(0, shooter.accuracyM) + Math.max(0, target.accuracyM);
+    const freshScore = 1 - timeSkewMs / cfg.maxTimeSkewMs;
+    const gpsScore = Math.max(0, 1 - accSum / 30);
+    const confidence = 0.6 * freshScore + 0.4 * gpsScore;
+    if (confidence < cfg.minConfidence) {
+        return {
+            hit: false, reason: 'low_confidence', confidence,
+            distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+        };
+    }
+    return {
+        hit: true, reason: null, confidence,
+        distanceM, angleDeltaDeg: null, toleranceDeg: null, timeSkewMs,
+    };
+}
+exports.validateHitOmni = validateHitOmni;
