@@ -8,6 +8,10 @@
     "client",
     "packages/arops-shared"
   ],
+  "overrides": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
   "scripts": {
     "lint": "eslint server client",
     "typecheck": "npm run typecheck --workspace=server",
