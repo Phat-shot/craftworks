@@ -2,7 +2,6 @@ package one.srz.aropswear.model
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.net.Uri
 import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
@@ -122,9 +121,19 @@ object PairingRepository {
      */
     suspend fun checkClaimViaDataLayer(context: Context): Boolean = withContext(Dispatchers.IO) {
         try {
-            val buffer = Tasks.await(Wearable.getDataClient(context).getDataItems(Uri.parse("wear://*/arops/claim")))
+            // getDataItems(Uri) with no explicit filter type defaults to
+            // FILTER_LITERAL (exact match) — "*" is only a documented
+            // wildcard in a manifest's android:host, NOT here, so this was
+            // very likely never matching a single real DataItem (whose
+            // host is always an actual node ID once synced) regardless of
+            // whether the phone's write itself succeeded. The unfiltered,
+            // zero-arg overload plus a client-side path check is
+            // unambiguous — it can't silently no-op on a URI-matching
+            // technicality.
+            val buffer = Tasks.await(Wearable.getDataClient(context).dataItems)
             var claimed = false
             for (item in buffer) {
+                if (item.uri.path != "/arops/claim") continue
                 val map = DataMapItem.fromDataItem(item.freeze()).dataMap
                 val scanned = map.getString("token")
                 if (scanned != null && tryClaim(scanned)) claimed = true

@@ -30,16 +30,26 @@
         <!-- Receives pairing + game-state pushes from the phone over the
              Data Layer API (MessageClient) — see GameStateListenerService
              for the "/arops/claim" (pairing) and "/arops/state" (match
-             state) paths, both under this one prefix. -->
+             state) paths, both under this one prefix (filtered in code via
+             event.path, not here).
+
+             BIND_LISTENER, not MESSAGE_RECEIVED: reported bug — phone
+             consistently reported a successful send, watch's own node
+             check confirmed a reachable phone, yet the claim never
+             registered, with no trace of it even being rejected (see
+             PairingRepository.lastRejectedToken, which stayed empty). A
+             WearableListenerService is bound directly by Play Services via
+             BIND_LISTENER; MESSAGE_RECEIVED + a <data> element is an
+             intent-broadcast pattern that doesn't apply to this API at all
+             — with the wrong action declared, Play Services never
+             discovers this service as a listener, so onMessageReceived
+             would never fire regardless of connectivity or the message
+             ever having been sent. -->
         <service
             android:name=".GameStateListenerService"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-                <data
-                    android:scheme="wear"
-                    android:host="*"
-                    android:pathPrefix="/arops/" />
+                <action android:name="com.google.android.gms.wearable.BIND_LISTENER" />
             </intent-filter>
         </service>
 
