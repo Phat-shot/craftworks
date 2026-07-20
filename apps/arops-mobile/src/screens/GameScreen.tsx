@@ -155,6 +155,25 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     return () => clearTimeout(t);
   }, []);
 
+  // Reported: GPS recovers reliably once the "Keine Position" banner is
+  // manually tapped, but not on its own — the hook's own internal 4s-silence
+  // watchdog (useTelemetry.ts) respects an in-flight guard that a manual tap
+  // force-clears, so it doesn't reliably unstick things by itself. This
+  // automates exactly what the tap does, every 30s, so a player doesn't have
+  // to notice and act on a stuck fix themselves. Read via a ref (not a
+  // `telemetry.sample`/`retryPosition` dependency) since retryPosition is a
+  // fresh, unmemoized closure every render — depending on it directly would
+  // tear down and restart this interval on every single tick, never letting
+  // it actually fire.
+  const telemetryRef = useRef(telemetry);
+  telemetryRef.current = telemetry;
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (!telemetryRef.current.sample) telemetryRef.current.retryPosition();
+    }, 30_000);
+    return () => clearInterval(iv);
+  }, []);
+
   const [viewPopupOpen, setViewPopupOpen] = useState(false);
   const [endRecapOpen, setEndRecapOpen] = useState(false);
   // Measured (not guessed) so the settings FAB sits right above the action
@@ -1036,20 +1055,6 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </View>
       </View>
 
-      {!telemetry.sample && (
-        initGraceOver ? (
-          <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryPosition}>
-            <Icon name="close" size={12} color="#100" />
-            <Text style={st.geoTxt}>Keine Position — antippen zum Neustart</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={st.geoInit}>
-            <Icon name="hourglass" size={12} color="#c0a0f0" />
-            <Text style={st.geoInitTxt}>Initialisiere GPS…</Text>
-          </View>
-        )
-      )}
-
       {activeHeadingDeg === null && (
         initGraceOver ? (
           <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryHeading}>
@@ -1270,6 +1275,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
         <Icon name="watch" size={18} color={watchSync.paired ? '#f0c840' : '#605850'} />
       </View>
+      {/* GPS-Status, dritte Fab in derselben Reihe — anders als IR/Uhr oben
+          antippbar (erzwingt telemetry.retryPosition, dieselbe Aktion wie
+          die frühere volle Banner-Leiste, die diese Fab ersetzt): grau =
+          sucht noch (Grace-Zeit läuft), rot = nicht verfügbar (Grace um,
+          kein Fix), grün = verfügbar. Zusätzlich alle 30s automatischer
+          Retry-Versuch solange kein Fix da ist (siehe telemetryRef-Effect
+          oben) — Tippen bleibt trotzdem für sofortigen Neustart nützlich. */}
+      <TouchableOpacity style={st.gpsStatusFab} onPress={telemetry.retryPosition}>
+        <Icon name="crosshair" size={18}
+          color={telemetry.sample ? '#80ff40' : initGraceOver ? '#ff6040' : '#605850'} />
+      </TouchableOpacity>
 
       {/* Floating settings toggle — pulled out of the bottom bar so that bar
           can stay exactly Perk1 | Schuss | Perk2, symmetric. Sits directly
@@ -1412,6 +1428,12 @@ const st = StyleSheet.create({
   },
   espStatusFab: {
     position: 'absolute', left: 14, top: 86, width: 38, height: 38, borderRadius: 8,
+    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    alignItems: 'center', justifyContent: 'center', zIndex: 20,
+  },
+  gpsStatusFab: {
+    // Third in the same row, right of watchStatusFab.
+    position: 'absolute', left: 102, top: 86, width: 38, height: 38, borderRadius: 8,
     backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
