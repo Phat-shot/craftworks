@@ -85,7 +85,13 @@ function registerGameHandlers(io, socket, db) {
   socket.on('lobby:start', async ({ lobbyId }) => {
     try {
     const { rows } = await db.query('SELECT * FROM lobbies WHERE id=$1', [lobbyId]);
-    if (!rows[0]) return socket.emit('error', { code: 'lobby_not_found' });
+    if (!rows[0]) {
+      // See platform.js's lobby:ar_update for why this is logged: lobbies
+      // are never DELETEd anywhere, only their status updated, so this is
+      // unexpected and worth a server-side trail if it recurs.
+      console.warn(`[lobby:start] lobby_not_found lobbyId=${lobbyId} userId=${userId}`);
+      return socket.emit('error', { code: 'lobby_not_found' });
+    }
     if (rows[0].host_id !== userId) return socket.emit('error', { code: 'not_host' });
     const lobby = rows[0];
 

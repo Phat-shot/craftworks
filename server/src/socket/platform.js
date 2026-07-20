@@ -185,7 +185,17 @@ function registerPlatformHandlers(io, socket, db) {
   socket.on('lobby:ar_update', async ({ lobbyId, arSettings }) => {
     try {
       const { rows } = await db.query('SELECT host_id, game_mode, workshop_map_config FROM lobbies WHERE id=$1', [lobbyId]);
-      if (!rows[0]) return socket.emit('error', { code: 'lobby_not_found' });
+      if (!rows[0]) {
+        // Reported intermittently while a lobby is demonstrably still in
+        // active use (other members present, host mid-session) — lobbies
+        // are never DELETEd anywhere in this codebase (only their `status`
+        // is updated), so a genuinely missing row here is unexpected.
+        // Logged rather than silently swallowed so a recurrence is
+        // diagnosable from server logs instead of only a vague client-side
+        // report.
+        console.warn(`[lobby:ar_update] lobby_not_found lobbyId=${lobbyId} userId=${userId}`);
+        return socket.emit('error', { code: 'lobby_not_found' });
+      }
       if (rows[0].host_id !== userId) return socket.emit('error', { code: 'not_host' });
       if (rows[0].game_mode !== 'ar_ops') return socket.emit('error', { code: 'wrong_mode' });
 
