@@ -63,16 +63,22 @@ console.log('\n═══ Scout: wide cone ═══');
   tel(gs, 'S', MUC);
   tel(gs, 'H1', posH1);
 
-  check('35° off-angle at 30m misses the default cone (baseline, no class)', () => {
-    const gsBaseline = createGame('scout1b',
+  // Scout is now the default class (createAropsGame), so omitting
+  // ar_settings.classes entirely is no longer a distinct "narrow cone"
+  // baseline — it resolves to the exact same widened cone as an explicit
+  // `classes: { S: 'scout' }`. This used to assert a MISS here (the old
+  // classless narrow-cone default); now checks the defaulting mechanism
+  // itself produces the identical hit as the explicit-Scout case below.
+  check('35° off-angle at 30m ALSO hits with no class set at all (Scout is the default)', () => {
+    const gsDefault = createGame('scout1b',
       [{ userId: 'S', username: 'S' }, { userId: 'H1', username: 'H1' }],
       { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
         roles: { S: 'seeker', H1: 'hider' }, hidingDurationMs: 0, gameDurationMs: 600_000, hitCooldownMs: 50 } });
-    tick(gsBaseline, 10);
-    tel(gsBaseline, 'S', MUC);
-    tel(gsBaseline, 'H1', posH1);
-    const r = shootAt(gsBaseline, 'S', undefined);
-    assert.equal(r.hit, false, JSON.stringify(r));
+    tick(gsDefault, 10);
+    tel(gsDefault, 'S', MUC);
+    tel(gsDefault, 'H1', posH1);
+    const r = shootAt(gsDefault, 'S', undefined);
+    assert.equal(r.hit, true, JSON.stringify(r));
   });
 
   check('same 35° off-angle at 30m hits for a Scout (widened cone)', () => {
@@ -211,7 +217,10 @@ console.log('\n═══ Reveal-Trap lifecycle ═══');
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       timings: FAST, targetScore: 10, gameDurationMs: 600_000,
-      classes: { A1: 'scout' }, revealTrapCooldownMs: 500, revealTrapDurationMs: 5000, revealTrapRevealMs: 3000 } });
+      // B1 needs an EXPLICIT non-Scout class — Scout is now the default for
+      // any unset class, so leaving B1's out would make it Scout too and
+      // defeat the point of this test (it used to rely on "unset = classless").
+      classes: { A1: 'scout', B1: 'sniper' }, revealTrapCooldownMs: 500, revealTrapDurationMs: 5000, revealTrapRevealMs: 3000 } });
   tick(gs, 10);
   tel(gs, 'A1', MUC);
 
@@ -245,8 +254,8 @@ console.log('\n═══ Reveal-Trap lifecycle ═══');
   });
 }
 
-// ═══ REGRESSION: classless players behave exactly as before ═
-console.log('\n═══ Regression: no ar_settings.classes → unchanged behavior ═══');
+// ═══ Defaulting: no ar_settings.classes → everyone is Scout ═
+console.log('\n═══ Defaulting: no ar_settings.classes → Scout for everyone ═══');
 {
   const gs = createGame('regress1',
     [{ userId: 'S', username: 'S' }, { userId: 'H1', username: 'H1' }],
@@ -254,12 +263,12 @@ console.log('\n═══ Regression: no ar_settings.classes → unchanged behavi
       roles: { S: 'seeker', H1: 'hider' }, hidingDurationMs: 0, gameDurationMs: 600_000, hitCooldownMs: 50 } });
   tick(gs, 10);
 
-  check('players have class: null when no ar_settings.classes is given', () => {
-    assert.equal(gs.players.S.class, null);
-    assert.equal(gs.players.H1.class, null);
+  check('players default to class: scout when no ar_settings.classes is given', () => {
+    assert.equal(gs.players.S.class, 'scout');
+    assert.equal(gs.players.H1.class, 'scout');
   });
 
-  check('a classless seeker hits exactly like the pre-class baseline (dead-center at 50m)', () => {
+  check('a defaulted-to-Scout seeker still hits dead-center at 50m (unaffected by the wider cone)', () => {
     const posH1 = shared.destinationPoint(MUC, 0, 50);
     tel(gs, 'S', MUC);
     tel(gs, 'H1', posH1);
