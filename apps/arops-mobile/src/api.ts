@@ -68,7 +68,18 @@ async function tryRefresh(): Promise<RefreshResult> {
   } catch {
     return 'network_error';
   }
-  if (!res.ok) return 'rejected';
+  if (!res.ok) {
+    // Only a genuine 401 (server explicitly rejects this refresh token —
+    // see auth.js's /refresh route, the only place it sends one) means the
+    // session is truly dead. Any OTHER non-2xx status (500/502/503 — e.g.
+    // the test server mid-redeploy/restart, which happens on every push
+    // this session) is a transient server-side problem, not proof the
+    // refresh token itself is invalid. Treating those as 'rejected' too
+    // was wiping perfectly valid 30-day tokens on nothing more than bad
+    // timing against a server restart — reported as "kill the app, back to
+    // login" with no actual session issue involved.
+    return res.status === 401 ? 'rejected' : 'network_error';
+  }
   try {
     const d = await res.json();
     if (!d.access_token) return 'rejected';
