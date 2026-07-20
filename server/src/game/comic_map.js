@@ -51,11 +51,11 @@ function polygonBbox(polygon, paddingDeg = 0.0005) {
   return { south: minLat - paddingDeg, west: minLon - paddingDeg, north: maxLat + paddingDeg, east: maxLon + paddingDeg };
 }
 
-/** Fetch buildings/paths/vegetation for the field's bounding box from OSM Overpass.
- *  The public instance blocks/throttles requests without a descriptive
- *  User-Agent and a permissive Accept header (verified live during planning). */
-async function fetchComicMapFeatures(polygon) {
-  const { south, west, north, east } = polygonBbox(polygon);
+/** Fetch buildings/paths/vegetation for an explicit bounding box from OSM
+ *  Overpass. The public instance blocks/throttles requests without a
+ *  descriptive User-Agent and a permissive Accept header (verified live
+ *  during planning). */
+async function fetchComicMapFeaturesForBbox({ south, west, north, east }) {
   const bbox = `${south},${west},${north},${east}`;
   const query = `[out:json][timeout:15];(` +
     `way["building"](${bbox});` +
@@ -93,7 +93,78 @@ async function fetchComicMapFeatures(polygon) {
   return reduceOverpassElements(data.elements);
 }
 
+// ═══════════════════════════════════════════════════════════
+//  SERVER-SIDE AREA CACHE (comic_map_cache table, see schema.sql)
+//
+//  Every lobby drawn in roughly the same physical spot (same park/field,
+//  reused across matches) previously re-queried Overpass from scratch —
+//  wasteful against a shared, rate-limited free public instance. Now: fetch
+//  and store a bbox noticeably LARGER than the immediate field, so nearby
+//  future lobbies are served entirely from the cache; only fetch fresh from
+//  Overpass when no cached region fully covers what's needed.
+// ═══════════════════════════════════════════════════════════
+
+/** True if cached bbox `a` fully covers requested bbox `b`. */
+function bboxContains(a, b) {
+  return a.south <= b.south && a.west <= b.west && a.north >= b.north && a.east >= b.east;
+}
+
+/** Cached regions can be much larger than the current field — trim the
+ *  response back down to just what's actually needed (any point of a
+ *  feature inside the requested bbox keeps the whole feature). */
+function filterFeaturesToBbox(features, bbox) {
+  return features.filter(f => f.points.some(p =>
+    p.lat >= bbox.south && p.lat <= bbox.north && p.lon >= bbox.west && p.lon <= bbox.east));
+}
+
+// Cache-fetch bbox = the field's own bbox, padded by a multiple of its own
+// size — proportional so a tiny field doesn't cache a needlessly huge area
+// and vice versa — but hard-capped so a huge field's query can't balloon
+// into an enormous, slow (or truncated, see COMIC_MAP_MAX_FEATURES) Overpass
+// request regardless.
+const CACHE_EXPAND_FACTOR = 2;
+const CACHE_MAX_PAD_DEG = 0.01; // ~1.1km at the equator
+
+/** The (larger) bbox actually fetched from Overpass and stored in the cache
+ *  for a given field polygon — exported for tests, not just internal use. */
+function expandedCacheBbox(polygon) {
+  const tight = polygonBbox(polygon);
+  const latSpan = tight.north - tight.south;
+  const lonSpan = tight.east - tight.west;
+  const padLat = Math.min(latSpan * CACHE_EXPAND_FACTOR, CACHE_MAX_PAD_DEG);
+  const padLon = Math.min(lonSpan * CACHE_EXPAND_FACTOR, CACHE_MAX_PAD_DEG);
+  return {
+    south: tight.south - padLat, west: tight.west - padLon,
+    north: tight.north + padLat, east: tight.east + padLon,
+  };
+}
+
+/** Main entry point for lobby:generate_comic_map — cache-aware in front of
+ *  fetchComicMapFeaturesForBbox. `db` is passed in rather than required at
+ *  module scope, keeping this file's own dependencies as they were (pure/
+ *  network helpers, no implicit DB coupling — see file header). */
+async function getCachedOrFetchComicMapFeatures(db, polygon) {
+  const needed = polygonBbox(polygon);
+  const { rows } = await db.query(
+    `SELECT features FROM comic_map_cache
+     WHERE south <= $1 AND west <= $2 AND north >= $3 AND east >= $4
+     ORDER BY fetched_at DESC LIMIT 1`,
+    [needed.south, needed.west, needed.north, needed.east]
+  );
+  if (rows[0]) {
+    return filterFeaturesToBbox(rows[0].features, needed);
+  }
+  const cacheBbox = expandedCacheBbox(polygon);
+  const features = await fetchComicMapFeaturesForBbox(cacheBbox);
+  await db.query(
+    `INSERT INTO comic_map_cache (south, west, north, east, features) VALUES ($1,$2,$3,$4,$5)`,
+    [cacheBbox.south, cacheBbox.west, cacheBbox.north, cacheBbox.east, JSON.stringify(features)]
+  ).catch(e => console.error('comic_map_cache insert failed:', e.message)); // cache write is best-effort, never blocks returning the map
+  return filterFeaturesToBbox(features, needed);
+}
+
 module.exports = {
   COMIC_MAP_COOLDOWN_MS,
-  comicFeatureType, reduceOverpassElements, polygonBbox, fetchComicMapFeatures,
+  comicFeatureType, reduceOverpassElements, polygonBbox, fetchComicMapFeaturesForBbox,
+  bboxContains, filterFeaturesToBbox, expandedCacheBbox, getCachedOrFetchComicMapFeatures,
 };

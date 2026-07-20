@@ -483,3 +483,21 @@ ALTER TABLE brand_maps ADD COLUMN IF NOT EXISTS game_config JSONB DEFAULT NULL;
 -- new brands. No user has this by default; set manually after deploy:
 --   UPDATE users SET is_admin=true WHERE email='...';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ═══════════════════════════════════════════════════════════════
+-- AR OPS: server-side comic-map area cache (see server/src/game/comic_map.js)
+-- Each row is one Overpass fetch, deliberately covering a LARGER bbox than
+-- the field that triggered it, so nearby future lobbies (same park/field,
+-- reused across matches) are served from here instead of re-querying the
+-- shared, rate-limited public Overpass API.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS comic_map_cache (
+  id         SERIAL PRIMARY KEY,
+  south      DOUBLE PRECISION NOT NULL,
+  west       DOUBLE PRECISION NOT NULL,
+  north      DOUBLE PRECISION NOT NULL,
+  east       DOUBLE PRECISION NOT NULL,
+  features   JSONB NOT NULL,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_comic_map_cache_bounds ON comic_map_cache(south, west, north, east);

@@ -6,7 +6,7 @@
 // keine Änderung an der eigentlichen Domain-Logik.
 const { RACES } = require('../game/towers');
 const aropsShared = require('@craftworks/arops-shared');
-const { COMIC_MAP_COOLDOWN_MS, fetchComicMapFeatures } = require('../game/comic_map');
+const { COMIC_MAP_COOLDOWN_MS, getCachedOrFetchComicMapFeatures } = require('../game/comic_map');
 const users = require('../repositories/users');
 
 // Per-lobby Cooldown für Comic-Map-Regeneration — Module-Scope-Map, EINMAL
@@ -359,7 +359,7 @@ function registerPlatformHandlers(io, socket, db) {
       }
       comicMapLastTry.set(lobbyId, Date.now());
 
-      const features = await fetchComicMapFeatures(polygon);
+      const features = await getCachedOrFetchComicMapFeatures(db, polygon);
       const comicMap = { features, polygonSnapshot: JSON.stringify(polygon), fetchedAt: Date.now() };
       const next = { ...ar, comicMap };
       const cfg = { ...(rows[0].workshop_map_config || {}), game_mode: 'ar_ops', ar_settings: next };

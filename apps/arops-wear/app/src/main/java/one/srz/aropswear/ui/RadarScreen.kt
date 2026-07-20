@@ -76,13 +76,21 @@ fun RadarScreen(state: GameState, onTap: () -> Unit, onLongPress: () -> Unit) {
 
         val mm = state.remainingS / 60
         val ss = state.remainingS % 60
+        // updatedAtMs == 0L means no push has EVER arrived (see GameState) —
+        // this screen is reachable either from a real pairing OR by just
+        // tapping the QR code as a debug preview (see PairingScreen), which
+        // otherwise looks IDENTICAL to "paired but broken": same black
+        // background, same center dot, "– · 0:00" at top. Made this
+        // ambiguity explicit instead of silent, since it was reported as
+        // exactly that — "black screen with a dot, no connection".
+        val neverConnected = state.updatedAtMs == 0L
         // Tap: debug info screen (connection/pairing status, see
         // ui/DebugScreen.kt). Long-press: escape hatch back to the pairing
         // screen. Needed because `claimed` now persists across app restarts
         // (see PairingRepository) — without this, re-pairing a new phone or
         // starting a fresh match would have no way back to the QR code.
         Text(
-            text = "${state.phase} · $mm:${ss.toString().padStart(2, '0')}",
+            text = if (neverConnected) "Vorschau, keine Daten · Tippen: Status" else "${state.phase} · $mm:${ss.toString().padStart(2, '0')}",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.align(Alignment.TopCenter)

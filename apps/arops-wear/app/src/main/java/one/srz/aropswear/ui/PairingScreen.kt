@@ -79,10 +79,15 @@ fun PairingScreen(onTapCode: () -> Unit) {
             },
         )
         Text(
-            text = "Scannen · Tippen = Radar-Vorschau",
+            text = "Mit dem Handy scannen zum Koppeln",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            text = "(Tippen hier = Vorschau ohne Kopplung)",
+            color = ComicPalette.gold.copy(alpha = 0.55f),
+            style = MaterialTheme.typography.caption3,
         )
         Text(
             text = "v${BuildConfig.VERSION_NAME}",

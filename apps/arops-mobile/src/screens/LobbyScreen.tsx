@@ -137,37 +137,56 @@ export default function LobbyScreen({
 
   // One-shot fetch (not a live watch) — this is just a reference point for
   // drawing the field, not gameplay telemetry, so no need to keep polling.
-  // GPS can be unreliable on first try (cold fix, permission dialog timing) —
-  // getCurrentPositionAsync has no built-in timeout and can hang indefinitely
-  // on some devices/cold fixes, previously leaving myPosLoading stuck true
-  // forever with no way out except tapping retry (which just repeated the
-  // same possibly-hung call). Now: an instant cached fix first if one
-  // exists (so the map has *something* right away), a hard 8s timeout on
-  // the fresh fix, and up to 2 automatic retries before finally falling
-  // back to the manual retry button.
-  const loadMyPosition = async (attempt = 0) => {
+  // GPS can be unreliable on first try (cold fix, permission dialog timing).
+  // Earlier version: recursive getCurrentPositionAsync attempts each wrapped
+  // in withTimeout. Reported symptom: stuck showing "1/3" forever, spinner
+  // never stopping — getCurrentPositionAsync has known hangs on some Android/
+  // expo-location versions where the underlying NATIVE call itself never
+  // settles, and (unconfirmed but plausible) requestForegroundPermissionsAsync
+  // itself was never time-boxed at all, so a hang there before even reaching
+  // the timeout-wrapped call would freeze progress with no way out — not even
+  // the manual retry button, since it's disabled by myPosLoading which would
+  // then never flip back to false.
+  //
+  // Rebuilt so the retry loop's progress depends ONLY on a plain JS timer,
+  // never on any expo-location promise actually settling — it is therefore
+  // structurally impossible for this to hang indefinitely again, regardless
+  // of which native call turns out to be the culprit. watchPositionAsync is
+  // also generally more reliable for acquiring a first fix than one-shot
+  // getCurrentPositionAsync (keeps trying continuously instead of one single
+  // snapshot attempt) — take its first update, then unsubscribe immediately.
+  const loadMyPosition = async () => {
     setMyPosLoading(true);
     setMyPosErr(false);
-    setMyPosAttempt(attempt);
-    try {
-      const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
-      if (attempt === 0) {
-        Location.getLastKnownPositionAsync().then(cached => {
-          if (cached) setMyPos(p => p ?? { lat: cached.coords.latitude, lon: cached.coords.longitude });
-        }).catch(() => {});
-      }
-      const pos = await withTimeout(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }), 8000);
+    setMyPosAttempt(0);
+
+    const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
+    if (!perm || perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
+
+    Location.getLastKnownPositionAsync().then(cached => {
+      if (cached) setMyPos(p => p ?? { lat: cached.coords.latitude, lon: cached.coords.longitude });
+    }).catch(() => {});
+
+    let settled = false;
+    // Plain object holder (not a bare `let`) — TS otherwise over-narrows a
+    // closure-captured `let` reassigned only inside callbacks.
+    const subHolder: { current: Location.LocationSubscription | null } = { current: null };
+    Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 }, pos => {
+      if (settled) return;
+      settled = true;
       setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
       setMyPosLoading(false);
-    } catch {
-      if (attempt < 2) {
-        loadMyPosition(attempt + 1);
-      } else {
-        setMyPosErr(true);
-        setMyPosLoading(false);
-      }
+      subHolder.current?.remove();
+    }).then(s => { subHolder.current = s; if (settled) s.remove(); }).catch(() => {});
+
+    const WINDOW_MS = 8000;
+    const WINDOWS = 3;
+    for (let i = 0; i < WINDOWS && !settled; i++) {
+      setMyPosAttempt(i);
+      await new Promise(r => setTimeout(r, WINDOW_MS));
     }
+    subHolder.current?.remove();
+    if (!settled) { setMyPosErr(true); setMyPosLoading(false); }
   };
 
   useEffect(() => { loadMyPosition(); }, []);
