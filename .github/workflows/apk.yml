@@ -12,12 +12,18 @@ name: APK Build
 # one.srz.arops.beta) und Icon (mit/ohne BETA-Ribbon, auch im App-Drawer)
 # unterscheiden sich, damit beide gleichzeitig auf demselben Gerät
 # installiert sein können, statt sich beim Sideload gegenseitig zu
-# überschreiben. APK-Dateiname spiegelt das (main: ar-ops-android-v<Version>,
-# test: ar-ops-android-beta-v<Version>). BUILD_TIME + COMMIT_SHA werden
-# ebenfalls gesetzt und in der App unter Einstellungen angezeigt (App.tsx) —
-# damit im Zweifel eindeutig ist, welcher Commit gerade auf dem Testgerät
-# läuft, statt sich allein auf die von Hand hochgezählte Versionsnummer
-# verlassen zu müssen.
+# überschreiben. APK-Dateiname ist bewusst FEST (main: ar-ops-android.apk,
+# test: ar-ops-android-beta.apk) statt versioniert — eine Versionsnummer im
+# Dateinamen bedeutet, dass `gh release upload --clobber` unten nur exakt
+# denselben Dateinamen ersetzt; jeder Versions-Bump hätte einen NEUEN
+# Dateinamen erzeugt und wäre dem alten Asset auf derselben Release einfach
+# hinzugefügt worden statt es zu ersetzen — mit der Zeit sammeln sich so
+# mehrere veraltete APKs auf ein und derselben Release an, und es ist nicht
+# mehr eindeutig, welche davon die aktuelle ist. Mit festem Namen ersetzt
+# jeder Build zuverlässig genau die eine Datei, die schon da ist — immer nur
+# der neueste Stand pro Branch. BUILD_TIME + COMMIT_SHA werden weiterhin
+# gesetzt und in der App unter Einstellungen angezeigt (App.tsx), um trotzdem
+# eindeutig zu identifizieren, welcher Commit gerade läuft.
 #
 # assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
 # laufenden Metro-Dev-Server und fragt beim Start nach dessen URL ("Unable
@@ -30,7 +36,8 @@ name: APK Build
 #
 # Versionsschema (siehe CLAUDE.md): jedes Release (Merge auf main) +1, jeder
 # Bugfix auf test +0.1 — app.json "version" ist die einzige Quelle dafür,
-# vor jedem Push von Hand hochzählen.
+# vor jedem Push von Hand hochzählen. Rein informativ (In-App-Anzeige), seit
+# COMMIT_SHA oben nicht mehr Grundlage für den APK-Dateinamen.
 on:
   push:
     branches: [main, test]
@@ -108,14 +115,13 @@ jobs:
         working-directory: apps/arops-mobile/android
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: "APK umbenennen (main: ar-ops-android-v<Version>.apk, test: ...-beta-v<Version>.apk)"
+      - name: "APK umbenennen (main: ar-ops-android.apk, test: ar-ops-android-beta.apk)"
         working-directory: apps/arops-mobile
         run: |
-          VERSION=$(node -p "require('./app.json').expo.version")
           if [ "$APP_CHANNEL" = "main" ]; then
-            FILENAME="ar-ops-android-v${VERSION}.apk"
+            FILENAME="ar-ops-android.apk"
           else
-            FILENAME="ar-ops-android-beta-v${VERSION}.apk"
+            FILENAME="ar-ops-android-beta.apk"
           fi
           mv android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/$FILENAME"
           echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"

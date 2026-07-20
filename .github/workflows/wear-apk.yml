@@ -14,8 +14,12 @@ name: Wear OS APK Build
 # gleichzeitig auf derselben Uhr installiert sein können. assembleRelease
 # (nicht assembleDebug): signiert über AGP's Standard-Debug-Keystore (siehe
 # signingConfigs in build.gradle.kts), für Sideload/internes Testen
-# ausreichend, wie bei der Handy-App. APK-Dateiname spiegelt den Channel
-# (main: ar-ops-wear-v<Version>, test: ar-ops-wear-beta-v<Version>).
+# ausreichend, wie bei der Handy-App. APK-Dateiname ist bewusst FEST (main:
+# ar-ops-wear.apk, test: ar-ops-wear-beta.apk) statt versioniert — siehe
+# apk.yml's ausführlicher Kommentar dazu: ein Versions-Bump hätte sonst
+# einen neuen Dateinamen erzeugt, den `gh release upload --clobber` unten
+# nicht ersetzt, sondern als zusätzliches Asset stehen lässt. Fester Name =
+# jeder Build ersetzt zuverlässig genau die eine Datei pro Branch.
 on:
   push:
     branches: [main, test]
@@ -76,14 +80,13 @@ jobs:
         working-directory: apps/arops-wear
         run: gradle :app:assembleRelease --no-daemon
 
-      - name: "APK umbenennen (main: ar-ops-wear-v<Version>.apk, test: ...-beta-v<Version>.apk)"
+      - name: "APK umbenennen (main: ar-ops-wear.apk, test: ar-ops-wear-beta.apk)"
         working-directory: apps/arops-wear
         run: |
-          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
           if [ "$APP_CHANNEL" = "main" ]; then
-            FILENAME="ar-ops-wear-v${VERSION}.apk"
+            FILENAME="ar-ops-wear.apk"
           else
-            FILENAME="ar-ops-wear-beta-v${VERSION}.apk"
+            FILENAME="ar-ops-wear-beta.apk"
           fi
           mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/$FILENAME"
           echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"
