@@ -17,6 +17,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+// Without this, `cont.resume(value)` below resolves to CancellableContinuation's
+// own raw 2-arg member (value, onCancellation) instead of this 1-arg
+// convenience extension — "No value passed for parameter 'onCancellation'".
+import kotlin.coroutines.resume
 
 /**
  * Direct Google Play Services FusedLocationProviderClient access, bypassing
