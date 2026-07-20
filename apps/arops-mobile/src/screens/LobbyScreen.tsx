@@ -40,6 +40,9 @@ interface ArSettings {
   // gegen jeden — no roles/teams) or 'the_ship' (secret assassin-chain, no
   // roles) — see server's MODES.hide_and_seek.
   hsVariant?: 'classic' | 'ffa' | 'the_ship';
+  // Team/FFA variant for the 4 team-capable modes (domination, ctf,
+  // seek_destroy, deathmatch) — see server's cfg.teamVariant in arops.js.
+  teamVariant?: 'team' | 'ffa';
   // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
   destroyVariant?: 'instant' | 'defuse';
   destroyReactivate?: boolean;
@@ -122,6 +125,11 @@ export default function LobbyScreen({
   const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(null);
   const [myPosLoading, setMyPosLoading] = useState(false);
   const [myPosErr, setMyPosErr] = useState(false);
+  // Surfaced in the UI while loading — a GPS cold fix can legitimately take
+  // up to ~24s (3 attempts × 8s timeout) outdoors; with nothing but a small
+  // spinner icon to show for it, that reads as "the app is stuck" instead of
+  // "still searching". Attempt count included so long waits stay legible.
+  const [myPosAttempt, setMyPosAttempt] = useState(0);
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
@@ -140,6 +148,7 @@ export default function LobbyScreen({
   const loadMyPosition = async (attempt = 0) => {
     setMyPosLoading(true);
     setMyPosErr(false);
+    setMyPosAttempt(attempt);
     try {
       const perm = await Location.requestForegroundPermissionsAsync();
       if (perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
@@ -234,6 +243,14 @@ export default function LobbyScreen({
   const emitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (emitTimerRef.current) clearTimeout(emitTimerRef.current); }, []);
   const emitUpdate = (patch: Partial<ArSettings>) => {
+    // Apply locally right away — otherwise the UI only reflects a change once
+    // the debounced emit below round-trips through the server, which reads as
+    // "nothing happened" if you tap again in the meantime. Worse, onMapPress
+    // builds its next point list off the `polygon`/`zones` closure variables
+    // (derived from `ar`) — without this, several taps within one debounce
+    // window all read the same stale array and each tap's patch overwrites
+    // the previous one's pending point instead of appending to it.
+    setAr(prev => ({ ...prev, ...patch }));
     pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
     if (emitTimerRef.current) clearTimeout(emitTimerRef.current);
     emitTimerRef.current = setTimeout(() => {
@@ -252,6 +269,7 @@ export default function LobbyScreen({
   // ffa/The Ship have no roles at all (not seeker/hider, not team) —
   // role/team assignment UI only makes sense for the classic variant.
   const rolesApply = subMode === 'hide_and_seek' && hsVariant === 'classic';
+  const teamVariant = teamMode && ar.teamVariant === 'ffa' ? 'ffa' : 'team';
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
@@ -503,16 +521,27 @@ export default function LobbyScreen({
           derselben Position — sonst wirkt die Lobby inkonsistent (leere
           Lücke bei genau diesen beiden Modi, während jeder andere Modus
           dort etwas zeigt).*/}
-      {subMode === 'domination' && (
+      {/* Team/FFA toggle for the 4 team-capable modes — analogous to Hide &
+          Seek's variant picker above. Zerstören's 'defuse' sub-variant is
+          inherently two-sided (attacker arms / defender defuses) and has no
+          ffa reading, so that picker below hides it while ffa is selected. */}
+      {teamMode && (
         <View style={st.rowBtns}>
-          <Icon name="people" size={13} color="#c0a0f0" />
-          <Text style={st.smallTxt}>Team-Modus (A vs. B)</Text>
-        </View>
-      )}
-      {subMode === 'ctf' && (
-        <View style={st.rowBtns}>
-          <Icon name="people" size={13} color="#c0a0f0" />
-          <Text style={st.smallTxt}>Team-Modus (A vs. B) · Captain platziert die Basis</Text>
+          <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'team' && st.smallBtnActive]}
+            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'team' })}>
+            <Icon name="people" size={13} color={teamVariant === 'team' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, teamVariant === 'team' && st.smallTxtActive]}>Team (A vs. B)</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'ffa' && st.smallBtnActive]}
+            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'ffa' })}>
+            <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, teamVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
+          </TouchableOpacity>
+          {(subMode === 'ctf' || subMode === 'deathmatch') && (
+            <Text style={st.smallTxt}>
+              {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
+            </Text>
+          )}
         </View>
       )}
       {isHost && rolesApply && (
@@ -535,12 +564,6 @@ export default function LobbyScreen({
           </TouchableOpacity>
         </View>
       )}
-      {subMode === 'seek_destroy' && (
-        <View style={st.rowBtns}>
-          <Icon name="people" size={13} color="#c0a0f0" />
-          <Text style={st.smallTxt}>Team-Modus (A vs. B)</Text>
-        </View>
-      )}
       {isHost && subMode === 'seek_destroy' && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Zerstören:</Text>
@@ -548,21 +571,17 @@ export default function LobbyScreen({
             onPress={() => emitUpdate({ destroyVariant: 'instant' })}>
             <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ destroyVariant: 'defuse' })}>
-            <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
-          </TouchableOpacity>
+          {teamVariant === 'team' && (
+            <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
+              onPress={() => emitUpdate({ destroyVariant: 'defuse' })}>
+              <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.smallBtnActive]}
             onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
             <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
           </TouchableOpacity>
-        </View>
-      )}
-      {subMode === 'deathmatch' && (
-        <View style={st.rowBtns}>
-          <Icon name="people" size={13} color="#c0a0f0" />
-          <Text style={st.smallTxt}>Team-Modus (A vs. B) · Captain platziert die Basis</Text>
         </View>
       )}
       {isHost && subMode === 'deathmatch' && (
@@ -638,6 +657,11 @@ export default function LobbyScreen({
             <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
           )}
         </TouchableOpacity>
+        {myPosLoading && (
+          <View style={st.gpsStatusBadge}>
+            <Text style={st.gpsStatusTxt}>GPS wird gesucht… ({myPosAttempt + 1}/3)</Text>
+          </View>
+        )}
       </View>
 
       {ar.comicMap && (
@@ -786,7 +810,7 @@ export default function LobbyScreen({
       <View style={st.sectionRow}>
         <Icon name="people" size={13} color="#e0c080" />
         <Text style={st.section}>
-          Spieler {isHost ? (teamMode ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
+          Spieler {isHost ? ((teamMode && teamVariant === 'team') ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
         </Text>
       </View>
     </View>
@@ -794,7 +818,7 @@ export default function LobbyScreen({
 
   const footer = (
     <View>
-      {me && displayMembers.length > 0 && (teamMode || rolesApply) && (
+      {me && displayMembers.length > 0 && ((teamMode && teamVariant === 'team') || rolesApply) && (
         <View style={st.roleRow}>
           <Icon name={teamMode ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
             size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : '#e0c080'} />
@@ -805,12 +829,14 @@ export default function LobbyScreen({
           </Text>
         </View>
       )}
-      {me && displayMembers.length > 0 && !teamMode && !rolesApply && (
+      {me && displayMembers.length > 0 && !(teamMode && teamVariant === 'team') && !rolesApply && (
         <View style={st.roleRow}>
           <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color="#e0c080" />
           <Text style={st.role}>
             {hsVariant === 'the_ship'
               ? 'Dein Ziel wird nur dir angezeigt, sobald das Spiel startet'
+              : teamMode && teamVariant === 'ffa'
+              ? 'Jeder gegen jeden — jeder spielt für sich, keine Teams'
               : 'Jeder gegen jeden — keine festen Rollen oder Teams'}
           </Text>
         </View>
@@ -850,7 +876,7 @@ export default function LobbyScreen({
           <View style={st.row}>
             {item.isBot && <Icon name="robot" size={13} color="#807050" />}
             <Text style={st.name}>{item.username}</Text>
-            {teamMode ? (
+            {(teamMode && teamVariant === 'team') ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleTeam(item.id)}>
                 <Icon name="circle" size={11} color={teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050'} />
                 <Text style={[st.roleTag, { color: teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050' }]}>
@@ -941,6 +967,12 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
     alignItems: 'center', justifyContent: 'center',
   },
+  gpsStatusBadge: {
+    position: 'absolute', bottom: 14, left: 10, backgroundColor: 'rgba(20,16,32,.9)',
+    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
+    borderWidth: 1, borderColor: '#40a0ff',
+  },
+  gpsStatusTxt: { color: '#40a0ff', fontSize: 10, fontWeight: '700' },
   comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
   comicStaleBadge: {
     position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,

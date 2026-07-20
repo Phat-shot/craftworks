@@ -336,13 +336,16 @@ const MODES = {
     phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
     initState(gs) {
       gs.modeState = {
-        owners: Object.fromEntries(gs.zones.map(z => [z.id, null])),
-        capProgress: {},   // zid -> { team, ms }
-        teamScore: { a: 0, b: 0 },
+        owners: Object.fromEntries(gs.zones.map(z => [z.id, null])), // team letter, or userId in ffa
+        capProgress: {},   // zid -> { key, ms } (key: team letter, or userId in ffa)
+        teamScore: { a: 0, b: 0 },  // team variant only
+        playerScore: {},            // ffa variant only: userId -> score (seconds held)
       };
     },
     canShoot() { return null; },
-    targetFilter(gs, shooter, c) { return c.team !== shooter.team; },
+    targetFilter(gs, shooter, c) {
+      return gs.cfg.teamVariant === 'ffa' ? c.userId !== shooter.userId : c.team !== shooter.team;
+    },
     applyHit(gs, shooter, target, verdict, t) {
       applyFreeze(gs, target, shooter.userId, t);
       shooter.score += 5;
@@ -350,53 +353,77 @@ const MODES = {
     tick(gs, t, dtMs) {
       const ms = gs.modeState;
       if (gs.phase !== 'live') return;
-      // Zone capture + scoring
+      const ffa = gs.cfg.teamVariant === 'ffa';
+      // Zone capture + scoring — presentKeys is either the ≤1 team dwelling
+      // alone in the zone, or (ffa) the single player dwelling alone in it.
       for (const z of gs.zones) {
         const pres = zonePresence(gs, z, t);
-        const teamsIn = ['a', 'b'].filter(tm => pres.byTeam[tm].length > 0);
-        if (teamsIn.length === 1) {
-          const tm = teamsIn[0];
-          if (ms.owners[z.id] !== tm) {
+        const presentKeys = ffa ? pres.all : ['a', 'b'].filter(tm => pres.byTeam[tm].length > 0);
+        if (presentKeys.length === 1) {
+          const key = presentKeys[0];
+          if (ms.owners[z.id] !== key) {
             const prog = ms.capProgress[z.id];
-            const nextMs = (prog && prog.team === tm ? prog.ms : 0) + dtMs;
-            ms.capProgress[z.id] = { team: tm, ms: nextMs };
+            const nextMs = (prog && prog.key === key ? prog.ms : 0) + dtMs;
+            ms.capProgress[z.id] = { key, ms: nextMs };
             if (nextMs >= gs.timings.captureDwellMs) {
-              ms.owners[z.id] = tm;
+              ms.owners[z.id] = key;
               delete ms.capProgress[z.id];
-              for (const uid of pres.byTeam[tm]) gs.players[uid].score += 5;
-              pushEvent(gs, 'zone_captured', { zoneId: z.id, team: tm });
+              if (ffa) gs.players[key].score += 5;
+              else for (const uid of pres.byTeam[key]) gs.players[uid].score += 5;
+              pushEvent(gs, 'zone_captured', ffa ? { zoneId: z.id, userId: key } : { zoneId: z.id, team: key });
             }
           }
         }
         // contested or empty: progress pauses (kept, not reset)
         const owner = ms.owners[z.id];
-        if (owner) ms.teamScore[owner] += dtMs / 1000; // 1 pt per second per zone
+        if (owner) {
+          if (ffa) ms.playerScore[owner] = (ms.playerScore[owner] || 0) + dtMs / 1000;
+          else ms.teamScore[owner] += dtMs / 1000; // 1 pt per second per zone
+        }
       }
       // Win: target score or time limit
-      if (ms.teamScore.a >= gs.cfg.targetScore) return endGame(gs, 'team_a');
-      if (ms.teamScore.b >= gs.cfg.targetScore) return endGame(gs, 'team_b');
-      if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
-        endGame(gs, ms.teamScore.a > ms.teamScore.b ? 'team_a'
-          : ms.teamScore.b > ms.teamScore.a ? 'team_b' : 'draw');
+      if (ffa) {
+        for (const [uid, sc] of Object.entries(ms.playerScore)) {
+          if (sc >= gs.cfg.targetScore) return endGame(gs, 'player_' + uid);
+        }
+        if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
+          const entries = Object.entries(ms.playerScore);
+          if (!entries.length) return endGame(gs, 'draw');
+          entries.sort((a, b) => b[1] - a[1]);
+          const leaders = entries.filter(([, sc]) => sc === entries[0][1]);
+          return endGame(gs, leaders.length > 1 ? 'draw' : 'player_' + leaders[0][0]);
+        }
+      } else {
+        if (ms.teamScore.a >= gs.cfg.targetScore) return endGame(gs, 'team_a');
+        if (ms.teamScore.b >= gs.cfg.targetScore) return endGame(gs, 'team_b');
+        if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
+          endGame(gs, ms.teamScore.a > ms.teamScore.b ? 'team_a'
+            : ms.teamScore.b > ms.teamScore.a ? 'team_b' : 'draw');
+        }
       }
     },
     onGameEnd() {},
     snapshotExtras(gs) {
       const ms = gs.modeState;
+      const ffa = gs.cfg.teamVariant === 'ffa';
       return {
-        teamScore: { a: Math.floor(ms.teamScore.a), b: Math.floor(ms.teamScore.b) },
+        ...(ffa
+          ? { playerScore: Object.fromEntries(Object.entries(ms.playerScore).map(([k, v]) => [k, Math.floor(v)])) }
+          : { teamScore: { a: Math.floor(ms.teamScore.a), b: Math.floor(ms.teamScore.b) } }),
         targetScore: gs.cfg.targetScore,
         zones: gs.zones.map(z => ({
           id: z.id, lat: z.lat, lon: z.lon, radiusM: z.radiusM,
           owner: ms.owners[z.id],
           capture: ms.capProgress[z.id]
-            ? { team: ms.capProgress[z.id].team,
+            ? { [ffa ? 'userId' : 'team']: ms.capProgress[z.id].key,
                 pct: Math.min(100, Math.round(100 * ms.capProgress[z.id].ms / gs.timings.captureDwellMs)) }
             : null,
         })),
       };
     },
-    isOpponentPair(gs, a, b) { return a.team !== b.team; },
+    isOpponentPair(gs, a, b) {
+      return gs.cfg.teamVariant === 'ffa' ? a.userId !== b.userId : a.team !== b.team;
+    },
     revealPosition() { return false; },
   },
 
@@ -409,40 +436,62 @@ const MODES = {
       return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
         : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
     },
+    // Team mode: 2 flags keyed 'a'/'b', captain-placed bases. Ffa ("jeder
+    // Spieler setzt seine Base und hat eine Flagge"): N flags, one per
+    // player, own base each — every OTHER player is a potential thief
+    // (isOpponentPair below), and capturing just requires bringing a stolen
+    // flag to your OWN base (no requirement your own flag also be home —
+    // with N players that would make scoring nearly impossible whenever
+    // anyone's flag is contested, unlike the classic 2-team case).
     initState(gs) {
+      const ffa = gs.cfg.teamVariant === 'ffa';
+      const keys = ffa ? Object.keys(gs.players) : ['a', 'b'];
       gs.modeState = {
-        bases: { a: null, b: null },
-        flags: {
-          a: { state: 'home', carrier: null, lat: null, lon: null, droppedAt: null, pickupProg: null },
-          b: { state: 'home', carrier: null, lat: null, lon: null, droppedAt: null, pickupProg: null },
-        },
-        captures: { a: 0, b: 0 },
+        bases: ffa ? Object.fromEntries(keys.map(k => [k, null])) : { a: null, b: null },
+        flags: Object.fromEntries(keys.map(k =>
+          [k, { state: 'home', carrier: null, lat: null, lon: null, droppedAt: null, pickupProg: null }])),
+        captures: Object.fromEntries(keys.map(k => [k, 0])),
       };
     },
     canShoot() { return null; },
-    targetFilter(gs, shooter, c) { return c.team !== shooter.team; },
+    targetFilter(gs, shooter, c) {
+      return gs.cfg.teamVariant === 'ffa' ? c.userId !== shooter.userId : c.team !== shooter.team;
+    },
     applyHit(gs, shooter, target, verdict, t) {
       applyFreeze(gs, target, shooter.userId, t);
       shooter.score += 5;
       // Carrier hit → flag drops on the spot
-      for (const [ft, flag] of Object.entries(gs.modeState.flags)) {
+      for (const [fk, flag] of Object.entries(gs.modeState.flags)) {
         if (flag.state === 'carried' && flag.carrier === target.userId) {
-          dropFlag(gs, ft, target, t);
+          dropFlag(gs, fk, target, t);
         }
       }
     },
     tick(gs, t, dtMs) {
       const ms = gs.modeState;
+      const ffa = gs.cfg.teamVariant === 'ffa';
       if (gs.phase === 'base_setup') {
         if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) {
-          // Timeout: unset bases fall back to the captain's current position
-          for (const tm of ['a', 'b']) {
-            if (!ms.bases[tm]) {
-              const cap = gs.players[gs.captains[tm]];
-              const pos = cap?.lastAccepted
-                || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
-              ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
-              pushEvent(gs, 'base_set', { team: tm, auto: true });
+          if (ffa) {
+            // No captains in ffa — every player who hasn't placed their own
+            // base yet falls back to their own current position.
+            Object.values(gs.players).forEach((p, i) => {
+              if (!ms.bases[p.userId]) {
+                const pos = p.lastAccepted || fieldCentroid(gs.polygon, i * 0.1 - 0.3);
+                ms.bases[p.userId] = { lat: pos.lat, lon: pos.lon };
+                pushEvent(gs, 'base_set', { userId: p.userId, auto: true });
+              }
+            });
+          } else {
+            // Timeout: unset bases fall back to the captain's current position
+            for (const tm of ['a', 'b']) {
+              if (!ms.bases[tm]) {
+                const cap = gs.players[gs.captains[tm]];
+                const pos = cap?.lastAccepted
+                  || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
+                ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
+                pushEvent(gs, 'base_set', { team: tm, auto: true });
+              }
             }
           }
           gs.phase = 'live';
@@ -454,7 +503,65 @@ const MODES = {
       }
       if (gs.phase !== 'live') return;
 
-      const baseZone = tm => ({ id: 'base_' + tm, ...ms.bases[tm], radiusM: gs.timings.zoneRadiusM });
+      const baseZone = k => ({ id: 'base_' + k, ...ms.bases[k], radiusM: gs.timings.zoneRadiusM });
+
+      if (ffa) {
+        for (const key of Object.keys(ms.flags)) {
+          const flag = ms.flags[key];
+          if (flag.state === 'home') {
+            const pres = zonePresence(gs, baseZone(key), t);
+            const thieves = pres.all.filter(uid => uid !== key);
+            flag.pickupProg = advanceDwell(flag.pickupProg, thieves, thieves.length ? dtMs : 0);
+            if (!thieves.length) flag.pickupProg = null;
+            if (flag.pickupProg && flag.pickupProg.ms >= gs.timings.flagPickupDwellMs) {
+              flag.state = 'carried';
+              flag.carrier = flag.pickupProg.uid;
+              flag.pickupProg = null;
+              pushEvent(gs, 'flag_taken', { flagOwner: key, byUserId: flag.carrier });
+            }
+          } else if (flag.state === 'carried') {
+            const carrier = gs.players[flag.carrier];
+            if (!carrier || carrier.status !== 'alive' || carrier.geofence === 'outside') {
+              dropFlag(gs, key, carrier, t);
+              continue;
+            }
+            const carrierBase = ms.bases[carrier.userId];
+            if (carrierBase && carrier.lastAccepted
+                && shared.isInZone(carrier.lastAccepted, { ...carrierBase, radiusM: gs.timings.zoneRadiusM })
+                && !isFrozen(carrier, t)) {
+              ms.captures[carrier.userId] = (ms.captures[carrier.userId] || 0) + 1;
+              carrier.score += 20;
+              flag.state = 'home'; flag.carrier = null;
+              pushEvent(gs, 'flag_captured', { byUserId: carrier.userId, flagOwner: key });
+              if (ms.captures[carrier.userId] >= gs.cfg.targetCaptures) {
+                return endGame(gs, 'player_' + carrier.userId);
+              }
+            }
+          } else if (flag.state === 'dropped') {
+            const dz = { id: 'flag_' + key, lat: flag.lat, lon: flag.lon, radiusM: 10 };
+            const pres = zonePresence(gs, dz, t);
+            if (pres.all.includes(key)) {
+              flag.state = 'home'; flag.carrier = null; flag.droppedAt = null;
+              pushEvent(gs, 'flag_returned', { flagOwner: key, byUserId: key });
+            } else if (pres.all.length > 0) {
+              const thief = pres.all[0];
+              flag.state = 'carried'; flag.carrier = thief; flag.droppedAt = null;
+              pushEvent(gs, 'flag_taken', { flagOwner: key, byUserId: thief });
+            } else if (t - flag.droppedAt >= gs.timings.flagReturnMs) {
+              flag.state = 'home'; flag.carrier = null; flag.droppedAt = null;
+              pushEvent(gs, 'flag_returned', { flagOwner: key, byUserId: null });
+            }
+          }
+        }
+        if (t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
+          const entries = Object.entries(ms.captures);
+          if (!entries.length) return endGame(gs, 'draw');
+          entries.sort((a, b) => b[1] - a[1]);
+          const leaders = entries.filter(([, c]) => c === entries[0][1]);
+          endGame(gs, leaders.length > 1 ? 'draw' : 'player_' + leaders[0][0]);
+        }
+        return;
+      }
 
       for (const tm of ['a', 'b']) {
         const flag = ms.flags[tm];
@@ -515,38 +622,40 @@ const MODES = {
     onGameEnd() {},
     snapshotExtras(gs) {
       const ms = gs.modeState;
-      const flagPos = (tm) => {
-        const f = ms.flags[tm];
-        if (f.state === 'home') return ms.bases[tm];
+      const ffa = gs.cfg.teamVariant === 'ffa';
+      const flagPos = (key) => {
+        const f = ms.flags[key];
+        if (f.state === 'home') return ms.bases[key];
         if (f.state === 'dropped') return { lat: f.lat, lon: f.lon };
         const c = gs.players[f.carrier];
-        return c?.lastAccepted ? { lat: c.lastAccepted.lat, lon: c.lastAccepted.lon } : ms.bases[tm];
+        return c?.lastAccepted ? { lat: c.lastAccepted.lat, lon: c.lastAccepted.lon } : ms.bases[key];
       };
       return {
         captures: ms.captures,
         targetCaptures: gs.cfg.targetCaptures,
         bases: ms.bases,
         zoneRadiusM: gs.timings.zoneRadiusM,
-        flags: ['a', 'b'].map(tm => {
-          const f = ms.flags[tm];
+        flags: Object.keys(ms.flags).map(key => {
+          const f = ms.flags[key];
           return {
-            team: tm, state: f.state, carrier: f.carrier,
-            ...(ms.bases[tm] || gs.phase === 'live' ? (flagPos(tm) || {}) : {}),
-            // Enemy team's dwell progress stealing this flag — only ever
-            // non-null while state === 'home' (pickupProg is unused/null
-            // otherwise). Client uses this to flow-ring the base being
-            // raided, colored by the raiding (enemy) team.
+            [ffa ? 'owner' : 'team']: key, state: f.state, carrier: f.carrier,
+            ...(ms.bases[key] || gs.phase === 'live' ? (flagPos(key) || {}) : {}),
+            // Thief's dwell progress stealing this flag — only ever non-null
+            // while state === 'home' (pickupProg is unused/null otherwise).
+            // Client uses this to flow-ring the base being raided, colored
+            // by the raiding team (team mode) or raiding player (ffa).
             pickupPct: f.pickupProg
               ? Math.min(100, Math.round(100 * f.pickupProg.ms / gs.timings.flagPickupDwellMs)) : 0,
-            pickupTeam: f.pickupProg ? (tm === 'a' ? 'b' : 'a') : null,
+            ...(ffa
+              ? { pickupBy: f.pickupProg ? f.pickupProg.uid : null }
+              : { pickupTeam: f.pickupProg ? (key === 'a' ? 'b' : 'a') : null }),
           };
         }),
-        baseSetup: gs.phase === 'base_setup' ? {
-          myTeamBaseSet: null, // filled per-player below via revealPosition path (kept simple)
-        } : null,
       };
     },
-    isOpponentPair(gs, a, b) { return a.team !== b.team; },
+    isOpponentPair(gs, a, b) {
+      return gs.cfg.teamVariant === 'ffa' ? a.userId !== b.userId : a.team !== b.team;
+    },
     // Flag carriers are visible to EVERYONE (classic CTF rule)
     revealPosition(gs, viewer, p) {
       const ms = gs.modeState;
@@ -584,22 +693,28 @@ const MODES = {
       };
     },
     canShoot() { return null; },
-    targetFilter(gs, shooter, c) { return c.team !== shooter.team; },
+    targetFilter(gs, shooter, c) {
+      return gs.cfg.teamVariant === 'ffa' ? c.userId !== shooter.userId : c.team !== shooter.team;
+    },
     applyHit(gs, shooter, target, verdict, t) {
       applyFreeze(gs, target, shooter.userId, t);
       shooter.score += 5;
     },
     // Destroys the currently active zone, credits `scoringUids` (may be
     // empty — the passive explosion case credits nobody individually),
-    // then activates the next non-destroyed zone or ends the match.
-    destroyActive(gs, byTeam, scoringUids, t) {
+    // then activates the next non-destroyed zone or ends the match. `byKey`
+    // is a team letter in team mode, a userId in ffa (createAropsGame forces
+    // destroyVariant back to 'instant' whenever ffa — 'defuse' is inherently
+    // attacker/defender-shaped and never reaches this function under ffa).
+    destroyActive(gs, byKey, scoringUids, t) {
       const ms = gs.modeState;
+      const ffa = gs.cfg.teamVariant === 'ffa';
       const zone = gs.zones[ms.activeIndex];
       ms.destroyed[ms.activeIndex] = true;
       ms.captureProg = null;
       ms.armed = null;
       for (const uid of scoringUids) { const p = gs.players[uid]; if (p) p.score += 10; }
-      pushEvent(gs, 'target_destroyed', { zoneId: zone.id, byTeam });
+      pushEvent(gs, 'target_destroyed', ffa ? { zoneId: zone.id, byUserId: byKey } : { zoneId: zone.id, byTeam: byKey });
 
       const remaining = gs.zones.map((_, i) => i).filter(i => !ms.destroyed[i]);
       if (remaining.length === 0) {
@@ -608,7 +723,7 @@ const MODES = {
           ms.activeIndex = 0;
           pushEvent(gs, 'targets_reactivated', {});
         } else {
-          return endGame(gs, byTeam === 'a' ? 'team_a' : 'team_b');
+          return endGame(gs, ffa ? 'player_' + byKey : (byKey === 'a' ? 'team_a' : 'team_b'));
         }
       } else {
         ms.activeIndex = remaining[0];
@@ -617,6 +732,7 @@ const MODES = {
     tick(gs, t, dtMs) {
       const ms = gs.modeState;
       if (gs.phase !== 'live') return;
+      const ffa = gs.cfg.teamVariant === 'ffa';
       const zone = gs.zones[ms.activeIndex];
       if (!zone) return; // defensive — shouldn't happen, all zones destroyed without reactivation ends the match already
 
@@ -649,6 +765,19 @@ const MODES = {
             this.destroyActive(gs, 'a', [], t);
           }
         }
+      } else if (ffa) {
+        // instant, ffa: any single player alone in the zone dwell-captures it
+        const pres = zonePresence(gs, zone, t);
+        if (pres.all.length === 1) {
+          const uid = pres.all[0];
+          const prog = ms.captureProg && ms.captureProg.uid === uid ? ms.captureProg : null;
+          const nextMs = (prog ? prog.ms : 0) + dtMs;
+          ms.captureProg = { uid, ms: nextMs };
+          if (nextMs >= gs.timings.captureDwellMs) {
+            this.destroyActive(gs, uid, [uid], t);
+            return;
+          }
+        }
       } else {
         // instant (default): either team can dwell-capture the active target
         const pres = zonePresence(gs, zone, t);
@@ -668,28 +797,40 @@ const MODES = {
       }
 
       if (!gs.gameOver && t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
-        const scores = { a: 0, b: 0 };
-        for (const p of Object.values(gs.players)) if (p.team) scores[p.team] += p.score;
-        endGame(gs, scores.a > scores.b ? 'team_a' : scores.b > scores.a ? 'team_b' : 'draw');
+        if (ffa) {
+          const entries = Object.values(gs.players).map(p => [p.userId, p.score]);
+          if (!entries.length) return endGame(gs, 'draw');
+          entries.sort((a, b) => b[1] - a[1]);
+          const leaders = entries.filter(([, sc]) => sc === entries[0][1]);
+          endGame(gs, leaders.length > 1 ? 'draw' : 'player_' + leaders[0][0]);
+        } else {
+          const scores = { a: 0, b: 0 };
+          for (const p of Object.values(gs.players)) if (p.team) scores[p.team] += p.score;
+          endGame(gs, scores.a > scores.b ? 'team_a' : scores.b > scores.a ? 'team_b' : 'draw');
+        }
       }
     },
     onGameEnd() {},
     snapshotExtras(gs) {
       const ms = gs.modeState;
+      const ffa = gs.cfg.teamVariant === 'ffa';
       return {
         targets: gs.zones.map((z, i) => ({
           id: z.id, lat: z.lat, lon: z.lon, radiusM: z.radiusM,
           destroyed: ms.destroyed[i], active: i === ms.activeIndex,
         })),
         destroyVariant: gs.cfg.destroyVariant,
-        // Team attribution: 'instant' variant can be captured by either team
-        // (whoever's dwelling — ms.captureProg.team tracks that); 'defuse'
-        // variant's capture progress here is always team a's arming attempt
-        // (defusing is a separate, always-team-b progress, see armed below).
-        // Client uses this to color the flow-ring overlay by team.
+        // Team/player attribution: 'instant' variant can be captured by
+        // whoever's dwelling alone (team or, in ffa, individual player);
+        // 'defuse' variant's capture progress here is always team a's
+        // arming attempt (defusing is a separate, always-team-b progress,
+        // see armed below — ffa never reaches 'defuse', see destroyVariant
+        // force-reset in createAropsGame). Client colors the flow-ring
+        // overlay by team, or by the capturing player's avatar color in ffa.
         capture: ms.captureProg
-          ? { team: ms.captureProg.team, pct: Math.min(100, Math.round(100 * ms.captureProg.ms /
-              (gs.cfg.destroyVariant === 'defuse' ? gs.timings.plantDwellMs : gs.timings.captureDwellMs))) }
+          ? { [ffa ? 'userId' : 'team']: ffa ? ms.captureProg.uid : ms.captureProg.team,
+              pct: Math.min(100, Math.round(100 * ms.captureProg.ms /
+                (gs.cfg.destroyVariant === 'defuse' ? gs.timings.plantDwellMs : gs.timings.captureDwellMs))) }
           : null,
         armed: ms.armed ? {
           explodeAt: ms.armed.explodeAt,
@@ -698,7 +839,9 @@ const MODES = {
         } : null,
       };
     },
-    isOpponentPair(gs, a, b) { return a.team !== b.team; },
+    isOpponentPair(gs, a, b) {
+      return gs.cfg.teamVariant === 'ffa' ? a.userId !== b.userId : a.team !== b.team;
+    },
     revealPosition() { return false; },
   },
 
@@ -720,13 +863,21 @@ const MODES = {
     },
     initState(gs) {
       gs.modeState = {
-        bases: { a: null, b: null },
+        // Team mode: bases keyed 'a'/'b', captain-placed. Ffa: bases keyed
+        // by userId, every player places their own (see tick's base_setup).
+        bases: gs.cfg.teamVariant === 'ffa'
+          ? Object.fromEntries(Object.values(gs.players).map(p => [p.userId, null]))
+          : { a: null, b: null },
         lives: Object.fromEntries(Object.values(gs.players).map(p => [p.userId, gs.cfg.livesPerPlayer])),
       };
     },
-    isOpponentPair(gs, a, b) { return a.team !== b.team; },
+    isOpponentPair(gs, a, b) {
+      return gs.cfg.teamVariant === 'ffa' ? a.userId !== b.userId : a.team !== b.team;
+    },
     canShoot() { return null; },
-    targetFilter(gs, shooter, c) { return c.team !== shooter.team; },
+    targetFilter(gs, shooter, c) {
+      return gs.cfg.teamVariant === 'ffa' ? c.userId !== shooter.userId : c.team !== shooter.team;
+    },
     applyHit(gs, shooter, target, verdict, t) {
       shooter.score += 10;
       if (gs.cfg.deathmatchOnHit === 'respawn') {
@@ -747,6 +898,15 @@ const MODES = {
       }
     },
     checkWin(gs) {
+      if (gs.cfg.teamVariant === 'ffa') {
+        // Last player standing wins — only reachable under deathmatchOnHit
+        // 'respawn' (the only variant that ever sets status='found' here,
+        // same asymmetry as team mode's checkWin/'freeze' comment below).
+        const alive = Object.values(gs.players).filter(p => p.status !== 'found');
+        if (alive.length === 0) return endGame(gs, 'draw');
+        if (alive.length === 1) return endGame(gs, 'player_' + alive[0].userId);
+        return;
+      }
       const remaining = { a: 0, b: 0 };
       for (const p of Object.values(gs.players)) {
         if (p.team && p.status !== 'found') remaining[p.team]++;
@@ -757,15 +917,29 @@ const MODES = {
     },
     tick(gs, t) {
       const ms = gs.modeState;
+      const ffa = gs.cfg.teamVariant === 'ffa';
       if (gs.phase === 'base_setup') {
         if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) {
-          for (const tm of ['a', 'b']) {
-            if (!ms.bases[tm]) {
-              const cap = gs.players[gs.captains[tm]];
-              const pos = cap?.lastAccepted
-                || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
-              ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
-              pushEvent(gs, 'base_set', { team: tm, auto: true });
+          if (ffa) {
+            // No captains in ffa — every player who hasn't placed their own
+            // base yet falls back to their own current position (spread out
+            // a little if that's unavailable too, so they don't all stack).
+            Object.values(gs.players).forEach((p, i) => {
+              if (!ms.bases[p.userId]) {
+                const pos = p.lastAccepted || fieldCentroid(gs.polygon, i * 0.1 - 0.3);
+                ms.bases[p.userId] = { lat: pos.lat, lon: pos.lon };
+                pushEvent(gs, 'base_set', { userId: p.userId, auto: true });
+              }
+            });
+          } else {
+            for (const tm of ['a', 'b']) {
+              if (!ms.bases[tm]) {
+                const cap = gs.players[gs.captains[tm]];
+                const pos = cap?.lastAccepted
+                  || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
+                ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
+                pushEvent(gs, 'base_set', { team: tm, auto: true });
+              }
             }
           }
           gs.phase = 'live';
@@ -780,12 +954,21 @@ const MODES = {
         // Time limit: 'respawn' compares total lives left, 'freeze' compares
         // score (frags) — lives never change under 'freeze', so a lives
         // comparison would always tie there.
-        const sums = { a: 0, b: 0 };
-        for (const p of Object.values(gs.players)) {
-          if (!p.team) continue;
-          sums[p.team] += gs.cfg.deathmatchOnHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score;
+        if (ffa) {
+          const entries = Object.values(gs.players).map(p =>
+            [p.userId, gs.cfg.deathmatchOnHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score]);
+          if (!entries.length) return endGame(gs, 'draw');
+          entries.sort((a, b) => b[1] - a[1]);
+          const leaders = entries.filter(([, sc]) => sc === entries[0][1]);
+          endGame(gs, leaders.length > 1 ? 'draw' : 'player_' + leaders[0][0]);
+        } else {
+          const sums = { a: 0, b: 0 };
+          for (const p of Object.values(gs.players)) {
+            if (!p.team) continue;
+            sums[p.team] += gs.cfg.deathmatchOnHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score;
+          }
+          endGame(gs, sums.a > sums.b ? 'team_a' : sums.b > sums.a ? 'team_b' : 'draw');
         }
-        endGame(gs, sums.a > sums.b ? 'team_a' : sums.b > sums.a ? 'team_b' : 'draw');
       }
     },
     onGameEnd() {},
@@ -828,9 +1011,14 @@ function fieldCentroid(polygon, offsetFrac = 0) {
 // gs.modeState.bases at all (domination, seek_destroy/Zerstören,
 // hide_and_seek incl. its ffa/the_ship variants), every player's `team` is either
 // null or `gs.modeState.bases` is absent, so both functions are no-ops.
+// Bases are keyed by team letter in team mode, by userId in the ffa variant
+// (every player places their own base instead of a team captain placing a
+// shared one) — same gs.modeState.bases map either way.
+function baseKeyOf(p) { return p.team || p.userId; }
+
 function isInOwnBase(gs, p) {
-  if (!p.team || !gs.modeState.bases) return false;
-  const base = gs.modeState.bases[p.team];
+  if (!gs.modeState.bases) return false;
+  const base = gs.modeState.bases[baseKeyOf(p)];
   if (!base || !p.lastAccepted) return false;
   return shared.haversineMeters(p.lastAccepted, base) <= gs.timings.zoneRadiusM;
 }
@@ -839,10 +1027,10 @@ function isInOwnBase(gs, p) {
 // standing in their own base right then doesn't get removed from the match
 // — they're marked 'downed' and can still catch up via tickSpawnRespawn's
 // dwell window below (late-spawn is allowed, no hard cutoff, per the
-// AR-Ops modes plan).
+// AR-Ops modes plan). No team check here (unlike before) — the ffa variant
+// has no teams at all, but still has one base per player via baseKeyOf.
 function applySpawnCheckpoint(gs, t) {
   for (const p of Object.values(gs.players)) {
-    if (!p.team) continue;
     if (!isInOwnBase(gs, p)) {
       p.status = 'downed';
       p.spawnDwellMs = 0;
@@ -930,6 +1118,16 @@ function createAropsGame(sessionId, players, workshopConfig) {
   // single-bomb-site mechanic but generalized to a rotating target list).
   cfg.destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   cfg.destroyReactivate = ar.destroyReactivate === true;
+  // Team/FFA variant for the 4 team-capable modes (domination, ctf,
+  // seek_destroy, deathmatch) — 'team' (default, unchanged behavior) or
+  // 'ffa' ("Jeder gegen jeden", every player for themselves). Only
+  // meaningful when mode.usesTeams; hide_and_seek has its own hsVariant
+  // instead (it's never team-based to begin with). Zerstören's 'defuse'
+  // sub-variant is inherently two-sided (attacker arms / defender defuses)
+  // and has no ffa reading — the lobby UI hides that picker in ffa, but
+  // guard here too in case a stale ar_settings still has it set.
+  cfg.teamVariant = (mode.usesTeams && ar.teamVariant === 'ffa') ? 'ffa' : 'team';
+  if (cfg.teamVariant === 'ffa' && subMode === 'seek_destroy') cfg.destroyVariant = 'instant';
 
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG };
   if (auto) {
@@ -984,8 +1182,9 @@ function createAropsGame(sessionId, players, workshopConfig) {
   players.forEach((p, idx) => {
     const role = roles[p.userId] || (idx === 0 ? 'seeker' : 'hider');
     if (role === 'seeker') seekerCount++;
-    // Teams: explicit override or alternating assignment
-    const team = mode.usesTeams
+    // Teams: explicit override or alternating assignment — ffa players get
+    // no team at all (null), same as hide_and_seek's ffa/the_ship variants.
+    const team = (mode.usesTeams && cfg.teamVariant !== 'ffa')
       ? (teamOverride[p.userId] === 'a' || teamOverride[p.userId] === 'b'
           ? teamOverride[p.userId] : (idx % 2 === 0 ? 'a' : 'b'))
       : null;
@@ -1315,7 +1514,8 @@ function actionArHitAttempt(gs, userId, data) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  CTF: captain sets the team base during base_setup
+//  CTF/Deathmatch: base placement during base_setup — captain sets the
+//  team base (team mode), or every player sets their own (ffa variant)
 // ═══════════════════════════════════════════════════════════
 function actionArSetBase(gs, userId, data) {
   // Generic capability check (gs.modeState.bases) instead of a hardcoded
@@ -1325,7 +1525,9 @@ function actionArSetBase(gs, userId, data) {
   if (gs.phase !== 'base_setup') return { ok: false, err: 'wrong_phase' };
   const p = gs.players[userId];
   if (!p) return { ok: false, err: 'not_in_game' };
-  if (gs.captains[p.team] !== userId) return { ok: false, err: 'not_captain' };
+  const ffa = gs.cfg.teamVariant === 'ffa';
+  if (!ffa && gs.captains[p.team] !== userId) return { ok: false, err: 'not_captain' };
+  const key = baseKeyOf(p);
 
   // Position: explicit map tap or current position
   let pos = null;
@@ -1337,12 +1539,18 @@ function actionArSetBase(gs, userId, data) {
   if (!pos) return { ok: false, err: 'no_position' };
   if (!shared.pointInPolygon(pos, gs.polygon)) return { ok: false, err: 'outside_field' };
 
-  const other = gs.modeState.bases[p.team === 'a' ? 'b' : 'a'];
-  if (other && shared.haversineMeters(pos, other) < gs.timings.minBaseSeparationM) {
-    return { ok: false, err: 'bases_too_close', minSeparationM: Math.round(gs.timings.minBaseSeparationM) };
+  // Team mode: one other base to stay clear of. Ffa: every other player's
+  // already-placed base.
+  const others = ffa
+    ? Object.entries(gs.modeState.bases).filter(([k, v]) => k !== key && v).map(([, v]) => v)
+    : [gs.modeState.bases[p.team === 'a' ? 'b' : 'a']].filter(Boolean);
+  for (const other of others) {
+    if (shared.haversineMeters(pos, other) < gs.timings.minBaseSeparationM) {
+      return { ok: false, err: 'bases_too_close', minSeparationM: Math.round(gs.timings.minBaseSeparationM) };
+    }
   }
-  gs.modeState.bases[p.team] = pos;
-  pushEvent(gs, 'base_set', { team: p.team, auto: false });
+  gs.modeState.bases[key] = pos;
+  pushEvent(gs, 'base_set', ffa ? { userId, auto: false } : { team: p.team, auto: false });
   return { ok: true, base: pos };
 }
 
@@ -1723,6 +1931,12 @@ function getAropsSnapshot(gs, userId) {
     winner: gs.winner,
     debugMode: !!gs.cfg.debugMode,
     autoScale: !!gs.cfg.autoScale,
+    // 'team' (default) or 'ffa' — only meaningful for the 4 team-capable
+    // modes, but harmless to always include (hide_and_seek always 'team'
+    // here, it has its own hsVariant instead). Lets clients tell apart e.g.
+    // domination's teamScore vs. playerScore without guessing from which
+    // fields happen to be present.
+    teamVariant: gs.cfg.teamVariant,
     timings: {
       freezeMs: gs.timings.freezeMs,
       captureDwellMs: gs.timings.captureDwellMs,
@@ -1733,7 +1947,11 @@ function getAropsSnapshot(gs, userId) {
     },
     me: me ? {
       role: me.role, team: me.team, class: me.class, status: me.status, score: me.score,
-      isCaptain: me.team ? gs.captains[me.team] === userId : false,
+      // Ffa base-having modes (CTF/Deathmatch): every player places their
+      // own base, so every player "is captain" for this purpose — gated on
+      // gs.modeState.bases existing at all so ffa Domination/Zerstören
+      // (no bases) correctly stay false.
+      isCaptain: gs.cfg.teamVariant === 'ffa' ? !!gs.modeState.bases : (me.team ? gs.captains[me.team] === userId : false),
       geofence: me.geofence, exposed: me.exposed,
       strikes: me.strikes,
       proximityAlert: me.proximityAlert,

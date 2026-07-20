@@ -930,6 +930,165 @@ console.log('\n═══ SEEK & DESTROY ═══');
   });
 }
 
+// ═══ TEAM/FFA VARIANT (Domination, Zerstören, Deathmatch, CTF) ═══
+// "Jeder gegen jeden" for the 4 team-capable modes, analogous to Hide &
+// Seek's hsVariant — ar_settings.teamVariant='ffa'. See arops.js's MODES
+// table (cfg.teamVariant) and CLAUDE.md-adjacent design notes in this file's
+// mode blocks for the per-mode semantics chosen.
+console.log('\n═══ TEAM/FFA VARIANT ═══');
+{
+  check('domination ffa: no teams assigned, zone captured individually, win on target score', () => {
+    const gs = createGame('dom_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', teamVariant: 'ffa', zones: [Z1, Z2],
+        timings: FAST, targetScore: 3, gameDurationMs: 600_000 } });
+    assert.equal(gs.players.A1.team, null);
+    assert.equal(gs.players.A2.team, null);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.owners.z1, 'A1');
+    assert.ok(gs.events.some(e => e.type === 'zone_captured' && e.userId === 'A1'));
+    // tick()'s dt is capped at 2000ms regardless of the requested advance —
+    // two calls for a real cumulative 4s (matches the DOMINATION section's
+    // own tick(gs, 2000) convention above).
+    tick(gs, 2000); tick(gs, 2000);
+    assert.ok(gs.modeState.playerScore.A1 >= 3);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1');
+  });
+
+  check('domination ffa: two players together in a zone contest it (no capture)', () => {
+    const gs = createGame('dom_ffa2',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', teamVariant: 'ffa', zones: [Z1, Z2],
+        timings: FAST, targetScore: 100, gameDurationMs: 600_000 } });
+    tel(gs, 'A1', Z1); tel(gs, 'A2', Z1);
+    tick(gs, 500);
+    assert.equal(gs.modeState.owners.z1, null, 'contested, nobody alone');
+  });
+
+  check('seek_destroy ffa: individual capture, defuse variant force-reset to instant', () => {
+    const gs = createGame('snd_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', teamVariant: 'ffa', destroyVariant: 'defuse',
+        zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
+    assert.equal(gs.cfg.destroyVariant, 'instant', 'ffa forces defuse back to instant (two-sided, no ffa reading)');
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.destroyed[0], true);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1');
+    assert.ok(gs.events.some(e => e.type === 'target_destroyed' && e.byUserId === 'A1'));
+  });
+
+  check('deathmatch ffa: no captains, each player sets own base, last standing wins', () => {
+    const gs = createGame('dm_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'deathmatch', teamVariant: 'ffa', gameDurationMs: 600_000,
+        timings: { ...FAST, spawnCheckDwellMs: 300 }, deathmatchOnHit: 'respawn', livesPerPlayer: 1 } });
+    assert.equal(gs.players.A1.team, null);
+    const baseA1 = shared.destinationPoint(MUC, 270, 100);
+    const baseA2 = shared.destinationPoint(MUC, 90, 100);
+    const r1 = arops.actionArSetBase(gs, 'A1', { lat: baseA1.lat, lon: baseA1.lon });
+    assert.equal(r1.ok, true, 'any player can set own base in ffa, no captain gate');
+    const r2 = arops.actionArSetBase(gs, 'A2', { lat: baseA2.lat, lon: baseA2.lon });
+    assert.equal(r2.ok, true);
+    tel(gs, 'A1', baseA1);
+    tel(gs, 'A2', baseA2);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    assert.equal(gs.phase, 'live');
+    assert.equal(gs.players.A1.status, 'alive', 'A1 was in its own base at the checkpoint');
+    assert.equal(gs.players.A2.status, 'alive', 'A2 was in its own base at the checkpoint');
+
+    // A2 moves near A1 for the shot — both already established/alive above,
+    // same pattern as the existing 'respawn variant: 0 lives eliminates...' test.
+    const targetPos = shared.destinationPoint(baseA1, 0, 5);
+    tel(gs, 'A2', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(baseA1, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA1.lat, lon: baseA1.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.A2.status, 'found', 'eliminated (1 life)');
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1', 'last player standing wins');
+  });
+
+  check('ctf ffa: N flags one per player, no captain gate, steal + capture at own base', () => {
+    const gs = createGame('ctf_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf', teamVariant: 'ffa',
+        timings: FAST, targetCaptures: 1, gameDurationMs: 600_000 } });
+    assert.equal(gs.players.A1.team, null);
+    assert.deepEqual(Object.keys(gs.modeState.flags).sort(), ['A1', 'A2']);
+
+    const baseA1 = shared.destinationPoint(MUC, 270, 120);
+    const baseA2 = shared.destinationPoint(MUC, 90, 120);
+    const r1 = arops.actionArSetBase(gs, 'A1', { lat: baseA1.lat, lon: baseA1.lon });
+    assert.equal(r1.ok, true, 'no captain gate in ffa');
+    arops.actionArSetBase(gs, 'A2', { lat: baseA2.lat, lon: baseA2.lon });
+    tel(gs, 'A1', baseA1);
+    tel(gs, 'A2', baseA2);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    assert.equal(gs.phase, 'live');
+
+    // A1 walks into A2's base to steal A2's flag
+    let pos = baseA1;
+    const brg = shared.bearingDeg(baseA1, baseA2);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseA2) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.flags.A2.state, 'carried');
+    assert.equal(gs.modeState.flags.A2.carrier, 'A1');
+
+    // A1 carries it home to A1's own base
+    let pos2 = gs.players.A1.lastAccepted;
+    const brg2 = shared.bearingDeg(pos2, baseA1);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos2, baseA1) > 8; i++) {
+      pos2 = shared.destinationPoint(pos2, brg2, 12);
+      tel(gs, 'A1', pos2);
+    }
+    tick(gs, 100);
+    assert.equal(gs.modeState.captures.A1, 1);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1');
+  });
+
+  check("ctf ffa: capturing doesn't require your own flag to be home (unlike team mode)", () => {
+    const gs = createGame('ctf_ffa2',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf', teamVariant: 'ffa',
+        timings: FAST, targetCaptures: 5, gameDurationMs: 600_000 } });
+    const baseA1 = shared.destinationPoint(MUC, 270, 120);
+    const baseA2 = shared.destinationPoint(MUC, 90, 120);
+    arops.actionArSetBase(gs, 'A1', { lat: baseA1.lat, lon: baseA1.lon });
+    arops.actionArSetBase(gs, 'A2', { lat: baseA2.lat, lon: baseA2.lon });
+    tel(gs, 'A1', baseA1);
+    tel(gs, 'A2', baseA2);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+
+    // Both flags simultaneously away from home — under the classic team-mode
+    // rule this would block BOTH captures; ffa has no such requirement.
+    gs.modeState.flags.A1.state = 'carried'; gs.modeState.flags.A1.carrier = 'A2';
+    gs.modeState.flags.A2.state = 'carried'; gs.modeState.flags.A2.carrier = 'A1';
+    tick(gs, 100);
+    assert.equal(gs.modeState.captures.A1, 1, "A1 captures A2's flag despite A1's own flag being stolen too");
+  });
+
+  check('teamVariant is ignored for non-team modes (hide_and_seek uses hsVariant instead)', () => {
+    const gs = createGame('hs_teamvariant_noop',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', teamVariant: 'ffa', hidingDurationMs: 100 } });
+    assert.equal(gs.cfg.teamVariant, 'team', 'usesTeams=false modes never read ffa off teamVariant');
+  });
+}
+
 // ═══ HIDE & SEEK PERKS (Drohne / Cloak / Fake-Marker / Aufscheuchen) ═══
 console.log('\n═══ H&S PERKS ═══');
 {

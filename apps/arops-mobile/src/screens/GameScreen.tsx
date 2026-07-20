@@ -14,17 +14,26 @@ import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
 
-interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: 'a'|'b'|null; capture?: { team: string; pct: number } | null; }
+// owner/capture's key is a team letter in team mode, a userId in the ffa
+// variant (every player captures individually) — see arops.js's Domination
+// mode. colorForKey() below resolves either kind to a display color.
+interface ZoneInfo { id: string; lat: number; lon: number; radiusM: number; owner?: string | null; capture?: { team?: string; userId?: string; pct: number } | null; }
 interface FlagInfo {
-  team: 'a'|'b'; state: string; carrier: string | null; lat?: number; lon?: number;
-  // Enemy team's dwell progress stealing this flag (0 while nobody's raiding it).
-  pickupPct?: number; pickupTeam?: 'a'|'b'|null;
+  // Team mode: `team` ('a'|'b'). Ffa (N flags, one per player): `owner`
+  // (userId) instead — see arops.js's CTF mode.
+  team?: 'a'|'b'; owner?: string; state: string; carrier: string | null; lat?: number; lon?: number;
+  // Whoever's currently dwelling to steal this flag (0/null while nobody
+  // is raiding it) — team mode: pickupTeam ('a'|'b'). Ffa: pickupBy (userId).
+  pickupPct?: number; pickupTeam?: 'a'|'b'|null; pickupBy?: string | null;
 }
 interface TargetInfo { id: string; lat: number; lon: number; radiusM: number; destroyed: boolean; active: boolean; }
 
 interface Snap {
   sessionId?: string;
   subMode?: string;
+  // 'team' (default) or 'ffa' — only meaningful for the 4 team-capable
+  // modes (domination, ctf, seek_destroy, deathmatch).
+  teamVariant?: 'team' | 'ffa';
   debugMode?: boolean;
   phase: string;
   phaseEndsAt: number | null;
@@ -56,20 +65,26 @@ interface Snap {
     // the opponents' (see server's getAropsSnapshot, me.teamPings).
     teamPings?: { lat: number; lon: number; byUserId: string; ts: number; expiresAt: number }[];
   } | null;
-  players: { userId: string; username: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; accuracyM?: number; status: string }[];
+  players: { userId: string; username: string; avatar_color?: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; accuracyM?: number; status: string }[];
   // Mode extras
   teamScore?: { a: number; b: number };
+  // Domination ffa: per-player score instead of teamScore (userId -> score).
+  playerScore?: Record<string, number>;
   targetScore?: number;
   zones?: ZoneInfo[];
-  captures?: { a: number; b: number };
+  // Team mode: { a, b }. Ctf ffa: keyed by userId instead (N flags, one per
+  // player) — same field name either way, see arops.js's CTF mode.
+  captures?: Record<string, number>;
   targetCaptures?: number;
-  bases?: { a: { lat: number; lon: number } | null; b: { lat: number; lon: number } | null };
+  // Team mode: keys 'a'/'b'. Ffa (ctf/deathmatch): keyed by userId, every
+  // player places their own base — see arops.js's baseKeyOf.
+  bases?: Record<string, { lat: number; lon: number } | null>;
   zoneRadiusM?: number;
   flags?: FlagInfo[];
   // Zerstören (seek_destroy) — rotating multi-target list, see arops.js.
   targets?: TargetInfo[];
   destroyVariant?: 'instant' | 'defuse';
-  capture?: { team: 'a'|'b'; pct: number } | null;
+  capture?: { team?: 'a'|'b'; userId?: string; pct: number } | null;
   armed?: { explodeAt: number; defusePct: number } | null;
   events: { seq: number; type: string; userId?: string; winner?: string }[];
 }
@@ -313,6 +328,15 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   }, [JSON.stringify(snap?.polygon)]);
 
   const TEAM_COLOR = { a: '#40a0ff', b: '#ff5050' } as const;
+  // Resolves a team-or-player key to a display color — 'a'/'b' in team mode,
+  // a userId in the ffa variant of Domination/Zerstören/CTF/Deathmatch
+  // (every player captures/owns individually, so there's no fixed 2-color
+  // palette; fall back to each player's own avatar color).
+  const colorForKey = (key?: string | null): string => {
+    if (key === 'a' || key === 'b') return TEAM_COLOR[key];
+    if (!key) return '#c0c0c0';
+    return snap?.players.find(p => p.userId === key)?.avatar_color || '#f0c840';
+  };
 
   // Distance + bearing + "currently in my shooting cone" per opponent whose
   // position I'm allowed to see (server already enforces the privacy rules —
@@ -455,7 +479,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     const ents: { id: string; lat: number; lon: number; radiusM: number; color: string }[] = [];
     for (const z of snap?.zones || []) {
       ents.push({ id: 'z_' + z.id, lat: z.lat, lon: z.lon, radiusM: z.radiusM,
-        color: z.owner === 'a' ? TEAM_COLOR.a : z.owner === 'b' ? TEAM_COLOR.b : '#c0c0c0' });
+        color: z.owner ? colorForKey(z.owner) : '#c0c0c0' });
     }
     for (const t of snap?.targets || []) {
       if (t.destroyed) continue; // destroyed targets are gone, nothing left to draw
@@ -463,9 +487,9 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         color: t.active ? '#f0c840' : '#605850' });
     }
     if (snap?.bases) {
-      for (const tm of ['a', 'b'] as const) {
-        const b = snap.bases[tm];
-        if (b) ents.push({ id: 'base_' + tm, lat: b.lat, lon: b.lon, radiusM: snap.zoneRadiusM || 15, color: TEAM_COLOR[tm] });
+      for (const key of Object.keys(snap.bases)) {
+        const b = snap.bases[key];
+        if (b) ents.push({ id: 'base_' + key, lat: b.lat, lon: b.lon, radiusM: snap.zoneRadiusM || 15, color: colorForKey(key) });
       }
     }
     return ents;
@@ -514,24 +538,25 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   };
   const flowRingGeoJSON = useMemo(() => {
     const feats: any[] = [];
-    const push = (lat: number, lon: number, radiusM: number, team: 'a'|'b', pct: number) => {
+    const push = (lat: number, lon: number, radiusM: number, key: string | undefined, pct: number) => {
       const line = arcLine(lat, lon, radiusM, pct);
-      if (line) feats.push({ type: 'Feature', properties: { color: TEAM_COLOR[team] },
+      if (line) feats.push({ type: 'Feature', properties: { color: colorForKey(key) },
         geometry: { type: 'LineString', coordinates: line } });
     };
     for (const z of snap?.zones || []) {
-      if (z.capture) push(z.lat, z.lon, z.radiusM, z.capture.team as 'a'|'b', z.capture.pct);
+      if (z.capture) push(z.lat, z.lon, z.radiusM, z.capture.team ?? z.capture.userId, z.capture.pct);
     }
     const activeTarget = (snap?.targets || []).find(t => t.active);
     if (activeTarget) {
-      if (snap?.capture) push(activeTarget.lat, activeTarget.lon, activeTarget.radiusM, snap.capture.team, snap.capture.pct);
+      if (snap?.capture) push(activeTarget.lat, activeTarget.lon, activeTarget.radiusM, snap.capture.team ?? snap.capture.userId, snap.capture.pct);
       if (snap?.armed) push(activeTarget.lat, activeTarget.lon, activeTarget.radiusM, 'b', snap.armed.defusePct);
     }
     if (snap?.bases) {
       for (const f of snap.flags || []) {
-        if (f.pickupTeam) {
-          const raidedBase = snap.bases[f.team as 'a'|'b'];
-          if (raidedBase) push(raidedBase.lat, raidedBase.lon, snap.zoneRadiusM || 15, f.pickupTeam, f.pickupPct || 0);
+        const raider = f.pickupTeam ?? f.pickupBy ?? null;
+        if (raider) {
+          const raidedBase = snap.bases[(f.team ?? f.owner)!];
+          if (raidedBase) push(raidedBase.lat, raidedBase.lon, snap.zoneRadiusM || 15, raider, f.pickupPct || 0);
         }
       }
     }
@@ -610,7 +635,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     const feats: any[] = [];
     for (const f of snap?.flags || []) {
       if (typeof f.lat === 'number') {
-        feats.push({ type: 'Feature', properties: { color: TEAM_COLOR[f.team] },
+        feats.push({ type: 'Feature', properties: { color: colorForKey(f.team ?? f.owner) },
           geometry: { type: 'Point', coordinates: [f.lon!, f.lat!] } });
       }
     }
@@ -643,11 +668,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   }, [watchSync.paired, snap?.phase, remainingS, telemetry.sample?.lat, telemetry.sample?.lon,
       telemetry.heading, visibleEnemies, activeRevealIds, snap?.comicMap]);
   const isSeeker = snap?.me?.role === 'seeker';
-  const isTeamMode = !!snap?.me?.team;
-  const shootPhase = isTeamMode ? snap?.phase === 'live' : snap?.phase === 'seeking';
+  // Used to key off "does this player have a team" as a stand-in for "is
+  // this one of the 4 non-hide_and_seek modes, which all use the 'live'
+  // phase (see server's shootPhases)" — broke for the ffa variant of those
+  // modes (no team assigned, but still 'live'/'base_setup', never H&S's
+  // 'seeking'). subMode is the actual signal, independent of team.
+  const isTeamCapableMode = snap?.subMode !== 'hide_and_seek';
+  const shootPhase = isTeamCapableMode ? snap?.phase === 'live' : snap?.phase === 'seeking';
   const canShoot = shootPhase && snap?.me?.status === 'alive'
     && (snap?.me?.frozenRemainingMs ?? 0) <= 0
-    && (isTeamMode || isSeeker);
+    && (isTeamCapableMode || isSeeker);
   const radarCd = snap?.me?.radarCooldownRemainingMs ?? 0;
   const hitCd = snap?.me?.hitCooldownRemainingMs ?? 0;
   const isHider = snap?.me?.role === 'hider';
@@ -688,10 +718,15 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     // 'instant' doesn't (either team can capture the active target).
     return snap.destroyVariant === 'defuse' ? (snap.me?.team === 'a' ? 'Angreifer' : 'Verteidiger') : 'Ziel aktiv';
   };
+  const ffaVariant = snap?.teamVariant === 'ffa';
   const scoreLine: string | null = snap?.subMode === 'domination'
-    ? `A ${snap.teamScore?.a ?? 0} : ${snap.teamScore?.b ?? 0} B · Ziel ${snap.targetScore}`
+    ? (ffaVariant
+        ? `Du: ${snap?.playerScore?.[me?.id || ''] ?? 0} · Ziel ${snap?.targetScore}`
+        : `A ${snap?.teamScore?.a ?? 0} : ${snap?.teamScore?.b ?? 0} B · Ziel ${snap?.targetScore}`)
     : snap?.subMode === 'ctf'
-    ? `A ${snap.captures?.a ?? 0} : ${snap.captures?.b ?? 0} B · Ziel ${snap.targetCaptures}`
+    ? (ffaVariant
+        ? `Du: ${snap?.captures?.[me?.id || ''] ?? 0} Eroberungen · Ziel ${snap?.targetCaptures}`
+        : `A ${snap?.captures?.a ?? 0} : ${snap?.captures?.b ?? 0} B · Ziel ${snap?.targetCaptures}`)
     : snap?.subMode === 'seek_destroy'
     ? zerstorenLine()
     : null;
@@ -1149,9 +1184,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 
       {/* Endgame overlay */}
       {snap?.phase === 'ended' && (() => {
+        // Ffa modes (Domination/Bomb/Deathmatch/CTF with teamVariant='ffa')
+        // end with a 'player_'+userId winner instead of 'team_a'/'team_b'.
         const end: Toast = snap.winner === 'seekers' ? { icon: 'flashlight', text: 'Seeker gewinnen!' }
           : snap.winner === 'hiders' ? { icon: 'ghost', text: 'Hider gewinnen!' }
           : snap.winner === 'draw' ? { icon: 'handshake', text: 'Unentschieden' }
+          : snap.winner === 'player_' + (me?.id || '') ? { icon: 'trophy', text: 'Du gewinnst!' }
+          : snap.winner?.startsWith('player_') ? { icon: 'skull', text: 'Jemand anderes gewinnt' }
           : snap.winner === 'team_' + (snap.me?.team || '') ? { icon: 'trophy', text: 'Dein Team gewinnt!' }
           : { icon: 'skull', text: 'Gegner-Team gewinnt' };
         return (

@@ -244,6 +244,13 @@ function registerPlatformHandlers(io, socket, db) {
       if (['respawn', 'freeze'].includes(arSettings?.deathmatchOnHit)) {
         next.deathmatchOnHit = arSettings.deathmatchOnHit;
       }
+      // Team/FFA variant for the 4 team-capable modes (domination, ctf,
+      // seek_destroy, deathmatch) — see MODES.*'s cfg.teamVariant handling
+      // in arops.js. Only 'ffa' is ever meaningful to send; 'team' is the
+      // implicit default so both are accepted here.
+      if (['team', 'ffa'].includes(arSettings?.teamVariant)) {
+        next.teamVariant = arSettings.teamVariant;
+      }
       if (Number.isFinite(arSettings?.livesPerPlayer)) {
         next.livesPerPlayer = Math.min(10, Math.max(1, Math.round(+arSettings.livesPerPlayer)));
       }

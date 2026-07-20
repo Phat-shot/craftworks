@@ -94,6 +94,14 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   const emitTimerRef = useRef(null);
   useEffect(() => () => { if (emitTimerRef.current) clearTimeout(emitTimerRef.current); }, []);
   const emitUpdate = (patch) => {
+    // Apply locally right away — otherwise the UI only reflects a change once
+    // the debounced emit below round-trips through the server, which reads as
+    // "nothing happened" if you click again in the meantime. Worse, map-tap
+    // handlers build their next point list off `arRef.current.polygon`
+    // (or `.zones`) — without this, several taps within one debounce window
+    // all read the same stale array and each click's patch overwrites the
+    // previous one's pending point instead of appending to it.
+    setAr(prev => ({ ...prev, ...patch }));
     pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
     if (emitTimerRef.current) clearTimeout(emitTimerRef.current);
     emitTimerRef.current = setTimeout(() => {
@@ -184,6 +192,9 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   // ffa/The Ship have no roles at all (not seeker/hider, not team) — the
   // per-player role toggle only makes sense for the classic variant.
   const rolesApply = subMode === 'hide_and_seek' && hsVariant === 'classic';
+  // Team/FFA variant for the 4 team-capable modes — analogous to hsVariant,
+  // see server's cfg.teamVariant in arops.js. Only meaningful for TEAM_MODES.
+  const teamVariant = isTeamMode && ar.teamVariant === 'ffa' ? 'ffa' : 'team';
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
@@ -260,16 +271,29 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           </Tip>
         </div>
       )}
-      {/* Domination/CTF haben keine echte Variante zum Umschalten, zeigen
-          aber trotzdem eine Zeile in derselben Position wie jeder andere
-          Modus — sonst wirkt die Lobby inkonsistent (leere Lücke bei genau
-          diesen Modi). Zerstören/Deathmatch haben zwar schon eigene Zeilen
-          weiter unten, aber auch dort fehlte bisher die Team-Kennzeichnung. */}
+      {/* Team/FFA toggle for the 4 team-capable modes — analogous to Hide &
+          Seek's variant picker above. Zerstören's 'defuse' sub-variant is
+          inherently two-sided (attacker arms / defender defuses) and has no
+          ffa reading, so that picker below hides it while ffa is selected. */}
       {TEAM_MODES.includes(subMode) && (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
-            👥 Team-Modus (A vs. B){hasCaptainBase ? ' · Captain platziert die Basis' : ''}
-          </span>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ teamVariant: 'team' })}
+            style={{ borderColor: teamVariant === 'team' ? 'var(--gold)' : undefined,
+                     color: teamVariant === 'team' ? 'var(--gold)' : undefined }}>
+            👥 Team (A vs. B)
+          </button>
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ teamVariant: 'ffa' })}
+            style={{ borderColor: teamVariant === 'ffa' ? 'var(--gold)' : undefined,
+                     color: teamVariant === 'ffa' ? 'var(--gold)' : undefined }}>
+            🎲 Jeder gegen jeden
+          </button>
+          {hasCaptainBase && (
+            <span style={{ fontSize: 10, color: 'var(--text3)' }}>
+              {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
+            </span>
+          )}
         </div>
       )}
       {rolesApply && (
@@ -288,7 +312,7 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
       {subMode === 'seek_destroy' && (
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 10, color: 'var(--text3)' }}>Zerstören:</span>
-          {[['instant', 'Symmetrisch'], ['defuse', 'Entschärfen']].map(([id, label]) => (
+          {(teamVariant === 'ffa' ? [['instant', 'Symmetrisch']] : [['instant', 'Symmetrisch'], ['defuse', 'Entschärfen']]).map(([id, label]) => (
             <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
               onClick={() => emitUpdate({ destroyVariant: id })}
               style={{ borderColor: destroyVariant === id ? 'var(--gold)' : undefined,
@@ -390,7 +414,7 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           );
         })}
       </div>
-      </>) : isTeamMode ? (<>
+      </>) : (isTeamMode && teamVariant === 'team') ? (<>
       <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
         Teams {subMode === 'seek_destroy' ? '(A = Angreifer, B = Verteidiger)' : ''}
         {hasCaptainBase ? ' · Captain setzt die Basis' : ''}
@@ -417,6 +441,8 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
       <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 12 }}>
         {hsVariant === 'the_ship'
           ? '🎭 The Ship: jeder bekommt beim Start ein geheimes Ziel zugewiesen — keine Rollen/Teams in der Lobby.'
+          : isTeamMode && teamVariant === 'ffa'
+          ? `🎲 Jeder gegen jeden — jeder spielt für sich, keine Teams.${hasCaptainBase ? ' Jede/r platziert die eigene Basis.' : ''}`
           : '🎯 Jeder gegen jeden — keine Rollen/Teams in der Lobby.'}
       </div>
       )}
