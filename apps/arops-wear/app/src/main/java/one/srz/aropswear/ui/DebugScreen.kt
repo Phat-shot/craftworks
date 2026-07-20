@@ -39,6 +39,7 @@ fun DebugScreen(onTap: () -> Unit) {
     val context = LocalContext.current
     val claimed by PairingRepository.claimed.collectAsState()
     val token by PairingRepository.token.collectAsState()
+    val lastRejectedToken by PairingRepository.lastRejectedToken.collectAsState()
     val state by GameStateRepository.state.collectAsState()
 
     // -1 = still checking, -2 = check failed, otherwise the connected-node count.
@@ -90,10 +91,22 @@ fun DebugScreen(onTap: () -> Unit) {
             style = MaterialTheme.typography.caption2,
         )
         Text(
-            text = "Token: ${token.take(8)}…",
+            text = "Erwarteter Token: ${token.take(8)}…",
             color = ComicPalette.gold.copy(alpha = 0.7f),
             style = MaterialTheme.typography.caption3,
         )
+        // Diagnostic for a reported "phone says paired, watch says nein"
+        // mismatch — see PairingRepository.lastRejectedToken's own comment.
+        // Absent (this line doesn't render) despite a phone that reports
+        // success means the claim never physically arrives at all; present
+        // AND different from the token above confirms an actual mismatch.
+        lastRejectedToken?.let {
+            Text(
+                text = "Letzter abgelehnter Claim: ${it.take(8)}…",
+                color = ComicPalette.hot,
+                style = MaterialTheme.typography.caption3,
+            )
+        }
         Text(
             text = "v${BuildConfig.VERSION_NAME} · ${BuildConfig.COMMIT_SHA}",
             color = ComicPalette.gold.copy(alpha = 0.45f),

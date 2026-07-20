@@ -59,6 +59,19 @@ object PairingRepository {
     private val _claimed = MutableStateFlow(false)
     val claimed = _claimed.asStateFlow()
 
+    // Diagnostic only (shown on ui/DebugScreen.kt) — the phone has
+    // consistently reported a successful claim while the watch keeps
+    // showing unclaimed, with two rounds of fixes (connectivity
+    // false-positive, then token persistence) not resolving it. Rather
+    // than guess a third time, surface exactly what token a REJECTED claim
+    // attempt actually carried, side by side with what this watch expects
+    // — an empty/absent value here despite the phone reporting success
+    // means the message never arrives at all (a transport-level problem,
+    // not a token mismatch); a present-but-different value confirms an
+    // actual mismatch and rules the transport out entirely.
+    private val _lastRejectedToken = MutableStateFlow<String?>(null)
+    val lastRejectedToken = _lastRejectedToken.asStateFlow()
+
     /** Idempotent — only the first call in a given process actually touches
      *  SharedPreferences and applies the persisted value. */
     fun init(context: Context) {
@@ -93,6 +106,7 @@ object PairingRepository {
             setClaimed(true)
             return true
         }
+        _lastRejectedToken.value = scannedToken
         return false
     }
 
