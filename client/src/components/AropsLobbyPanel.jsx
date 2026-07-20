@@ -85,8 +85,23 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   // Effective role: explicit assignment, else first member defaults to seeker
   const roleOf = (uid) => (ar.roles || {})[uid] || 'hider';
 
+  // Debounced: rapidly clicking through several mode/settings buttons in a
+  // row previously fired one full lobby:ar_update round-trip PER CLICK —
+  // each its own DB read (effectiveArSettings) + write + broadcast to
+  // everyone in the lobby (mirrors the same fix in the mobile app's
+  // LobbyScreen — see its comment for the reported symptom this addresses).
+  const pendingPatchRef = useRef({});
+  const emitTimerRef = useRef(null);
+  useEffect(() => () => { if (emitTimerRef.current) clearTimeout(emitTimerRef.current); }, []);
   const emitUpdate = (patch) => {
-    socket?.emit('lobby:ar_update', { lobbyId, arSettings: { ...arRef.current, ...patch } });
+    pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
+    if (emitTimerRef.current) clearTimeout(emitTimerRef.current);
+    emitTimerRef.current = setTimeout(() => {
+      const merged = { ...arRef.current, ...pendingPatchRef.current };
+      pendingPatchRef.current = {};
+      emitTimerRef.current = null;
+      socket?.emit('lobby:ar_update', { lobbyId, arSettings: merged });
+    }, 150);
   };
 
   // ── Server sync ──────────────────────────────────────────
@@ -243,6 +258,18 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
               🎭 The Ship
             </button>
           </Tip>
+        </div>
+      )}
+      {/* Domination/CTF haben keine echte Variante zum Umschalten, zeigen
+          aber trotzdem eine Zeile in derselben Position wie jeder andere
+          Modus — sonst wirkt die Lobby inkonsistent (leere Lücke bei genau
+          diesen Modi). Zerstören/Deathmatch haben zwar schon eigene Zeilen
+          weiter unten, aber auch dort fehlte bisher die Team-Kennzeichnung. */}
+      {TEAM_MODES.includes(subMode) && (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+            👥 Team-Modus (A vs. B){hasCaptainBase ? ' · Captain platziert die Basis' : ''}
+          </span>
         </div>
       )}
       {rolesApply && (

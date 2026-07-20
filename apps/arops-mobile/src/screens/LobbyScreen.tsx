@@ -222,8 +222,26 @@ export default function LobbyScreen({
     };
   }, [lobbyId, isHost, onGameStart]);
 
+  // Debounced: rapidly tapping through several mode/settings buttons in a
+  // row previously fired one full lobby:ar_update round-trip PER TAP —
+  // each one its own DB read (effectiveArSettings) + write + broadcast to
+  // everyone in the lobby. Reported symptom: the app becomes unresponsive
+  // after switching modes a few times in quick succession. Coalescing
+  // bursts into a single emit removes that pile-up regardless of exactly
+  // which part of the round-trip it was overwhelming (client render churn
+  // from rapid-fire lobby:ar_updated broadcasts, or the server/DB side).
+  const pendingPatchRef = useRef<Partial<ArSettings>>({});
+  const emitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (emitTimerRef.current) clearTimeout(emitTimerRef.current); }, []);
   const emitUpdate = (patch: Partial<ArSettings>) => {
-    getSocket().emit('lobby:ar_update', { lobbyId, arSettings: { ...arRef.current, ...patch } });
+    pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
+    if (emitTimerRef.current) clearTimeout(emitTimerRef.current);
+    emitTimerRef.current = setTimeout(() => {
+      const merged = { ...arRef.current, ...pendingPatchRef.current };
+      pendingPatchRef.current = {};
+      emitTimerRef.current = null;
+      getSocket().emit('lobby:ar_update', { lobbyId, arSettings: merged });
+    }, 150);
   };
 
   const polygon = ar.polygon || [];
@@ -480,7 +498,23 @@ export default function LobbyScreen({
       {/* Alle Modus-spezifischen Einstellungen konsistent direkt unter dem
           Modus-Umschalter, für jeden Modus gleich positioniert (vorher lagen
           Gefunden/Zerstören/Deathmatch-Einstellungen unter der Karte, nur
-          hsVariant war oben — uneinheitlich). */}
+          hsVariant war oben — uneinheitlich). Domination/CTF haben keine
+          echte Variante zum Umschalten, zeigen aber trotzdem eine Zeile in
+          derselben Position — sonst wirkt die Lobby inkonsistent (leere
+          Lücke bei genau diesen beiden Modi, während jeder andere Modus
+          dort etwas zeigt).*/}
+      {subMode === 'domination' && (
+        <View style={st.rowBtns}>
+          <Icon name="people" size={13} color="#c0a0f0" />
+          <Text style={st.smallTxt}>Team-Modus (A vs. B)</Text>
+        </View>
+      )}
+      {subMode === 'ctf' && (
+        <View style={st.rowBtns}>
+          <Icon name="people" size={13} color="#c0a0f0" />
+          <Text style={st.smallTxt}>Team-Modus (A vs. B) · Captain platziert die Basis</Text>
+        </View>
+      )}
       {isHost && rolesApply && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Gefunden:</Text>
@@ -501,6 +535,12 @@ export default function LobbyScreen({
           </TouchableOpacity>
         </View>
       )}
+      {subMode === 'seek_destroy' && (
+        <View style={st.rowBtns}>
+          <Icon name="people" size={13} color="#c0a0f0" />
+          <Text style={st.smallTxt}>Team-Modus (A vs. B)</Text>
+        </View>
+      )}
       {isHost && subMode === 'seek_destroy' && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Zerstören:</Text>
@@ -517,6 +557,12 @@ export default function LobbyScreen({
             <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
           </TouchableOpacity>
+        </View>
+      )}
+      {subMode === 'deathmatch' && (
+        <View style={st.rowBtns}>
+          <Icon name="people" size={13} color="#c0a0f0" />
+          <Text style={st.smallTxt}>Team-Modus (A vs. B) · Captain platziert die Basis</Text>
         </View>
       )}
       {isHost && subMode === 'deathmatch' && (
