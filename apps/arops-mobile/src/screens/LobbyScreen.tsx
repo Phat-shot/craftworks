@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, Activ
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
-import { getSocket, getUser, fetchLobbyQr } from '../api';
+import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
@@ -122,7 +122,17 @@ export default function LobbyScreen({
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
-  const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(null);
+  // Seeded from the last real fix persisted locally (see api.ts
+  // saveLastPosition) so the map already centers on roughly the right area
+  // on first render, instead of the world-view fallback, while a fresh fix
+  // is still pending — myPosStale marks it as "last known", not live.
+  const lastKnownPos = getLastPosition();
+  const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(
+    lastKnownPos ? { lat: lastKnownPos.lat, lon: lastKnownPos.lon } : null
+  );
+  const [myPosStale, setMyPosStale] = useState(!!lastKnownPos);
+  const myPosStaleRef = useRef(myPosStale);
+  myPosStaleRef.current = myPosStale;
   const [myPosLoading, setMyPosLoading] = useState(false);
   const [myPosErr, setMyPosErr] = useState(false);
   // Surfaced in the UI while loading — a GPS cold fix can legitimately take
@@ -130,6 +140,10 @@ export default function LobbyScreen({
   // spinner icon to show for it, that reads as "the app is stuck" instead of
   // "still searching". Attempt count included so long waits stay legible.
   const [myPosAttempt, setMyPosAttempt] = useState(0);
+  // Generation token for the watchdog below — a stale watchdog from an
+  // earlier loadMyPosition() call (e.g. superseded by a manual retry tap)
+  // must not clear the loading state of a newer, still-in-flight one.
+  const loadGenRef = useRef(0);
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
@@ -155,38 +169,67 @@ export default function LobbyScreen({
   // also generally more reliable for acquiring a first fix than one-shot
   // getCurrentPositionAsync (keeps trying continuously instead of one single
   // snapshot attempt) — take its first update, then unsubscribe immediately.
+  //
+  // Watchdog on top of that (WATCHDOG_MS, well past the 24s of the internal
+  // loop below): reported "hangs again" after the fix above means some path
+  // through this function can still leave myPosLoading stuck — possibly a
+  // synchronous throw before the loop is even reached. The watchdog and the
+  // surrounding try/catch/finally are a second, independent layer that does
+  // not rely on this function's own internals ever behaving — whatever goes
+  // wrong inside, the lobby can no longer get stuck on "GPS wird gesucht"
+  // forever, only ever fall back to the manual retry button.
+  const WATCHDOG_MS = 30_000;
   const loadMyPosition = async () => {
     setMyPosLoading(true);
     setMyPosErr(false);
     setMyPosAttempt(0);
 
-    const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
-    if (!perm || perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
-
-    Location.getLastKnownPositionAsync().then(cached => {
-      if (cached) setMyPos(p => p ?? { lat: cached.coords.latitude, lon: cached.coords.longitude });
-    }).catch(() => {});
-
-    let settled = false;
-    // Plain object holder (not a bare `let`) — TS otherwise over-narrows a
-    // closure-captured `let` reassigned only inside callbacks.
-    const subHolder: { current: Location.LocationSubscription | null } = { current: null };
-    Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 }, pos => {
-      if (settled) return;
-      settled = true;
-      setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+    const gen = ++loadGenRef.current;
+    const watchdog = setTimeout(() => {
+      if (loadGenRef.current !== gen) return; // superseded by a newer attempt
+      setMyPosErr(true);
       setMyPosLoading(false);
-      subHolder.current?.remove();
-    }).then(s => { subHolder.current = s; if (settled) s.remove(); }).catch(() => {});
+    }, WATCHDOG_MS);
 
-    const WINDOW_MS = 8000;
-    const WINDOWS = 3;
-    for (let i = 0; i < WINDOWS && !settled; i++) {
-      setMyPosAttempt(i);
-      await new Promise(r => setTimeout(r, WINDOW_MS));
+    try {
+      const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
+      if (!perm || perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
+
+      // Fill from the OS's own cache if we don't have anything yet, or all
+      // we have is the (possibly much older) locally-persisted last fix —
+      // a fresher OS-cached fix is worth preferring over that.
+      Location.getLastKnownPositionAsync().then(cached => {
+        if (cached) setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
+      }).catch(() => {});
+
+      let settled = false;
+      // Plain object holder (not a bare `let`) — TS otherwise over-narrows a
+      // closure-captured `let` reassigned only inside callbacks.
+      const subHolder: { current: Location.LocationSubscription | null } = { current: null };
+      Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 }, pos => {
+        if (settled) return;
+        settled = true;
+        setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setMyPosStale(false);
+        setMyPosLoading(false);
+        saveLastPosition(pos.coords.latitude, pos.coords.longitude);
+        subHolder.current?.remove();
+      }).then(s => { subHolder.current = s; if (settled) s.remove(); }).catch(() => {});
+
+      const WINDOW_MS = 8000;
+      const WINDOWS = 3;
+      for (let i = 0; i < WINDOWS && !settled; i++) {
+        setMyPosAttempt(i);
+        await new Promise(r => setTimeout(r, WINDOW_MS));
+      }
+      subHolder.current?.remove();
+      if (!settled) { setMyPosErr(true); setMyPosLoading(false); }
+    } catch {
+      setMyPosErr(true);
+      setMyPosLoading(false);
+    } finally {
+      clearTimeout(watchdog);
     }
-    subHolder.current?.remove();
-    if (!settled) { setMyPosErr(true); setMyPosLoading(false); }
   };
 
   useEffect(() => { loadMyPosition(); }, []);
@@ -663,7 +706,8 @@ export default function LobbyScreen({
               geometry: { type: 'Point', coordinates: [myPos.lon, myPos.lat] },
             }}>
               <CircleLayer id="myPosDot" style={{
-                circleRadius: 8, circleColor: '#40a0ff', circleOpacity: 0.85,
+                circleRadius: 8, circleColor: myPosStale ? '#807050' : '#40a0ff',
+                circleOpacity: myPosStale ? 0.5 : 0.85,
                 circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
               }} />
             </ShapeSource>
@@ -693,6 +737,11 @@ export default function LobbyScreen({
         {myPosLoading && (
           <View style={st.gpsStatusBadge}>
             <Text style={st.gpsStatusTxt}>GPS wird gesucht… ({myPosAttempt + 1}/3)</Text>
+          </View>
+        )}
+        {!myPosLoading && myPosStale && (
+          <View style={st.gpsStatusBadge}>
+            <Text style={st.gpsStatusTxt}>Letzte bekannte Position</Text>
           </View>
         )}
       </View>

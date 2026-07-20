@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import { restoreSession, createArLobby, getUser, logout } from './src/api';
+import { restoreSession, loadLastPosition, createArLobby, getUser, logout } from './src/api';
 import { SERVER_URL, BUILD_TIME } from './src/config';
 import Icon from './src/components/Icon';
 import { useWatchSync } from './src/hooks/useWatchSync';
@@ -61,8 +61,11 @@ export default function App() {
   const fontsReady = fontsLoaded || !!fontError || fontTimedOut;
 
   useEffect(() => {
-    restoreSession()
-      .then(u => setRoute(u ? { name: 'menu' } : { name: 'login' }))
+    // Loaded alongside the session (not gated by it — device-local, not
+    // tied to login) so the lobby map already has a last-known position to
+    // seed its viewport with by the time any screen that needs it mounts.
+    Promise.all([restoreSession(), loadLastPosition()])
+      .then(([u]) => setRoute(u ? { name: 'menu' } : { name: 'login' }))
       .catch(() => setRoute({ name: 'login' }));
   }, []);
 

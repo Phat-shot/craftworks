@@ -171,7 +171,23 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     };
 
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      // requestForegroundPermissionsAsync has no built-in timeout and can
+      // hang indefinitely on some devices (same class of bug fixed in the
+      // lobby's own GPS flow, see LobbyScreen.tsx loadMyPosition) — left
+      // unguarded, `granted` would stay null forever and this whole effect
+      // (including the watchdog below) would never even get set up, with no
+      // recovery path at all. A bare timeout->false would be worse: `granted
+      // === false` renders GameScreen's permanent "no permission" dead-end
+      // below with no retry, which would be wrong for a merely slow OS call.
+      // So: keep retrying the request itself (bounded per attempt, unbounded
+      // overall) until it actually settles one way or the other — mirrors
+      // this hook's existing "never permanently give up automatically"
+      // philosophy for position/heading retries below.
+      let status: Location.PermissionStatus | null = null;
+      while (!cancelled && status === null) {
+        const r = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
+        if (r) status = r.status;
+      }
       if (cancelled) return;
       setGranted(status === 'granted');
       if (status !== 'granted') return;
@@ -199,10 +215,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
       // capped retry count meant the player had to notice it was stuck and
       // manually tap retryPosition/retryHeading; this way the status
       // banners in the UI are purely informational, not something the
-      // player has to act on to keep the recovery going). Since this now
-      // starts as early as the Lobby screen instead of only once the game
-      // actually starts, indefinite retries also give GPS/compass much more
-      // real time to lock in before a match begins.
+      // player has to act on to keep the recovery going).
       watchdog = setInterval(() => {
         if (cancelled) return;
         if (Date.now() - lastHeadingAt.current > 4000) {

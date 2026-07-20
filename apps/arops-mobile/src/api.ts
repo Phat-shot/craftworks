@@ -13,13 +13,36 @@ import { withTimeout } from './utils/withTimeout';
 const FETCH_TIMEOUT_MS = 10_000;
 
 export interface User { id: string; username: string; avatar_color?: string; }
+export interface LastPosition { lat: number; lon: number; ts: number; }
 
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 let currentUser: User | null = null;
 let socket: Socket | null = null;
+let lastPosition: LastPosition | null = null;
 
 export function getUser(): User | null { return currentUser; }
+
+/** Last real (device-reported, not IP-guessed) GPS fix, persisted locally
+ *  across app restarts — purely a map-convenience default (never sent to
+ *  the server), so the lobby map can center on roughly the right area
+ *  immediately instead of the world view while a fresh fix is still
+ *  pending. */
+export function getLastPosition(): LastPosition | null { return lastPosition; }
+
+export async function saveLastPosition(lat: number, lon: number): Promise<void> {
+  lastPosition = { lat, lon, ts: Date.now() };
+  await AsyncStorage.setItem('last_position', JSON.stringify(lastPosition)).catch(() => {});
+}
+
+/** Restores the persisted last-known position into memory. Independent of
+ *  restoreSession (device-local, not tied to a user session) — call once
+ *  at boot before any screen that reads getLastPosition() can mount. */
+export async function loadLastPosition(): Promise<void> {
+  const raw = await AsyncStorage.getItem('last_position').catch(() => null);
+  if (!raw) return;
+  try { lastPosition = JSON.parse(raw); } catch {}
+}
 
 // 'ok' — refreshed successfully. 'rejected' — the SERVER actually responded
 // and said the refresh token is dead (expired/invalid); the session really
