@@ -818,10 +818,15 @@ export default function LobbyScreen({
             <Camera defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
             <ComicMapLayers features={ar.comicMap.features} />
           </MapView>
-          {comicMapStale && (
+          {comicMapStale ? (
             <View style={st.comicStaleBadge}>
               <Icon name="warning" size={11} color="#100" />
               <Text style={st.comicStaleTxt}>veraltet</Text>
+            </View>
+          ) : (
+            <View style={[st.comicStaleBadge, st.comicCachedBadge]}>
+              <Icon name="checkCircle" size={11} color="#0a2010" />
+              <Text style={st.comicStaleTxt}>gecached</Text>
             </View>
           )}
         </View>
@@ -866,8 +871,14 @@ export default function LobbyScreen({
             )}
             <TouchableOpacity style={st.iconBtnLg} onPress={generateComicMap}
               disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
+              {/* Reported: once a map already exists, this used to flip
+                  back to the 'palette' (first-generate) icon whenever it
+                  wasn't currently stale — reading as if a second, different
+                  tap was still needed to "really" refresh. Once any map
+                  exists at all, always show the refresh icon; onPress
+                  already regenerates unconditionally either way. */}
               {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={comicMapStale ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
+                <Icon name={ar.comicMap ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
               )}
             </TouchableOpacity>
           </View>
@@ -1127,6 +1138,7 @@ const st = StyleSheet.create({
     backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
   },
   comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
+  comicCachedBadge: { backgroundColor: '#80e070' },
   rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
   smallBtn: { backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
   smallBtnRow: {
