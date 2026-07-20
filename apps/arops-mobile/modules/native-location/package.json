@@ -1,0 +1,6 @@
+{
+  "name": "native-location",
+  "version": "0.1.0",
+  "description": "Direct FusedLocationProviderClient access, bypassing expo-location's wrapper. Local module, Android-only, not published.",
+  "main": "index.ts"
+}

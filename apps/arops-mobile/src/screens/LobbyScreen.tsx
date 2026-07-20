@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
+import { getCurrentLocation as getNativeLocation } from 'native-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition } from '../api';
 import Icon, { IconName } from '../components/Icon';
@@ -92,12 +93,23 @@ const POLY_ERR_DE: Record<string, string> = {
   area_too_small: 'Fläche zu klein (min. 2.000 m²)',
   area_too_large: 'Fläche zu groß (max. 3 km²)',
 };
+// Was missing several codes the server actually emits on this same 'error'
+// channel (lobby_not_found, server_error, and the generic-lobby ones below)
+// — onError below only ever set startErr for a code present here, so any
+// unmapped code (e.g. an unexpected server_error from a DB hiccup) made
+// tapping "Start" look like it silently did nothing at all.
 const START_ERR: Record<string, string> = {
   ar_invalid_polygon: 'Spielfeld ungültig — siehe Karte',
   ar_need_two_players: 'Mindestens 2 Spieler nötig',
   ar_need_zones: 'Zonen fehlen — Tipp-Modus auf "Zonen" stellen',
   ar_zones_invalid: 'Zonen ungültig (außerhalb / zu nah beieinander)',
   not_host: 'Nur der Host kann starten',
+  lobby_not_found: 'Lobby nicht gefunden — evtl. abgelaufen',
+  server_error: 'Serverfehler — bitte erneut versuchen',
+  not_member: 'Nicht (mehr) Mitglied dieser Lobby',
+  not_in_lobby: 'Nicht in der Lobby',
+  wrong_mode: 'Falscher Modus',
+  ar_update_failed: 'Einstellung konnte nicht gespeichert werden',
 };
 // Applied once when Debug-Mode is switched on — host can still retune via the
 // normal pickers afterward, nothing here is locked in.
@@ -178,6 +190,12 @@ export default function LobbyScreen({
   // not rely on this function's own internals ever behaving — whatever goes
   // wrong inside, the lobby can no longer get stuck on "GPS wird gesucht"
   // forever, only ever fall back to the manual retry button.
+  //
+  // Android now bypasses expo-location's watchPositionAsync entirely below
+  // (see modules/native-location) — the repeated hangs across multiple
+  // rounds of JS-side watchdogs point at that wrapper itself, not the
+  // underlying OS location stack. iOS (no native module there) still uses
+  // the watchPositionAsync + timer-loop path.
   const WATCHDOG_MS = 30_000;
   const loadMyPosition = async () => {
     setMyPosLoading(true);
@@ -201,6 +219,28 @@ export default function LobbyScreen({
       Location.getLastKnownPositionAsync().then(cached => {
         if (cached) setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
       }).catch(() => {});
+
+      // Android: FusedLocationProviderClient directly (see modules/
+      // native-location), bypassing expo-location's watchPositionAsync —
+      // that wrapper is the documented source of the repeated hangs above,
+      // not the underlying OS location stack. Own 12s native-side timeout,
+      // so this can't hang either; a plain one-shot call replaces the whole
+      // watch-and-unsubscribe dance below, which stays as the iOS path
+      // (no native module there, see NativeLocationModule.kt's doc-comment).
+      if (Platform.OS === 'android') {
+        const fix = await getNativeLocation().catch(() => null);
+        if (loadGenRef.current !== gen) return; // superseded by a newer attempt
+        if (fix) {
+          setMyPos({ lat: fix.lat, lon: fix.lon });
+          setMyPosStale(false);
+          setMyPosLoading(false);
+          saveLastPosition(fix.lat, fix.lon);
+        } else {
+          setMyPosErr(true);
+          setMyPosLoading(false);
+        }
+        return;
+      }
 
       let settled = false;
       // Plain object holder (not a bare `let`) — TS otherwise over-narrows a
@@ -254,7 +294,10 @@ export default function LobbyScreen({
     const onLeft = ({ userId }: any) => setMembers(m => m.filter(x => x.id !== userId));
     const onReady = ({ userId, ready: r }: any) => setMembers(m => m.map(x => x.id === userId ? { ...x, ready: r } : x));
     const onStart = ({ sessionId }: any) => onGameStart(sessionId);
-    const onError = ({ code }: any) => { if (START_ERR[code]) setStartErr(START_ERR[code]!); };
+    // Fallback to the raw code rather than doing nothing for one we haven't
+    // mapped in START_ERR — a silent no-op here is exactly what made a tap
+    // on "Start" look broken with zero feedback (see START_ERR's comment).
+    const onError = ({ code, detail }: any) => setStartErr(START_ERR[code] || detail || `Fehler: ${code}`);
     const onComicMapReady = ({ reqId, comicMap }: any) => {
       if (reqId !== comicMapReqRef.current) return; // superseded by a newer request
       setComicMapLoading(false);
@@ -379,8 +422,12 @@ export default function LobbyScreen({
     // Placing a point is a strong signal the host is actively looking at the
     // map right now — a good moment to retry a GPS fix that hasn't resolved
     // yet (observed: a fix that seemed stuck often just appears shortly
-    // after the host starts tapping the map anyway).
-    if (!myPos && !myPosLoading) loadMyPosition();
+    // after the host starts tapping the map anyway). Checking myPosStale too
+    // (not just !myPos) matters now that myPos starts pre-seeded from the
+    // persisted last-known position: without it, this retry-on-tap safety
+    // net could never fire again once that seed was in place, even though
+    // it's stale — the exact case a fresh fix is still needed for.
+    if ((!myPos || myPosStale) && !myPosLoading) loadMyPosition();
     const c = feature?.geometry?.coordinates;
     if (!Array.isArray(c)) return;
     if (tapMode === 'zones' && NEEDS_ZONES[subMode] !== undefined) {

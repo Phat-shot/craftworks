@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, BackHandler, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, BackHandler, Modal, Alert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
@@ -34,13 +34,32 @@ export default function App() {
   const [infoOpen, setInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // A match used to close the whole app on back-press (Android's default
-  // hardwareBackPress behavior with no handler on the root screen). Back now
-  // ends the match for this player (same as the endgame recap's "Beenden"
-  // button) and returns to the main menu, instead of closing the app.
+  // A bare back-press used to close the whole app (Android's default
+  // hardwareBackPress behavior with no handler on the root screen) from
+  // ANY screen, including mid-match — one accidental back-swipe silently
+  // dropped a live game with zero warning. Now: 'game' asks for
+  // confirmation first (same underlying "leave" as the endgame recap's
+  // "Beenden" button, just guarded since this one can fire mid-match, not
+  // just after it's already over); 'lobby'/'join'/'glossary' — screens with
+  // nothing at stake — go straight back to the main menu instead of
+  // quitting the app outright.
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (route.name === 'game') { setRoute({ name: 'menu' }); return true; }
+      if (route.name === 'game') {
+        Alert.alert(
+          'Spiel verlassen?',
+          'Das laufende Match wird für dich beendet.',
+          [
+            { text: 'Abbrechen', style: 'cancel' },
+            { text: 'Verlassen', style: 'destructive', onPress: () => setRoute({ name: 'menu' }) },
+          ],
+        );
+        return true;
+      }
+      if (route.name === 'lobby' || route.name === 'join' || route.name === 'glossary') {
+        setRoute({ name: 'menu' });
+        return true;
+      }
       return false;
     });
     return () => sub.remove();

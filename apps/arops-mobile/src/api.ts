@@ -186,24 +186,31 @@ export async function loginAccount(email: string, password: string): Promise<Use
 /** Try restoring a previous session from storage. */
 export async function restoreSession(): Promise<User | null> {
   const [[, tok], [, rtok], [, userJson]] = await AsyncStorage.multiGet(['access_token', 'refresh_token', 'user']);
-  if (!tok || !userJson) return null;
-  accessToken = tok;
-  refreshToken = rtok || null;
+  // Only refresh_token + user are actually load-bearing — access_token is
+  // explicitly short-lived (15 min) and gets refreshed right below anyway.
+  // Requiring it to be present here was wrong: reported symptom was "closed
+  // and reopened the app, had to log in again" with NO server restart
+  // involved — meaning a perfectly valid 30-day refresh_token (the server
+  // never rotates/invalidates it on refresh, see auth.js's /refresh route)
+  // was being discarded just because access_token alone was missing/stale,
+  // e.g. if the app got killed mid-write during a background proactive
+  // refresh (startProactiveRefresh fires every 10 min regardless of
+  // foreground state).
+  if (!rtok || !userJson) return null;
+  accessToken = tok || null;
+  refreshToken = rtok;
   currentUser = JSON.parse(userJson);
-  // Proactively refresh: the stored access token is likely older than its 15 min TTL
-  if (refreshToken) {
-    const r = await tryRefresh();
-    // The server explicitly rejected the refresh token — this session really
-    // is dead, clear it now so the caller correctly shows the login screen.
-    // A 'network_error' (cold-start connectivity not up yet, timeout) must
-    // NOT be treated the same way — that used to wipe a perfectly valid
-    // 30-day refresh token just because the very first request after
-    // opening the app happened to be slow, forcing an unnecessary re-login.
-    if (r === 'rejected') {
-      await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
-      accessToken = null; refreshToken = null; currentUser = null;
-      return null;
-    }
+  const r = await tryRefresh();
+  // The server explicitly rejected the refresh token — this session really
+  // is dead, clear it now so the caller correctly shows the login screen.
+  // A 'network_error' (cold-start connectivity not up yet, timeout) must
+  // NOT be treated the same way — that used to wipe a perfectly valid
+  // 30-day refresh token just because the very first request after
+  // opening the app happened to be slow, forcing an unnecessary re-login.
+  if (r === 'rejected') {
+    await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
+    accessToken = null; refreshToken = null; currentUser = null;
+    return null;
   }
   startProactiveRefresh();
   return currentUser;

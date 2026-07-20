@@ -1,0 +1,27 @@
+apply plugin: 'com.android.library'
+
+group = 'one.srz.nativelocation'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  namespace "expo.modules.nativelocation"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+dependencies {
+  // Same version expo-location itself already pulls in as an `api`
+  // dependency (see node_modules/expo-location/android/build.gradle) —
+  // matched explicitly rather than left to resolve, so there's exactly one
+  // resolved play-services-location version on the classpath, not two
+  // candidates for Gradle to reconcile.
+  implementation "com.google.android.gms:play-services-location:21.0.1"
+}
