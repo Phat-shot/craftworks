@@ -20,6 +20,7 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
       handled.current = false;
       setError(e.message === 'http_404' ? 'Lobby nicht gefunden'
         : e.message === 'session_expired' ? 'Sitzung abgelaufen — bitte App neu starten und einloggen'
+        : e.message === 'network_error' ? 'Server nicht erreichbar — kurz erneut versuchen'
         : (e.message || 'Fehler'));
       setScanning(false);
     }

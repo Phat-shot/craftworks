@@ -74,7 +74,15 @@ export default function App() {
       const { lobbyId, code } = await createArLobby(`AR Ops · ${getUser()?.username || 'Host'}`);
       setRoute({ name: 'lobby', lobbyId, isHost: true, lobbyCode: code });
     } catch (e: any) {
-      setHostErr(e.message || 'Fehler beim Erstellen');
+      if (e.message === 'session_expired') {
+        // Tokens are already cleared (see api.ts) — go straight to the login
+        // screen instead of leaving the user stuck on a menu where every
+        // action just fails the same way with no way back in.
+        setRoute({ name: 'login' });
+        return;
+      }
+      setHostErr(e.message === 'network_error' ? 'Server nicht erreichbar — kurz erneut versuchen'
+        : (e.message || 'Fehler beim Erstellen'));
     }
   };
 

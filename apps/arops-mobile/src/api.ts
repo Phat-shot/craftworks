@@ -21,28 +21,64 @@ let socket: Socket | null = null;
 
 export function getUser(): User | null { return currentUser; }
 
+// 'ok' — refreshed successfully. 'rejected' — the SERVER actually responded
+// and said the refresh token is dead (expired/invalid); the session really
+// is over. 'network_error' — never got a response at all (timeout, no
+// connectivity, cold app-start network re-establishing) — the refresh token
+// itself might still be perfectly valid, we just couldn't reach the server
+// this instant. Callers must NOT treat 'network_error' the same as
+// 'rejected': wiping stored tokens on a transient network hiccup is exactly
+// what caused "closed and reopened the app -> session expired" even though
+// the 30-day refresh token was still good — see the two call sites below.
+type RefreshResult = 'ok' | 'rejected' | 'network_error';
+
 /** Access tokens expire after 15 min — transparently refresh and retry once. */
-async function tryRefresh(): Promise<boolean> {
-  if (!refreshToken) return false;
+async function tryRefresh(): Promise<RefreshResult> {
+  if (!refreshToken) return 'rejected';
+  let res: Response;
   try {
-    const res = await withTimeout(fetch(`${SERVER_URL}/api/auth/refresh`, {
+    res = await withTimeout(fetch(`${SERVER_URL}/api/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
     }), FETCH_TIMEOUT_MS);
-    if (!res.ok) return false;
+  } catch {
+    return 'network_error';
+  }
+  if (!res.ok) return 'rejected';
+  try {
     const d = await res.json();
-    if (!d.access_token) return false;
+    if (!d.access_token) return 'rejected';
     accessToken = d.access_token;
     const sets: [string, string][] = [['access_token', d.access_token]];
     if (d.refresh_token) { refreshToken = d.refresh_token; sets.push(['refresh_token', d.refresh_token]); }
     await AsyncStorage.multiSet(sets);
     // Keep the socket usable after reconnects
     if (socket) (socket.auth as any) = { token: accessToken };
-    return true;
+    return 'ok';
   } catch {
-    return false;
+    return 'network_error';
   }
+}
+
+// Access tokens live only 15 min, but a socket connection can legitimately
+// sit idle for much longer than that (host slowly setting up a lobby) with
+// zero HTTP calls happening to reactively trigger a refresh via req()'s 401
+// handling below. Left alone, the token silently goes stale; the NEXT time
+// the socket has to reconnect (backgrounding, a network drop) the server's
+// auth middleware rejects the stale token outright, with nothing to recover
+// it — reported as "lobby expired" when trying to start a match after
+// sitting in the lobby a while. Proactively refreshing well inside the TTL
+// keeps both the HTTP token and (via the assignment above) the socket's
+// auth payload fresh regardless of whether any HTTP request happens to fire.
+const PROACTIVE_REFRESH_MS = 10 * 60_000;
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+function startProactiveRefresh(): void {
+  if (refreshTimer) return;
+  refreshTimer = setInterval(() => { tryRefresh(); }, PROACTIVE_REFRESH_MS);
+}
+function stopProactiveRefresh(): void {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
 }
 
 async function req(path: string, body?: unknown, method = 'POST', retry = true): Promise<any> {
@@ -64,8 +100,15 @@ async function req(path: string, body?: unknown, method = 'POST', retry = true):
     // "session_expired" for every failed login attempt.
     const isAuthEndpoint = path.startsWith('/auth/');
     if (res.status === 401 && retry && !isAuthEndpoint) {
-      if (await tryRefresh()) return req(path, body, method, false);
-      // Refresh failed → session is truly dead; clear it so next boot re-logins
+      const r = await tryRefresh();
+      if (r === 'ok') return req(path, body, method, false);
+      if (r === 'network_error') {
+        // Couldn't even reach the server to ask — the session may well
+        // still be fine. Surface a distinct, retryable error instead of
+        // wiping valid tokens over a transient connectivity blip.
+        throw new Error('network_error');
+      }
+      // Server explicitly rejected the refresh token → session is truly dead.
       await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
       accessToken = null; refreshToken = null;
       throw new Error('session_expired');
@@ -86,6 +129,7 @@ export async function loginGuest(username: string): Promise<User> {
     ['refresh_token', data.refresh_token],
     ['user', JSON.stringify(data.user)],
   ]);
+  startProactiveRefresh();
   return data.user;
 }
 
@@ -112,6 +156,7 @@ export async function loginAccount(email: string, password: string): Promise<Use
     ['refresh_token', data.refresh_token],
     ['user', JSON.stringify(data.user)],
   ]);
+  startProactiveRefresh();
   return data.user;
 }
 
@@ -123,7 +168,21 @@ export async function restoreSession(): Promise<User | null> {
   refreshToken = rtok || null;
   currentUser = JSON.parse(userJson);
   // Proactively refresh: the stored access token is likely older than its 15 min TTL
-  if (refreshToken) await tryRefresh();
+  if (refreshToken) {
+    const r = await tryRefresh();
+    // The server explicitly rejected the refresh token — this session really
+    // is dead, clear it now so the caller correctly shows the login screen.
+    // A 'network_error' (cold-start connectivity not up yet, timeout) must
+    // NOT be treated the same way — that used to wipe a perfectly valid
+    // 30-day refresh token just because the very first request after
+    // opening the app happened to be slow, forcing an unnecessary re-login.
+    if (r === 'rejected') {
+      await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
+      accessToken = null; refreshToken = null; currentUser = null;
+      return null;
+    }
+  }
+  startProactiveRefresh();
   return currentUser;
 }
 
@@ -159,6 +218,18 @@ export function parseLobbyCode(raw: string): string | null {
 export function getSocket(): Socket {
   if (!socket) {
     socket = io(SERVER_URL, { auth: { token: accessToken }, reconnectionAttempts: 10 });
+    // A stale (expired) access token gets rejected outright by the server's
+    // auth middleware on any (re)connect attempt — most likely after sitting
+    // in a lobby a long time (no HTTP call around to reactively trigger a
+    // refresh, see startProactiveRefresh above) combined with a reconnect
+    // (backgrounding, a network drop). Without this, socket.io just keeps
+    // retrying with the SAME stale token until its 10 attempts run out and
+    // gives up for good. Refresh once and nudge a reconnect immediately
+    // instead of waiting for the next scheduled proactive refresh.
+    socket.on('connect_error', async () => {
+      const r = await tryRefresh();
+      if (r === 'ok') socket?.connect();
+    });
   }
   return socket;
 }
@@ -169,6 +240,7 @@ export function resetSocket(): void {
 }
 
 export async function logout(): Promise<void> {
+  stopProactiveRefresh();
   await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
   accessToken = null; refreshToken = null; currentUser = null;
   resetSocket();

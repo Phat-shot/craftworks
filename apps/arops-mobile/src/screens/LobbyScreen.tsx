@@ -314,6 +314,11 @@ export default function LobbyScreen({
 
   const onMapPress = (feature: any) => {
     if (!isHost) return;
+    // Placing a point is a strong signal the host is actively looking at the
+    // map right now — a good moment to retry a GPS fix that hasn't resolved
+    // yet (observed: a fix that seemed stuck often just appears shortly
+    // after the host starts tapping the map anyway).
+    if (!myPos && !myPosLoading) loadMyPosition();
     const c = feature?.geometry?.coordinates;
     if (!Array.isArray(c)) return;
     if (tapMode === 'zones' && NEEDS_ZONES[subMode] !== undefined) {
