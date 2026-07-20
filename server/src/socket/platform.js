@@ -27,9 +27,18 @@ async function effectiveArSettings(db, lobbyId, ar) {
        WHERE lm.lobby_id=$1 ORDER BY lm.joined_at ASC`, [lobbyId]);
     const roles = { ...(out.roles || {}) };
     const teams = { ...(out.teams || {}) };
+    // Classes (scout/sniper/bomber) default to 'scout' — was previously
+    // classless (no combat-stat/perk difference) until a player explicitly
+    // picked one, which most never did. Scout is the closest to that old
+    // baseline (normal range, standard cone) while still giving everyone
+    // its perk (reveal_trap) by default instead of nothing. Matches
+    // createAropsGame's own default in arops.js — MUST stay in sync, or
+    // the lobby preview and the actual match would disagree.
+    const classes = { ...(out.classes || {}) };
     mem.forEach((m, idx) => {
       if (!roles[m.user_id]) roles[m.user_id] = m.user_id === m.host_id ? 'seeker' : 'hider';
       if (teams[m.user_id] !== 'a' && teams[m.user_id] !== 'b') teams[m.user_id] = idx % 2 === 0 ? 'a' : 'b';
+      if (!['scout', 'sniper', 'bomber'].includes(classes[m.user_id])) classes[m.user_id] = 'scout';
     });
     // Bots default the same way, continuing the index sequence after real
     // members — MUST match the ordering used in lobby:start's member merge,
@@ -39,9 +48,11 @@ async function effectiveArSettings(db, lobbyId, ar) {
       const idx = mem.length + i;
       if (!roles[b.id]) roles[b.id] = 'hider';
       if (teams[b.id] !== 'a' && teams[b.id] !== 'b') teams[b.id] = idx % 2 === 0 ? 'a' : 'b';
+      if (!['scout', 'sniper', 'bomber'].includes(classes[b.id])) classes[b.id] = 'scout';
     });
     out.roles = roles;
     out.teams = teams;
+    out.classes = classes;
   } catch (e) { console.error('effectiveArSettings:', e.message); }
   return out;
 }
@@ -128,28 +139,19 @@ function registerPlatformHandlers(io, socket, db) {
       `SELECT u.id, u.username, u.avatar_color, lm.ready
        FROM lobby_members lm JOIN users u ON u.id=lm.user_id WHERE lm.lobby_id=$1 ORDER BY lm.joined_at ASC`, [lobbyId]);
     socket.emit('lobby:state', { members, hostId: rows[0].host_id });
-    // AR Ops: make roles/teams EXPLICIT for every member (single source of
-    // truth — clients previously guessed defaults from local member order,
-    // which desynced), then deliver current state to the whole room.
+    // AR Ops: make roles/teams/classes EXPLICIT for every member (single
+    // source of truth — clients previously guessed defaults from local
+    // member order, which desynced), then deliver current state to the
+    // whole room. Was its own inline roles/teams-only defaulting block that
+    // had drifted out of sync with effectiveArSettings (used everywhere
+    // else, e.g. lobby:ar_update / lobby:start) — missing classes entirely,
+    // so a fresh join never showed the Scout default until some other
+    // update happened to trigger the other code path. Consolidated onto
+    // the one shared helper instead of maintaining two copies.
     if (rows[0].game_mode === 'ar_ops') {
-      const ar = rows[0].workshop_map_config?.ar_settings || {};
-      ar.roles = ar.roles || {};
-      ar.teams = ar.teams || {};
-      let changed = false;
-      members.forEach((m, idx) => {
-        if (!ar.roles[m.id]) {
-          ar.roles[m.id] = m.id === rows[0].host_id ? 'seeker' : 'hider';
-          changed = true;
-        }
-        if (!ar.teams[m.id]) {
-          ar.teams[m.id] = idx % 2 === 0 ? 'a' : 'b';
-          changed = true;
-        }
-      });
-      if (changed) {
-        const cfg = { ...(rows[0].workshop_map_config || {}), game_mode: 'ar_ops', ar_settings: ar };
-        await db.query('UPDATE lobbies SET workshop_map_config=$1 WHERE id=$2', [JSON.stringify(cfg), lobbyId]);
-      }
+      const ar = await effectiveArSettings(db, lobbyId, rows[0].workshop_map_config?.ar_settings);
+      const cfg = { ...(rows[0].workshop_map_config || {}), game_mode: 'ar_ops', ar_settings: ar };
+      await db.query('UPDATE lobbies SET workshop_map_config=$1 WHERE id=$2', [JSON.stringify(cfg), lobbyId]);
       const polygonCheck = (ar.polygon && ar.polygon.length >= 3)
         ? aropsShared.validatePolygon(ar.polygon) : null;
       // Room-wide so every client (incl. the joiner) has identical role state

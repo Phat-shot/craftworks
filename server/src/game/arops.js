@@ -1171,10 +1171,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
   const roles = ar.roles || {};
   const teamOverride = ar.teams || {};
   // Player classes (Scout/Sniper/Bomber) — additive to role/team, not a
-  // replacement. No entry = today's unmodified behavior (shared gs.hitConfig,
-  // cone hit-test, no class-exclusive perk access). See
-  // packages/arops-shared/src/profiles.ts's PLAYER_TYPE_PROFILES for the
-  // combat-stat rationale behind each class.
+  // replacement. See packages/arops-shared/src/profiles.ts's
+  // PLAYER_TYPE_PROFILES for the combat-stat rationale behind each class.
+  // Defaults to 'scout' when unset — MUST match effectiveArSettings'
+  // (server/src/socket/platform.js) own default, or the lobby preview and
+  // the actual match would disagree on what a player's class is.
   const classOverride = ar.classes || {};
   const playerState = {};
   const captains = { a: null, b: null };
@@ -1190,7 +1191,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
       : null;
     if (team && !captains[team]) captains[team] = p.userId;
     const playerClass = ['scout', 'sniper', 'bomber'].includes(classOverride[p.userId])
-      ? classOverride[p.userId] : null;
+      ? classOverride[p.userId] : 'scout';
     playerState[p.userId] = {
       userId: p.userId, username: p.username, avatar_color: p.avatar_color,
       role, team, class: playerClass, isBot: !!p.isBot,
@@ -1614,6 +1615,19 @@ function actionArUsePerk(gs, userId, data) {
     const opponents = Object.values(gs.players).filter(c =>
       c.userId !== userId && c.status === 'alive' && opponentOf(gs, p, c) && c.lastAccepted && !isCloaked(c, t)
     );
+    // Reported "radar zeigt keine Spieler" — no obvious bug in this filter
+    // itself on review, but c.lastAccepted specifically requires the OTHER
+    // player's telemetry to have been recently accepted by the server, so
+    // this can legitimately return empty if their GPS hasn't produced a fix
+    // yet (a separate, already-known issue this session). Logged so a
+    // recurrence shows exactly why — e.g. all-alive-but-zero-lastAccepted
+    // points at the telemetry side, not this perk.
+    if (opponents.length === 0) {
+      const allOthers = Object.values(gs.players).filter(c => c.userId !== userId);
+      console.warn(`[radar] no contacts userId=${userId} sessionId=${gs.sessionId} ` +
+        `others=${allOthers.length} alive=${allOthers.filter(c => c.status === 'alive').length} ` +
+        `withFix=${allOthers.filter(c => c.lastAccepted).length}`);
+    }
     const contacts = opponents.map(c => ({
       userId: c.userId,
       lat: c.lastAccepted.lat, lon: c.lastAccepted.lon,
