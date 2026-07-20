@@ -14,6 +14,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import JoinLobbyScreen from './src/screens/JoinLobbyScreen';
 import LobbyScreen from './src/screens/LobbyScreen';
 import GameScreen from './src/screens/GameScreen';
+import GlossaryScreen from './src/screens/GlossaryScreen';
 
 type Route =
   | { name: 'boot' }
@@ -21,7 +22,8 @@ type Route =
   | { name: 'menu' }
   | { name: 'join' }
   | { name: 'lobby'; lobbyId: string; isHost: boolean; lobbyCode?: string }
-  | { name: 'game'; sessionId: string };
+  | { name: 'game'; sessionId: string }
+  | { name: 'glossary' };
 
 export default function App() {
   const [route, setRoute] = useState<Route>({ name: 'boot' });
@@ -109,6 +111,10 @@ export default function App() {
             <Icon name="link" size={16} color="#e060ff" />
             <Text style={st.joinTxt}>Lobby beitreten</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={st.glossaryBtn} onPress={() => setRoute({ name: 'glossary' })}>
+            <Icon name="book" size={16} color="#f0c840" />
+            <Text style={st.glossaryTxt}>Glossar</Text>
+          </TouchableOpacity>
           {!!hostErr && <Text style={st.err}>{hostErr}</Text>}
           <View style={st.menuIconRow}>
             <TouchableOpacity style={[st.menuIconBtn, watchSync.paired && st.menuIconBtnActive]} onPress={() => setWatchPairOpen(true)}>
@@ -127,6 +133,7 @@ export default function App() {
         </View>
       )}
       {route.name === 'join' && <JoinLobbyScreen onJoined={(lobbyId) => setRoute({ name: 'lobby', lobbyId, isHost: false })} />}
+      {route.name === 'glossary' && <GlossaryScreen onBack={() => setRoute({ name: 'menu' })} />}
       {route.name === 'lobby' && (
         <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} />
       )}
@@ -193,6 +200,12 @@ const st = StyleSheet.create({
     borderRadius: 12, padding: 16,
   },
   joinTxt: { color: '#e060ff', fontSize: 16, fontWeight: '800' },
+  glossaryBtn: {
+    width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: 'rgba(240,200,64,.12)', borderWidth: 2, borderColor: '#8a7020',
+    borderRadius: 12, padding: 16, marginTop: 12,
+  },
+  glossaryTxt: { color: '#f0c840', fontSize: 16, fontWeight: '800' },
   err: { color: '#ff6040', fontSize: 12, marginTop: 12 },
   menuIconRow: { flexDirection: 'row', gap: 12, marginTop: 24 },
   menuIconBtn: {

@@ -61,6 +61,9 @@ const REGISTRY = {
   home: [MaterialCommunityIcons, 'home'],
   flash: [MaterialCommunityIcons, 'flash'],
   usb: [MaterialCommunityIcons, 'usb'],
+  book: [MaterialCommunityIcons, 'book-open-variant'],
+  chevronDown: [MaterialCommunityIcons, 'chevron-down'],
+  chevronUp: [MaterialCommunityIcons, 'chevron-up'],
 } as const satisfies Record<string, readonly [IconSet, string]>;
 
 export type IconName = keyof typeof REGISTRY;
