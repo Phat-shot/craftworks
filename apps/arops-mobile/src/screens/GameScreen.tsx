@@ -155,21 +155,26 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     return () => clearTimeout(t);
   }, []);
 
-  // Reported: GPS recovers reliably once the "Keine Position" banner is
-  // manually tapped, but not on its own — the hook's own internal 4s-silence
-  // watchdog (useTelemetry.ts) respects an in-flight guard that a manual tap
-  // force-clears, so it doesn't reliably unstick things by itself. This
-  // automates exactly what the tap does, every 30s, so a player doesn't have
-  // to notice and act on a stuck fix themselves. Read via a ref (not a
-  // `telemetry.sample`/`retryPosition` dependency) since retryPosition is a
-  // fresh, unmemoized closure every render — depending on it directly would
-  // tear down and restart this interval on every single tick, never letting
-  // it actually fire.
+  // Reported: GPS (and, same underlying reasoning, the compass) recovers
+  // reliably once its status icon is manually tapped, but not on its own —
+  // the hook's own internal 4s-silence watchdog (useTelemetry.ts) respects
+  // an in-flight guard that a manual tap force-clears, so it doesn't
+  // reliably unstick things by itself. This automates exactly what tapping
+  // does, every 30s, so a player doesn't have to notice and act on a stuck
+  // fix themselves. Read via refs (not a `telemetry.sample`/`retryPosition`/
+  // `activeHeadingDeg` dependency) since retryPosition/retryHeading are
+  // fresh, unmemoized closures every render — depending on them directly
+  // would tear down and restart this interval on every single tick, never
+  // letting it actually fire. activeHeadingDegRef is written just after
+  // activeHeadingDeg is computed further down (has to be, since it depends
+  // on hasCam/viewMode defined later in this function).
   const telemetryRef = useRef(telemetry);
   telemetryRef.current = telemetry;
+  const activeHeadingDegRef = useRef<number | null>(null);
   useEffect(() => {
     const iv = setInterval(() => {
       if (!telemetryRef.current.sample) telemetryRef.current.retryPosition();
+      if (activeHeadingDegRef.current === null) telemetryRef.current.retryHeading();
     }, 30_000);
     return () => clearInterval(iv);
   }, []);
@@ -762,6 +767,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // upright/screen-towards-you once the camera is showing (camera-forward
   // heading — the same one used for aiming/hit-validation).
   const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
+  activeHeadingDegRef.current = activeHeadingDeg;
   // 2D free mode is manually rotated by the user (MapLibre's rotate gesture)
   // — never fight that with a compass-driven heading. Every other map-showing
   // mode is compass-oriented (heading-up).
@@ -1039,49 +1045,38 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 
   return (
     <View style={st.wrap}>
-      {/* Status bar */}
+      {/* Status bar — phase/timer/hider-count row, plus a second row folding
+          in mode-specific status (Domination/CTF %, Zerstören armed/defuse
+          countdown) that used to be its own separate banner (scoreBar)
+          further down the screen. Same background/container now, reads as
+          one cohesive bar instead of two stacked ones. */}
       <View style={st.status}>
-        <View style={st.iconTextRow}>
-          <Icon name={phaseLabel.icon} size={13} color="#f0c840" />
-          <Text style={st.phase}>{phaseLabel.text}</Text>
-        </View>
-        <View style={st.iconTextRow}>
-          <Icon name="clock" size={13} color="#80ff80" />
-          <Text style={st.timer}>{Math.floor(remainingS / 60)}:{String(remainingS % 60).padStart(2, '0')}</Text>
-        </View>
-        <View style={[st.iconTextRow, { marginLeft: 'auto' }]}>
-          <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color="#a090c0" />
-          <Text style={st.info}>Hider: {snap?.hidersRemaining ?? '–'}</Text>
-        </View>
-      </View>
-
-      {activeHeadingDeg === null && (
-        initGraceOver ? (
-          <TouchableOpacity style={st.geoWarn} onPress={telemetry.retryHeading}>
-            <Icon name="compass" size={12} color="#100" />
-            <Text style={st.geoTxt}>
-              {hasCam ? 'Kein Kompass — Handy aufrecht halten (Bildschirm zu dir)' : 'Kein Kompass — Handy flach halten'}
-              {' · antippen zum Neustart'}
-            </Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={st.geoInit}>
-            <Icon name="compass" size={12} color="#c0a0f0" />
-            <Text style={st.geoInitTxt}>Initialisiere Kompass…</Text>
+        <View style={st.statusRow}>
+          <View style={st.iconTextRow}>
+            <Icon name={phaseLabel.icon} size={13} color="#f0c840" />
+            <Text style={st.phase}>{phaseLabel.text}</Text>
           </View>
-        )
-      )}
+          <View style={st.iconTextRow}>
+            <Icon name="clock" size={13} color="#80ff80" />
+            <Text style={st.timer}>{Math.floor(remainingS / 60)}:{String(remainingS % 60).padStart(2, '0')}</Text>
+          </View>
+          <View style={[st.iconTextRow, { marginLeft: 'auto' }]}>
+            <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color="#a090c0" />
+            <Text style={st.info}>Hider: {snap?.hidersRemaining ?? '–'}</Text>
+          </View>
+        </View>
+        {!!scoreLine && (
+          <View style={st.statusScoreRow}>
+            <Icon name={scoreIcon} size={12} color="#f0c840" />
+            <Text style={st.scoreTxt}>{scoreLine}</Text>
+          </View>
+        )}
+      </View>
 
       {frozenMs > 0 && (
         <View style={st.frozenBanner}>
           <Icon name="snowflake" size={13} color="#04121f" />
           <Text style={st.frozenTxt}>EINGEFROREN — {Math.ceil(frozenMs / 1000)}s · Stehen bleiben! Bewegung verlängert.</Text>
-        </View>
-      )}
-      {!!scoreLine && (
-        <View style={st.scoreBar}>
-          <Icon name={scoreIcon} size={13} color="#f0c840" />
-          <Text style={st.scoreTxt}>{scoreLine}</Text>
         </View>
       )}
       {snap?.me?.proximityAlert && (
@@ -1260,31 +1255,43 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </View>
       )}
 
-      {/* IR-Scan/Uhr-Status, icon-only, oben links — analog dem Kompass-Symbol
-          in der Lobby: reine Statusanzeige. IR-Icon links vom Uhr-Icon (nur
-          sichtbar, wenn IR-Modus überhaupt aktiv ist — sonst wird ja auch
-          gar nicht gescannt, siehe irEnabled oben): gold wenn die Kamera
-          gerade (innerhalb der letzten 3s) ein gültiges Beacon decodiert
-          hat, sonst gedimmt. Keine Kopplungs-/Verbindungsaktion mehr hier
-          für die Uhr (läuft nur noch übers Hauptmenü). */}
+      {/* Verbindungs-Icons, oben links, konsistente Reihenfolge + Farbschema:
+          IR/ESP → GPS → Uhr. Grün = verfügbar/aktiv, gedimmtes Grau = normal
+          aus (nichts Falsches daran, z.B. Uhr nicht gekoppelt — Kopplung ist
+          optional und läuft nur übers Hauptmenü, hier nichts zum Neustarten).
+          Nur GPS hat einen echten Fehlschlag-Zustand (Rot) und ist deshalb
+          antippbar — IR/Uhr haben in-Game nichts, was ein Tap sinnvoll
+          neu starten könnte. */}
       {irEnabled && (
         <View style={[st.espStatusFab, irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) && st.modeBtnActive]}>
-          <Icon name="flash" size={18} color={irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) ? '#f0c840' : '#605850'} />
+          <Icon name="flash" size={18} color={irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) ? '#80ff40' : '#605850'} />
         </View>
       )}
-      <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
-        <Icon name="watch" size={18} color={watchSync.paired ? '#f0c840' : '#605850'} />
-      </View>
-      {/* GPS-Status, dritte Fab in derselben Reihe — anders als IR/Uhr oben
-          antippbar (erzwingt telemetry.retryPosition, dieselbe Aktion wie
-          die frühere volle Banner-Leiste, die diese Fab ersetzt): grau =
-          sucht noch (Grace-Zeit läuft), rot = nicht verfügbar (Grace um,
-          kein Fix), grün = verfügbar. Zusätzlich alle 30s automatischer
+      {/* GPS-Status — antippbar (erzwingt telemetry.retryPosition, dieselbe
+          Aktion wie die frühere volle Banner-Leiste, die diese Fab ersetzt):
+          grau = sucht noch (Grace-Zeit läuft), rot = nicht verfügbar (Grace
+          um, kein Fix), grün = verfügbar. Zusätzlich alle 30s automatischer
           Retry-Versuch solange kein Fix da ist (siehe telemetryRef-Effect
           oben) — Tippen bleibt trotzdem für sofortigen Neustart nützlich. */}
       <TouchableOpacity style={st.gpsStatusFab} onPress={telemetry.retryPosition}>
         <Icon name="crosshair" size={18}
           color={telemetry.sample ? '#80ff40' : initGraceOver ? '#ff6040' : '#605850'} />
+      </TouchableOpacity>
+      <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
+        <Icon name="watch" size={18} color={watchSync.paired ? '#80ff40' : '#605850'} />
+      </View>
+
+      {/* Kompass-Status, oben rechts, spiegelbildlich zur linken Reihe —
+          antippbar wie GPS (erzwingt telemetry.retryHeading), automatischer
+          30s-Retry solange keine Ausrichtung da ist (siehe
+          telemetryRef-Effect oben, gleiches Prinzip wie GPS). Sobald
+          verfügbar wechselt das generische Status-Icon zum tatsächlich
+          rotierenden Kompass-Symbol (zeigt die echte Peilung), statt nur
+          "irgendwie verfügbar" anzuzeigen — der "bekannte echte Kompass". */}
+      <TouchableOpacity style={st.compassStatusFab} onPress={telemetry.retryHeading}>
+        <Icon name="compass" size={18}
+          color={activeHeadingDeg !== null ? '#80ff40' : initGraceOver ? '#ff6040' : '#605850'}
+          style={activeHeadingDeg !== null ? { transform: [{ rotate: `${-activeHeadingDeg}deg` }] } : undefined} />
       </TouchableOpacity>
 
       {/* Floating settings toggle — pulled out of the bottom bar so that bar
@@ -1324,9 +1331,14 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810' },
   status: {
-    flexDirection: 'row', alignItems: 'center', paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
-    backgroundColor: '#141020', gap: 14,
+    paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
+    backgroundColor: '#141020',
   },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  // Folds in what used to be the separate scoreBar banner (Domination/CTF %,
+  // Zerstören armed/defuse countdown) — same background as the row above,
+  // just a second line, so it reads as one status bar instead of two.
+  statusScoreRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
   iconTextRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   phase: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
   timer: { color: '#80ff80', fontWeight: '800', fontSize: 14 },
@@ -1336,7 +1348,6 @@ const st = StyleSheet.create({
   cloakTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   frozenBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(80,160,255,.92)', padding: 8, alignItems: 'center' },
   frozenTxt: { color: '#04121f', fontWeight: '900', fontSize: 12 },
-  scoreBar: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: '#1a1428', paddingVertical: 5, alignItems: 'center' },
   scoreTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
   baseBtn: { backgroundColor: 'rgba(240,200,64,.2)', borderWidth: 2, borderColor: '#f0c840', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
   baseTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
@@ -1344,8 +1355,6 @@ const st = StyleSheet.create({
   geoWarn: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(240,200,64,.85)', padding: 6, alignItems: 'center' },
   geoOut: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(224,48,32,.95)', padding: 6, alignItems: 'center' },
   geoTxt: { color: '#100', fontWeight: '800', fontSize: 12 },
-  geoInit: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(40,32,64,.85)', padding: 6, alignItems: 'center' },
-  geoInitTxt: { color: '#c0a0f0', fontWeight: '700', fontSize: 12 },
   result: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(20,16,32,.95)', padding: 8, alignItems: 'center' },
   resultTxt: { color: '#f0c840', fontWeight: '800' },
   crosshair: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
@@ -1418,22 +1427,25 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(20,16,32,.85)', borderWidth: 2, borderColor: '#f0c840',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
-  watchStatusFab: {
-    // Sits just below the status bar, over the map/camera view itself —
-    // analogous to how the Lobby's compass icon sits top-left. To the
-    // right of espStatusFab.
-    position: 'absolute', left: 58, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
-    alignItems: 'center', justifyContent: 'center', zIndex: 20,
-  },
+  // Left row, in order: esp/IR, gps, watch (see the render comment above).
   espStatusFab: {
     position: 'absolute', left: 14, top: 86, width: 38, height: 38, borderRadius: 8,
     backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   gpsStatusFab: {
-    // Third in the same row, right of watchStatusFab.
+    position: 'absolute', left: 58, top: 86, width: 38, height: 38, borderRadius: 8,
+    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    alignItems: 'center', justifyContent: 'center', zIndex: 20,
+  },
+  watchStatusFab: {
     position: 'absolute', left: 102, top: 86, width: 38, height: 38, borderRadius: 8,
+    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    alignItems: 'center', justifyContent: 'center', zIndex: 20,
+  },
+  // Right side, mirrors the left row.
+  compassStatusFab: {
+    position: 'absolute', right: 14, top: 86, width: 38, height: 38, borderRadius: 8,
     backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
