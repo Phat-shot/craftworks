@@ -3,29 +3,14 @@
 // sample for UI and for hit-trigger snapshots (camera shutter grabs current
 // sample).
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import { Magnetometer, Accelerometer } from 'expo-sensors';
-import type { EventSubscription } from 'expo-modules-core';
-import {
-  getCurrentLocation as getNativeLocation, startWatch as startNativeWatch,
-  stopWatch as stopNativeWatch, addNativeLocationListener,
-} from 'native-location';
 import type { Socket } from 'socket.io-client';
 import type { TelemetrySample } from '@craftworks/arops-shared';
 import {
   tiltCompensatedHeadingDeg, TOP_EDGE_AXIS, CAMERA_FORWARD_AXIS,
 } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
-
-/** Minimal position shape both the expo-location (iOS) and native-location
- *  (Android) paths below normalize into, so buildSample() below doesn't
- *  need to know which one supplied it. */
-interface RawFix { lat: number; lon: number; accuracyM: number | null; speedMps: number | null; }
-const locToRawFix = (loc: Location.LocationObject): RawFix => ({
-  lat: loc.coords.latitude, lon: loc.coords.longitude,
-  accuracyM: loc.coords.accuracy, speedMps: loc.coords.speed,
-});
 
 export interface TelemetryState {
   granted: boolean | null;
@@ -73,7 +58,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   const lastHeadingEmit = useRef(0);
   const [geofence, setGeofence] = useState<TelemetryState['geofence']>(null);
 
-  const posRef = useRef<RawFix | null>(null);
+  const posRef = useRef<Location.LocationObject | null>(null);
   const headingRef = useRef<number | null>(null);
   const sampleRef = useRef<TelemetrySample | null>(null);
 
@@ -81,12 +66,12 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     const p = posRef.current;
     if (!p) return null;
     return {
-      lat: p.lat,
-      lon: p.lon,
+      lat: p.coords.latitude,
+      lon: p.coords.longitude,
       ts: Date.now(),
-      accuracyM: p.accuracyM ?? 30,
+      accuracyM: p.coords.accuracy ?? 30,
       headingDeg: headingRef.current,
-      speedMps: p.speedMps,
+      speedMps: p.coords.speed ?? null,
     };
   }, []);
 
@@ -101,7 +86,6 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   useEffect(() => {
     if (!enabled) return;
     let posSub: Location.LocationSubscription | null = null;
-    let nativeSub: EventSubscription | null = null;
     let magSub: ReturnType<typeof Magnetometer.addListener> | null = null;
     let accelSub: ReturnType<typeof Accelerometer.addListener> | null = null;
     let watchdog: ReturnType<typeof setInterval> | null = null;
@@ -154,34 +138,12 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
       if (posStartInFlight) return;
       posStartInFlight = true;
       try {
-        // Android: FusedLocationProviderClient directly (see modules/
-        // native-location) instead of expo-location's watchPositionAsync —
-        // the same wrapper repeatedly implicated in the lobby's own GPS
-        // hangs (see LobbyScreen.tsx loadMyPosition's comments). iOS has no
-        // native module here (Android-only) and keeps the expo-location
-        // path below unchanged.
-        if (Platform.OS === 'android') {
-          nativeSub?.remove();
-          // Kickstart with an immediate one-shot fix in parallel, same
-          // reasoning as the iOS branch below — the watch's first callback
-          // can take a moment to arrive.
-          getNativeLocation()
-            .then(fix => { if (!cancelled && fix) { posRef.current = { lat: fix.lat, lon: fix.lon, accuracyM: fix.accuracyM, speedMps: fix.speedMps }; lastPosAt.current = Date.now(); } })
-            .catch(() => {});
-          nativeSub = addNativeLocationListener(fix => {
-            posRef.current = { lat: fix.lat, lon: fix.lon, accuracyM: fix.accuracyM, speedMps: fix.speedMps };
-            lastPosAt.current = Date.now();
-          });
-          await startNativeWatch().catch(() => {});
-          return;
-        }
-
         posSub?.remove();
         // Kickstart with an immediate one-shot fix in parallel — watchPositionAsync's
         // first callback can take a while to arrive, so without this the player's own
         // position (and the map dot) can stay empty for a long stretch after match start.
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-          .then(loc => { if (!cancelled) { posRef.current = locToRawFix(loc); lastPosAt.current = Date.now(); } })
+          .then(loc => { if (!cancelled) { posRef.current = loc; lastPosAt.current = Date.now(); } })
           .catch(() => {});
 
         // High (not BestForNavigation): comparable few-meter accuracy but noticeably
@@ -190,7 +152,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
         posSub = await withTimeout(
           Location.watchPositionAsync(
             { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 },
-            (loc) => { posRef.current = locToRawFix(loc); lastPosAt.current = Date.now(); }
+            (loc) => { posRef.current = loc; lastPosAt.current = Date.now(); }
           ),
           10_000
         );
@@ -270,8 +232,6 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     return () => {
       cancelled = true;
       posSub?.remove();
-      nativeSub?.remove();
-      if (Platform.OS === 'android') stopNativeWatch().catch(() => {});
       magSub?.remove();
       accelSub?.remove();
       if (watchdog) clearInterval(watchdog);

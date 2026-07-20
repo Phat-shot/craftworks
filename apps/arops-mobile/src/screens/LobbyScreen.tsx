@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Platform, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
-import { getCurrentLocation as getNativeLocation } from 'native-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition } from '../api';
 import Icon, { IconName } from '../components/Icon';
@@ -199,11 +198,16 @@ export default function LobbyScreen({
   // wrong inside, the lobby can no longer get stuck on "GPS wird gesucht"
   // forever, only ever fall back to the manual retry button.
   //
-  // Android now bypasses expo-location's watchPositionAsync entirely below
-  // (see modules/native-location) — the repeated hangs across multiple
-  // rounds of JS-side watchdogs point at that wrapper itself, not the
-  // underlying OS location stack. iOS (no native module there) still uses
-  // the watchPositionAsync + timer-loop path.
+  // A native (FusedLocationProviderClient) Android module was tried here and
+  // in useTelemetry.ts's startPosition (see git history — "native GPS statt
+  // expo-location") — reverted after real-device testing showed it
+  // measurably WORSE (near a minute to a fix, vs. this) rather than better.
+  // Root cause not fully confirmed (the one-shot getCurrentLocation() call
+  // it used, instead of the continuous-watch-take-first-update strategy
+  // this function already uses, is the leading suspect), but with no device
+  // here to verify a fix, reverting to this known-working expo-location
+  // path for all platforms was the safer call. Revisit only with real
+  // hardware in hand to actually iterate against.
   const WATCHDOG_MS = 30_000;
   const loadMyPosition = async () => {
     setMyPosLoading(true);
@@ -236,28 +240,6 @@ export default function LobbyScreen({
       Location.getLastKnownPositionAsync().then(cached => {
         if (cached) setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
       }).catch(() => {});
-
-      // Android: FusedLocationProviderClient directly (see modules/
-      // native-location), bypassing expo-location's watchPositionAsync —
-      // that wrapper is the documented source of the repeated hangs above,
-      // not the underlying OS location stack. Own 12s native-side timeout,
-      // so this can't hang either; a plain one-shot call replaces the whole
-      // watch-and-unsubscribe dance below, which stays as the iOS path
-      // (no native module there, see NativeLocationModule.kt's doc-comment).
-      if (Platform.OS === 'android') {
-        const fix = await getNativeLocation().catch(() => null);
-        if (loadGenRef.current !== gen) return; // superseded by a newer attempt
-        if (fix) {
-          setMyPos({ lat: fix.lat, lon: fix.lon });
-          setMyPosStale(false);
-          setMyPosLoading(false);
-          saveLastPosition(fix.lat, fix.lon);
-        } else {
-          setMyPosErr(true);
-          setMyPosLoading(false);
-        }
-        return;
-      }
 
       let settled = false;
       // Plain object holder (not a bare `let`) — TS otherwise over-narrows a
@@ -815,11 +797,7 @@ export default function LobbyScreen({
         </TouchableOpacity>
         {myPosLoading && (
           <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>
-              {/* Android's native one-shot call (see modules/native-location)
-                  has no "3 attempts" concept — that's iOS-only below. */}
-              {Platform.OS === 'android' ? 'GPS wird gesucht…' : `GPS wird gesucht… (${myPosAttempt + 1}/3)`}
-            </Text>
+            <Text style={st.gpsStatusTxt}>GPS wird gesucht… ({myPosAttempt + 1}/3)</Text>
           </View>
         )}
         {!myPosLoading && myPosPermDenied && (
