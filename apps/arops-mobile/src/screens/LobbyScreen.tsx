@@ -7,7 +7,7 @@ import { getSocket, getUser, fetchLobbyQr } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
-import { polygonAreaM2, scaleCoreConfig, PLAYER_TYPE_PROFILES } from '@craftworks/arops-shared';
+import { polygonAreaM2, scaleCoreConfig, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
@@ -484,7 +484,8 @@ export default function LobbyScreen({
         <View style={st.modeRowTight}>
           {SUB_MODES.map(m => (
             <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
-              onPress={() => emitUpdate({ subMode: m.id })}>
+              onPress={() => emitUpdate({ subMode: m.id })}
+              onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
               <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
               <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
             </TouchableOpacity>
@@ -497,17 +498,22 @@ export default function LobbyScreen({
       {isHost && subMode === 'hide_and_seek' && (
         <View style={st.rowBtns}>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'classic' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ hsVariant: 'classic' })}>
+            onPress={() => emitUpdate({ hsVariant: 'classic' })}
+            onLongPress={() => Alert.alert('Team', GAME_MODE_PROFILES.hide_and_seek?.shortDescription || '')}>
             <Icon name="ghost" size={13} color={hsVariant === 'classic' ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Team</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'ffa' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ hsVariant: 'ffa' })}>
+            onPress={() => emitUpdate({ hsVariant: 'ffa' })}
+            onLongPress={() => Alert.alert('Jeder gegen jeden',
+              GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
             <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, hsVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'the_ship' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ hsVariant: 'the_ship' })}>
+            onPress={() => emitUpdate({ hsVariant: 'the_ship' })}
+            onLongPress={() => Alert.alert('The Ship',
+              GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription || '')}>
             <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
           </TouchableOpacity>
@@ -528,12 +534,15 @@ export default function LobbyScreen({
       {teamMode && (
         <View style={st.rowBtns}>
           <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'team' && st.smallBtnActive]}
-            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'team' })}>
+            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'team' })}
+            onLongPress={() => Alert.alert('Team (A vs. B)', 'Zwei feste Seiten treten gegeneinander an.')}>
             <Icon name="people" size={13} color={teamVariant === 'team' ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, teamVariant === 'team' && st.smallTxtActive]}>Team (A vs. B)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'ffa' && st.smallBtnActive]}
-            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'ffa' })}>
+            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'ffa' })}
+            onLongPress={() => Alert.alert('Jeder gegen jeden',
+              GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
             <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, teamVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>

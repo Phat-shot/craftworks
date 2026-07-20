@@ -136,14 +136,22 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
     hasBases: false,
     hasTargets: false, // Zonen/Territorium, kein Ziel im Schützen-Sinn
     partyMode: 'team',
-    submodes: [],
+    submodes: [
+      { id: 'ffa', name: 'Jeder gegen jeden',
+        shortDescription:
+          'Kein Team — jede Zone wird individuell erobert (zählt nur, solange genau ein ' +
+          'einzelner Spieler ungestört darin steht), Punkte laufen aufs eigene Konto statt ' +
+          'aufs Team-Konto. Aktiviert über die Host-Einstellung "teamVariant".' },
+    ],
     parameters: [
-      { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms', description: 'Zeitlimit; danach gewinnt das führende Team.' },
-      { key: 'targetScore', name: 'Zielpunktzahl', unit: 'Punkte', description: 'Punktestand, bei dem ein Team sofort gewinnt.' },
+      { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms', description: 'Zeitlimit; danach gewinnt das führende Team (bzw. der führende Spieler bei "Jeder gegen jeden").' },
+      { key: 'targetScore', name: 'Zielpunktzahl', unit: 'Punkte', description: 'Punktestand, bei dem ein Team (bzw. Spieler) sofort gewinnt.' },
       { key: 'captureDwellMs', name: 'Einnahmezeit', unit: 'ms',
-        description: 'Wie lange ein Team ungestört in einer Zone stehen muss, um sie einzunehmen (in ar_settings.timings).' },
+        description: 'Wie lange ein Team (bzw. Spieler) ungestört in einer Zone stehen muss, um sie einzunehmen (in ar_settings.timings).' },
       { key: 'zoneRadiusM', name: 'Zonenradius', unit: 'm', description: 'Radius jeder Zone, feldgrößen-skaliert (in ar_settings.timings).' },
       { key: 'freezeMs', name: 'Freeze-Dauer', unit: 'ms', description: 'Wie lange ein getroffener Spieler eingefroren bleibt (in ar_settings.timings).' },
+      { key: 'teamVariant', name: 'Team-Variante', unit: 'enum (team/ffa)',
+        description: 'Team gegen Team (Standard) oder "Jeder gegen jeden" — siehe submodes.' },
     ],
   },
   ctf: {
@@ -167,18 +175,27 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
     hasBases: true,
     hasTargets: false,
     partyMode: 'team',
-    submodes: [],
+    submodes: [
+      { id: 'ffa', name: 'Jeder gegen jeden',
+        shortDescription:
+          'Statt zwei Teams hat JEDER Spieler eine eigene Basis und eigene Flagge (N ' +
+          'Flaggen statt 2). Jeder andere Spieler ist ein möglicher Dieb — eine gestohlene ' +
+          'Flagge zur eigenen Basis zu bringen zählt als Capture, unabhängig davon, ob die ' +
+          'eigene Flagge gerade daheim ist. Aktiviert über die Host-Einstellung "teamVariant".' },
+    ],
     parameters: [
-      { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms', description: 'Zeitlimit; danach gewinnt das Team mit mehr Captures.' },
+      { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms', description: 'Zeitlimit; danach gewinnt das Team (bzw. der Spieler bei "Jeder gegen jeden") mit mehr Captures.' },
       { key: 'targetCaptures', name: 'Ziel-Captures', unit: 'Captures', description: 'Anzahl an Flaggen-Captures für den Sofortsieg.' },
       { key: 'baseSettingMs', name: 'Basis-Setup-Zeit', unit: 'ms',
-        description: 'Zeitfenster für die Kapitäne, ihre Basis zu platzieren (in ar_settings.timings).' },
+        description: 'Zeitfenster, um die eigene Basis zu platzieren (Team: nur der Kapitän; "Jeder gegen jeden": jeder Spieler selbst) (in ar_settings.timings).' },
       { key: 'flagPickupDwellMs', name: 'Flaggen-Diebstahlzeit', unit: 'ms',
         description: 'Wie lange ein Gegner ungestört in der fremden Basis stehen muss, um die Flagge zu stehlen (in ar_settings.timings).' },
       { key: 'flagReturnMs', name: 'Auto-Rückkehrzeit', unit: 'ms',
         description: 'Nach dieser Zeit kehrt eine liegengelassene Flagge von selbst zur Basis zurück (in ar_settings.timings).' },
       { key: 'minBaseSeparationM', name: 'Mindestabstand der Basen', unit: 'm',
-        description: 'Mindestabstand zwischen den beiden Team-Basen (in ar_settings.timings).' },
+        description: 'Mindestabstand zwischen allen Basen (Team: den beiden Team-Basen; "Jeder gegen jeden": jeder Spieler-Basis zu jeder anderen) (in ar_settings.timings).' },
+      { key: 'teamVariant', name: 'Team-Variante', unit: 'enum (team/ffa)',
+        description: 'Team gegen Team (Standard) oder "Jeder gegen jeden" mit einer Flagge pro Spieler — siehe submodes.' },
     ],
   },
   // Code-Id bewusst 'seek_destroy' geblieben (ersetzt den alten Einzel-
@@ -207,20 +224,28 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
     hasBases: false,
     hasTargets: true,
     partyMode: 'team',
-    submodes: [],
+    submodes: [
+      { id: 'ffa', name: 'Jeder gegen jeden',
+        shortDescription:
+          'Kein Team — jeder Spieler erobert das aktive Ziel für sich allein. Nur mit der ' +
+          '"instant"-Variante kombinierbar ("defuse" braucht zwei feste Seiten und wird ' +
+          'automatisch deaktiviert). Aktiviert über die Host-Einstellung "teamVariant".' },
+    ],
     parameters: [
       { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
         description: 'Zeitlimit; danach gewinnt der höhere Punktestand (Gleichstand = Unentschieden).' },
       { key: 'destroyVariant', name: 'Zerstören-Variante', unit: 'enum (instant/defuse)',
-        description: 'Ob beide Teams symmetrisch einnehmen können, oder nur Team a scharf macht und Team b entschärfen kann.' },
+        description: 'Ob beide Teams symmetrisch einnehmen können, oder nur Team a scharf macht und Team b entschärfen kann. Bei "Jeder gegen jeden" fest auf "instant" (jeder Spieler für sich).' },
       { key: 'destroyReactivate', name: 'Ziele reaktivieren', unit: 'boolean',
         description: 'Ob zerstörte Ziele nach einer vollen Runde zurückgesetzt werden, statt das Match sofort zu beenden.' },
       { key: 'captureDwellMs', name: 'Einnahmezeit (instant)', unit: 'ms',
-        description: 'Wie lange ein Team ungestört am Ziel stehen muss, um es einzunehmen (in ar_settings.timings).' },
+        description: 'Wie lange ein Team (bzw. Spieler bei "Jeder gegen jeden") ungestört am Ziel stehen muss, um es einzunehmen (in ar_settings.timings).' },
       { key: 'plantDwellMs', name: 'Scharfmachzeit (defuse)', unit: 'ms',
         description: 'Wie lange Team a ungestört am Ziel stehen muss, um es scharf zu machen (in ar_settings.timings).' },
       { key: 'defuseDwellMs', name: 'Entschärfzeit (defuse)', unit: 'ms',
         description: 'Wie lange Team b ungestört am Ziel stehen muss, um es zu entschärfen (in ar_settings.timings).' },
+      { key: 'teamVariant', name: 'Team-Variante', unit: 'enum (team/ffa)',
+        description: 'Team gegen Team (Standard) oder "Jeder gegen jeden" — siehe submodes.' },
     ],
   },
   deathmatch: {
@@ -242,18 +267,27 @@ export const GAME_MODE_PROFILES: Record<string, GameModeProfile> = {
     hasBases: true,
     hasTargets: false,
     partyMode: 'team',
-    submodes: [],
+    submodes: [
+      { id: 'ffa', name: 'Jeder gegen jeden',
+        shortDescription:
+          'Kein Team — jeder Spieler platziert die eigene Basis/Respawnpunkt statt eines ' +
+          'Kapitäns für die ganze Seite. Sieg für den letzten verbleibenden Spieler (Variante ' +
+          '"respawn") bzw. den höchsten Punktestand (Variante "freeze"). Aktiviert über die ' +
+          'Host-Einstellung "teamVariant".' },
+    ],
     parameters: [
       { key: 'gameDurationMs', name: 'Spieldauer', unit: 'ms',
-        description: 'Zeitlimit; danach gewinnt je nach Modus-Variante das Team mit mehr Punkten oder mehr verbleibenden Leben.' },
+        description: 'Zeitlimit; danach gewinnt je nach Modus-Variante das Team (bzw. der Spieler) mit mehr Punkten oder mehr verbleibenden Leben.' },
       { key: 'deathmatchOnHit', name: 'Treffer-Konsequenz', unit: 'enum (freeze/respawn)',
         description: 'Ob ein Treffer nur einfriert (kein Leben verloren) oder ein Leben kostet und "downed" macht.' },
       { key: 'livesPerPlayer', name: 'Leben pro Spieler', unit: 'Leben',
         description: 'Nur bei Treffer-Konsequenz "respawn": Anzahl Leben, bevor ein Spieler endgültig ausscheidet.' },
       { key: 'baseSettingMs', name: 'Basis-Setup-Zeit', unit: 'ms',
-        description: 'Zeitfenster für die Kapitäne, ihre Basis zu platzieren (in ar_settings.timings).' },
+        description: 'Zeitfenster, um die eigene Basis zu platzieren (Team: nur der Kapitän; "Jeder gegen jeden": jeder Spieler selbst) (in ar_settings.timings).' },
       { key: 'spawnCheckDwellMs', name: 'Spawn-Verweildauer', unit: 'ms',
         description: 'Wie lange ein "downed" Spieler ununterbrochen in der eigenen Basis stehen muss, um wieder mitzuspielen (in ar_settings.timings).' },
+      { key: 'teamVariant', name: 'Team-Variante', unit: 'enum (team/ffa)',
+        description: 'Team gegen Team (Standard) oder "Jeder gegen jeden" — siehe submodes.' },
     ],
   },
 };
@@ -382,7 +416,13 @@ export const GLOSSARY: GlossaryEntry[] = [
     'Das jeweilige Ziel eines Modus — in Hide & Seek die Hider selbst, in Zerstören der aktive Zielort, ' +
     'in The Ship die geheim zugewiesene Person, die man jagen muss.' },
   { term: 'Captain', definition:
-    'Der erste einem Team zugeloste Spieler — in Capture the Flag verantwortlich für die Basis-Platzierung zu Rundenbeginn.' },
+    'Der erste einem Team zugeloste Spieler — in Capture the Flag und Deathmatch verantwortlich für die ' +
+    'Basis-Platzierung zu Rundenbeginn. Gilt nur im Team-Modus: in der "Jeder gegen jeden"-Variante ' +
+    'platziert jeder Spieler seine eigene Basis selbst, es gibt keinen Captain.' },
+  { term: 'Jeder gegen jeden (FFA)', definition:
+    'Team-Variante ohne feste Seiten: statt zwei Teams ist jeder Spieler für sich allein und Gegner von ' +
+    'jedem anderen. Verfügbar für Domination, Capture the Flag, Zerstören und Deathmatch (Host-Einstellung ' +
+    '"teamVariant") sowie als eigene Hide & Seek-Variante (dort über "hsVariant").' },
   { term: 'Cloak (Tarnung)', definition:
     'Perk, der einen Spieler für eine begrenzte Zeit unsichtbar für gegnerisches Radar macht.' },
   { term: 'Drohne', definition:

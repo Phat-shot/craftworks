@@ -39,13 +39,13 @@ const EXPECTED_PLAYER_TYPE_IDS = ['hider', 'seeker', 'team_member', 'scout', 'sn
         }
     }
 });
-(0, node_test_1.test)('GAME_MODE_PROFILES: only hide_and_seek has submodes today ("ffa"/"The Ship", ar_settings.hsVariant)', () => {
+(0, node_test_1.test)('GAME_MODE_PROFILES: hide_and_seek has "ffa"/"the_ship" (hsVariant), the 4 team-capable modes have "ffa" (teamVariant)', () => {
     for (const [key, profile] of Object.entries(profiles_1.GAME_MODE_PROFILES)) {
         if (key === 'hide_and_seek') {
             strict_1.default.deepEqual(profile.submodes.map(sm => sm.id), ['ffa', 'the_ship']);
         }
         else {
-            strict_1.default.deepEqual(profile.submodes, [], `${key}: expected no submodes`);
+            strict_1.default.deepEqual(profile.submodes.map(sm => sm.id), ['ffa'], `${key}: expected exactly one 'ffa' submode`);
         }
     }
 });

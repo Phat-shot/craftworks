@@ -247,12 +247,14 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           Mobile-App, wo nur hsVariant oben war). */}
       {subMode === 'hide_and_seek' && (
         <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-          <button className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ hsVariant: 'classic' })}
-            style={{ borderColor: hsVariant === 'classic' ? 'var(--gold)' : undefined,
-                     color: hsVariant === 'classic' ? 'var(--gold)' : undefined }}>
-            🫥 Team
-          </button>
+          <Tip text={GAME_MODE_PROFILES.hide_and_seek?.shortDescription}>
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ hsVariant: 'classic' })}
+              style={{ borderColor: hsVariant === 'classic' ? 'var(--gold)' : undefined,
+                       color: hsVariant === 'classic' ? 'var(--gold)' : undefined }}>
+              🫥 Team
+            </button>
+          </Tip>
           <Tip text={GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription}>
             <button className="btn btn-ghost btn-sm" disabled={!isHost}
               onClick={() => emitUpdate({ hsVariant: 'ffa' })}
@@ -277,18 +279,22 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           ffa reading, so that picker below hides it while ffa is selected. */}
       {TEAM_MODES.includes(subMode) && (
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ teamVariant: 'team' })}
-            style={{ borderColor: teamVariant === 'team' ? 'var(--gold)' : undefined,
-                     color: teamVariant === 'team' ? 'var(--gold)' : undefined }}>
-            👥 Team (A vs. B)
-          </button>
-          <button className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ teamVariant: 'ffa' })}
-            style={{ borderColor: teamVariant === 'ffa' ? 'var(--gold)' : undefined,
-                     color: teamVariant === 'ffa' ? 'var(--gold)' : undefined }}>
-            🎲 Jeder gegen jeden
-          </button>
+          <Tip text="Zwei feste Seiten treten gegeneinander an.">
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ teamVariant: 'team' })}
+              style={{ borderColor: teamVariant === 'team' ? 'var(--gold)' : undefined,
+                       color: teamVariant === 'team' ? 'var(--gold)' : undefined }}>
+              👥 Team (A vs. B)
+            </button>
+          </Tip>
+          <Tip text={GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription}>
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ teamVariant: 'ffa' })}
+              style={{ borderColor: teamVariant === 'ffa' ? 'var(--gold)' : undefined,
+                       color: teamVariant === 'ffa' ? 'var(--gold)' : undefined }}>
+              🎲 Jeder gegen jeden
+            </button>
+          </Tip>
           {hasCaptainBase && (
             <span style={{ fontSize: 10, color: 'var(--text3)' }}>
               {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
