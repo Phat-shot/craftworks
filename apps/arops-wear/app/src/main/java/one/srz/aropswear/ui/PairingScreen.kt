@@ -1,7 +1,9 @@
 package one.srz.aropswear.ui
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.os.PowerManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,6 +55,32 @@ fun PairingScreen(onTapCode: () -> Unit) {
             PairingRepository.checkClaimViaDataLayer(context)
             delay(5000)
         }
+    }
+
+    // Confirmed via adb logcat on a real device: the claim genuinely
+    // reaches this watch's Play Services (both the MessageClient push AND
+    // the DataItem sync), but delivery to THIS app fails —
+    // "WearableService: Failed to deliver message... action=/arops/claim"
+    // alongside a binder transaction error (ActivityManager: "sent binder
+    // code 18 ... got error -74"). Root cause: Wear OS freezes this app's
+    // process (see this file's and GameStateListenerService's own
+    // longstanding comments on how aggressively it does this) — a frozen
+    // process can't receive that binder callback OR run the poll loop
+    // above, no matter how correctly either is implemented, since freezing
+    // suspends the entire process. A visibly-open screen does NOT guarantee
+    // the process isn't frozen (ambient/idle transitions can happen while
+    // the last frame is still on screen — very plausible exactly while
+    // aiming the phone's camera to scan, not touching the watch at all).
+    // A partial wake lock, held only for as long as this screen is
+    // actively waiting for a claim, keeps the process unfreezable so
+    // Play Services' already-successful OS-level delivery can actually
+    // reach the app. Time-bounded acquire() as a safety net against ever
+    // draining battery indefinitely if disposal is somehow skipped.
+    DisposableEffect(Unit) {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aropswear:pairing")
+        wakeLock.acquire(5 * 60_000L)
+        onDispose { if (wakeLock.isHeld) wakeLock.release() }
     }
 
     Column(
