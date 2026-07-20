@@ -336,7 +336,7 @@ function registerPlatformHandlers(io, socket, db) {
   });
 
   // ── AR OPS: host generates the "comic map" (real geodata for the field) ──
-  socket.on('lobby:generate_comic_map', async ({ lobbyId, reqId }) => {
+  socket.on('lobby:generate_comic_map', async ({ lobbyId, reqId, polygon: clientPolygon }) => {
     try {
       const { rows } = await db.query('SELECT host_id, game_mode, workshop_map_config FROM lobbies WHERE id=$1', [lobbyId]);
       if (!rows[0]) return socket.emit('lobby:comic_map_error', { reqId, err: 'lobby_not_found' });
@@ -344,7 +344,19 @@ function registerPlatformHandlers(io, socket, db) {
       if (rows[0].game_mode !== 'ar_ops') return socket.emit('lobby:comic_map_error', { reqId, err: 'wrong_mode' });
 
       const ar = rows[0].workshop_map_config?.ar_settings || {};
-      const polygon = ar.polygon;
+      // Prefer the client's own current polygon over the persisted one:
+      // LobbyScreen auto-triggers this the instant the LOCAL polygon
+      // reaches 3 points, while the point itself only reaches the DB via
+      // the separately-debounced (150ms) lobby:ar_update — that request is
+      // sent to the server only AFTER this one, so a DB read here can
+      // reliably still see the pre-3rd-point polygon and wrongly report
+      // "no_polygon" seconds after the host demonstrably already drew one.
+      // Comic-map generation is a nice-to-have visual, never a gameplay
+      // dependency (see comic_map.js's header) — trusting the client's own
+      // current drawing state here (still validated below) is safe.
+      const polygon = Array.isArray(clientPolygon) && clientPolygon.length
+        ? clientPolygon.filter(p => p && Number.isFinite(p.lat) && Number.isFinite(p.lon)).slice(0, 30).map(p => ({ lat: +p.lat, lon: +p.lon }))
+        : ar.polygon;
       if (!Array.isArray(polygon) || polygon.length < 3) {
         return socket.emit('lobby:comic_map_error', { reqId, err: 'no_polygon' });
       }

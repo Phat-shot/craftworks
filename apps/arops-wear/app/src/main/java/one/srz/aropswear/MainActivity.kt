@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
                         val state by GameStateRepository.state.collectAsState()
                         RadarScreen(
                             state,
+                            claimed = claimed,
                             onTap = { screen = Screen.DEBUG },
                             onLongPress = { screen = Screen.PAIRING },
                         )

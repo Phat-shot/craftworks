@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Platform, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
 import { getCurrentLocation as getNativeLocation } from 'native-location';
@@ -147,6 +147,14 @@ export default function LobbyScreen({
   myPosStaleRef.current = myPosStale;
   const [myPosLoading, setMyPosLoading] = useState(false);
   const [myPosErr, setMyPosErr] = useState(false);
+  // Distinct from myPosErr — "permission denied" needs a Settings change
+  // (retrying can never succeed on its own, no matter which OS API is
+  // behind loadMyPosition), whereas a plain myPosErr (fix timed out) might
+  // resolve on the very next retry. Both used to collapse into the same
+  // generic warning icon with no way to tell them apart, which could read
+  // as "GPS is broken" indefinitely when the actual, fixable cause was a
+  // denied permission the whole time.
+  const [myPosPermDenied, setMyPosPermDenied] = useState(false);
   // Surfaced in the UI while loading — a GPS cold fix can legitimately take
   // up to ~24s (3 attempts × 8s timeout) outdoors; with nothing but a small
   // spinner icon to show for it, that reads as "the app is stuck" instead of
@@ -200,6 +208,7 @@ export default function LobbyScreen({
   const loadMyPosition = async () => {
     setMyPosLoading(true);
     setMyPosErr(false);
+    setMyPosPermDenied(false);
     setMyPosAttempt(0);
 
     const gen = ++loadGenRef.current;
@@ -211,7 +220,15 @@ export default function LobbyScreen({
 
     try {
       const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
-      if (!perm || perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
+      if (!perm || perm.status !== 'granted') {
+        // A perm object that came back but says !granted is a REAL denial
+        // (as opposed to the request itself timing out/throwing) — that
+        // can only ever be fixed in Settings, not by tapping retry again.
+        if (perm) setMyPosPermDenied(true);
+        setMyPosErr(true);
+        setMyPosLoading(false);
+        return;
+      }
 
       // Fill from the OS's own cache if we don't have anything yet, or all
       // we have is the (possibly much older) locally-persisted last fix —
@@ -427,7 +444,11 @@ export default function LobbyScreen({
     // persisted last-known position: without it, this retry-on-tap safety
     // net could never fire again once that seed was in place, even though
     // it's stale — the exact case a fresh fix is still needed for.
-    if ((!myPos || myPosStale) && !myPosLoading) loadMyPosition();
+    // Excluded once myPosPermDenied: a denied permission can't be fixed by
+    // retrying, only by a Settings change — retrying anyway on every single
+    // tap while placing several points in a row was hammering the
+    // permission check for nothing every time (reported as "GPS churns").
+    if ((!myPos || myPosStale) && !myPosLoading && !myPosPermDenied) loadMyPosition();
     const c = feature?.geometry?.coordinates;
     if (!Array.isArray(c)) return;
     if (tapMode === 'zones' && NEEDS_ZONES[subMode] !== undefined) {
@@ -470,7 +491,14 @@ export default function LobbyScreen({
     comicMapReqRef.current = reqId;
     setComicMapLoading(true);
     setComicMapErr('');
-    getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId });
+    // Send the current polygon along, not just lobbyId — the auto-generate
+    // effect below fires the instant local polygon.length hits 3, but the
+    // point(s) that made it happen only reach the server via the
+    // separately-debounced (150ms) emitUpdate/lobby:ar_update, which is
+    // still in flight at this exact moment. Without this, the server's own
+    // DB-read polygon reliably lags behind by a point, misreporting
+    // "no_polygon" (Erst das Spielfeld zeichnen) right after finishing it.
+    getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId, polygon });
   };
 
   // Once the field becomes valid, auto-generate the comic map a single time
@@ -776,17 +804,30 @@ export default function LobbyScreen({
             </ShapeSource>
           )}
         </MapView>
-        <TouchableOpacity style={st.locateBtn} onPress={() => loadMyPosition()} disabled={myPosLoading}>
+        <TouchableOpacity
+          style={st.locateBtn}
+          onPress={() => (myPosPermDenied ? Linking.openSettings() : loadMyPosition())}
+          disabled={myPosLoading}
+        >
           {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
             <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
           )}
         </TouchableOpacity>
         {myPosLoading && (
           <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>GPS wird gesucht… ({myPosAttempt + 1}/3)</Text>
+            <Text style={st.gpsStatusTxt}>
+              {/* Android's native one-shot call (see modules/native-location)
+                  has no "3 attempts" concept — that's iOS-only below. */}
+              {Platform.OS === 'android' ? 'GPS wird gesucht…' : `GPS wird gesucht… (${myPosAttempt + 1}/3)`}
+            </Text>
           </View>
         )}
-        {!myPosLoading && myPosStale && (
+        {!myPosLoading && myPosPermDenied && (
+          <View style={st.gpsStatusBadge}>
+            <Text style={st.gpsStatusTxt}>Standort-Zugriff verweigert — antippen für Einstellungen</Text>
+          </View>
+        )}
+        {!myPosLoading && !myPosPermDenied && myPosStale && (
           <View style={st.gpsStatusBadge}>
             <Text style={st.gpsStatusTxt}>Letzte bekannte Position</Text>
           </View>

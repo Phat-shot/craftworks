@@ -37,7 +37,7 @@ import kotlin.math.sin
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun RadarScreen(state: GameState, onTap: () -> Unit, onLongPress: () -> Unit) {
+fun RadarScreen(state: GameState, claimed: Boolean, onTap: () -> Unit, onLongPress: () -> Unit) {
     var tileBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     // The watch's OWN compass, not just the phone-pushed heading — more
     // responsive, and correct even if the phone (in a pocket, say) is
@@ -83,14 +83,20 @@ fun RadarScreen(state: GameState, onTap: () -> Unit, onLongPress: () -> Unit) {
         // background, same center dot, "– · 0:00" at top. Made this
         // ambiguity explicit instead of silent, since it was reported as
         // exactly that — "black screen with a dot, no connection".
+        //
+        // A REAL pairing legitimately still shows no data for as long as
+        // the host is sitting in the lobby — the phone only ever pushes
+        // state once an actual match starts (GameScreen, never
+        // LobbyScreen) — so "no data" alone doesn't mean pairing failed.
+        // `claimed` (not just updatedAtMs) distinguishes the two: reported
+        // confusion was "scanned the code, watch still just says no data,
+        // did it even pair?" — this now answers that directly on-screen
+        // instead of always showing the same ambiguous "Vorschau" text.
         val neverConnected = state.updatedAtMs == 0L
-        // Tap: debug info screen (connection/pairing status, see
-        // ui/DebugScreen.kt). Long-press: escape hatch back to the pairing
-        // screen. Needed because `claimed` now persists across app restarts
-        // (see PairingRepository) — without this, re-pairing a new phone or
-        // starting a fresh match would have no way back to the QR code.
         Text(
-            text = if (neverConnected) "Vorschau, keine Daten · Tippen: Status" else "${state.phase} · $mm:${ss.toString().padStart(2, '0')}",
+            text = if (!neverConnected) "${state.phase} · $mm:${ss.toString().padStart(2, '0')}"
+                else if (claimed) "Gekoppelt — warte auf Spielstart · Tippen: Status"
+                else "Vorschau, keine Daten · Tippen: Status",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.align(Alignment.TopCenter)
