@@ -70,6 +70,7 @@ jobs:
           else
             echo "APP_CHANNEL=test" >> "$GITHUB_ENV"
           fi
+          echo "COMMIT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Release-APK bauen
         working-directory: apps/arops-wear

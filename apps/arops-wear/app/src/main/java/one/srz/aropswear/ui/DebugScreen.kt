@@ -95,7 +95,7 @@ fun DebugScreen(onTap: () -> Unit) {
             style = MaterialTheme.typography.caption3,
         )
         Text(
-            text = "v${BuildConfig.VERSION_NAME}",
+            text = "v${BuildConfig.VERSION_NAME} · ${BuildConfig.COMMIT_SHA}",
             color = ComicPalette.gold.copy(alpha = 0.45f),
             style = MaterialTheme.typography.caption3,
         )

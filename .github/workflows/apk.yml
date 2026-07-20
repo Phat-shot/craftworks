@@ -13,8 +13,11 @@ name: APK Build
 # unterscheiden sich, damit beide gleichzeitig auf demselben Gerät
 # installiert sein können, statt sich beim Sideload gegenseitig zu
 # überschreiben. APK-Dateiname spiegelt das (main: ar-ops-android-v<Version>,
-# test: ar-ops-android-beta-v<Version>). BUILD_TIME wird ebenfalls gesetzt
-# und in der App unter Einstellungen angezeigt (App.tsx).
+# test: ar-ops-android-beta-v<Version>). BUILD_TIME + COMMIT_SHA werden
+# ebenfalls gesetzt und in der App unter Einstellungen angezeigt (App.tsx) —
+# damit im Zweifel eindeutig ist, welcher Commit gerade auf dem Testgerät
+# läuft, statt sich allein auf die von Hand hochgezählte Versionsnummer
+# verlassen zu müssen.
 #
 # assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
 # laufenden Metro-Dev-Server und fragt beim Start nach dessen URL ("Unable
@@ -89,6 +92,7 @@ jobs:
             echo "APP_CHANNEL=test" >> "$GITHUB_ENV"
           fi
           echo "BUILD_TIME=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "$GITHUB_ENV"
+          echo "COMMIT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Expo prebuild (generiert das native android/-Projekt)
         working-directory: apps/arops-mobile

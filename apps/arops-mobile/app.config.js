@@ -40,6 +40,11 @@ module.exports = ({ config }) => {
       // Settings screen (App.tsx) so testers can tell which build they're
       // actually running. Falls back to "now" for local dev builds.
       buildTime: process.env.BUILD_TIME || new Date().toISOString(),
+      // Short commit SHA — the version number in app.json is bumped by
+      // hand and drifts out of sync easily (it did, repeatedly); this is
+      // the one value that always unambiguously identifies the exact
+      // source a build came from.
+      commitSha: process.env.COMMIT_SHA || 'dev',
     },
   };
 };

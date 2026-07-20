@@ -27,8 +27,14 @@ android {
         // Bugfix auf test +0.1 — von Hand hochzählen, gemeinsam mit
         // apps/arops-mobile/app.json "version" (dieselbe Zählung, beide
         // Apps gehören zum selben AR-Ops-Release).
-        versionName = "1"
+        versionName = "1.4"
         resValue("string", "app_name", if (isMainChannel) "AR Ops Radar" else "AR Ops Radar Beta")
+        // Set per build in .github/workflows/wear-apk.yml — shown next to
+        // BuildConfig.VERSION_NAME in ui/PairingScreen.kt + ui/DebugScreen.kt.
+        // versionName above is bumped by hand and can drift out of sync with
+        // what's actually running (it did, repeatedly); this always
+        // unambiguously identifies the source commit.
+        buildConfigField("String", "COMMIT_SHA", "\"${System.getenv("COMMIT_SHA") ?: "dev"}\"")
     }
 
     buildFeatures {

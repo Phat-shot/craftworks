@@ -17,3 +17,10 @@ export const SERVER_URL: string =
 // tell which build they're actually running.
 export const BUILD_TIME: string =
   (Constants.expoConfig?.extra?.buildTime as string | undefined) || '–';
+
+// Short commit SHA — same build-time-bake mechanism, set per build in
+// .github/workflows/apk.yml. The version in app.json is bumped by hand and
+// can drift out of sync with what's actually running; this is the one
+// value that always unambiguously identifies the source commit.
+export const COMMIT_SHA: string =
+  (Constants.expoConfig?.extra?.commitSha as string | undefined) || 'dev';
