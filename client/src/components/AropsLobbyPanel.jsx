@@ -215,6 +215,95 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           </Tip>
         ))}
       </div>
+      {/* Alle Modus-spezifischen Einstellungen konsistent direkt unter dem
+          Modus-Umschalter, für jeden Modus gleich positioniert (vorher lagen
+          sie erst nach Karte + Rollen/Teams/Klassen — uneinheitlich mit der
+          Mobile-App, wo nur hsVariant oben war). */}
+      {subMode === 'hide_and_seek' && (
+        <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ hsVariant: 'classic' })}
+            style={{ borderColor: hsVariant === 'classic' ? 'var(--gold)' : undefined,
+                     color: hsVariant === 'classic' ? 'var(--gold)' : undefined }}>
+            🫥 Team
+          </button>
+          <Tip text={GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription}>
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ hsVariant: 'ffa' })}
+              style={{ borderColor: hsVariant === 'ffa' ? 'var(--gold)' : undefined,
+                       color: hsVariant === 'ffa' ? 'var(--gold)' : undefined }}>
+              🎯 Jeder gegen jeden
+            </button>
+          </Tip>
+          <Tip text={GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription}>
+            <button className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ hsVariant: 'the_ship' })}
+              style={{ borderColor: hsVariant === 'the_ship' ? 'var(--gold)' : undefined,
+                       color: hsVariant === 'the_ship' ? 'var(--gold)' : undefined }}>
+              🎭 The Ship
+            </button>
+          </Tip>
+        </div>
+      )}
+      {rolesApply && (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Gefunden:</span>
+          {[['spectator', '👻 Zuschauer'], ['seeker', '🔁 Weiterspielen'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
+            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ foundMode: id })}
+              style={{ borderColor: foundMode === id ? 'var(--gold)' : undefined,
+                       color: foundMode === id ? 'var(--gold)' : undefined }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {subMode === 'seek_destroy' && (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Zerstören:</span>
+          {[['instant', 'Symmetrisch'], ['defuse', 'Entschärfen']].map(([id, label]) => (
+            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ destroyVariant: id })}
+              style={{ borderColor: destroyVariant === id ? 'var(--gold)' : undefined,
+                       color: destroyVariant === id ? 'var(--gold)' : undefined }}>
+              {label}
+            </button>
+          ))}
+          <button className="btn btn-ghost btn-sm" disabled={!isHost}
+            onClick={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}
+            style={{ borderColor: ar.destroyReactivate ? 'var(--gold)' : undefined,
+                     color: ar.destroyReactivate ? 'var(--gold)' : undefined }}>
+            🔁 Ziele reaktivieren
+          </button>
+        </div>
+      )}
+      {subMode === 'deathmatch' && (<>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Treffer:</span>
+          {[['respawn', 'Leben verlieren'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
+            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
+              onClick={() => emitUpdate({ deathmatchOnHit: id })}
+              style={{ borderColor: deathmatchOnHit === id ? 'var(--gold)' : undefined,
+                       color: deathmatchOnHit === id ? 'var(--gold)' : undefined }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {deathmatchOnHit === 'respawn' && (
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 10, color: 'var(--text3)' }}>Leben:</span>
+            {[1, 3, 5].map(n => (
+              <button key={n} className="btn btn-ghost btn-sm" disabled={!isHost}
+                onClick={() => emitUpdate({ livesPerPlayer: n })}
+                style={{ borderColor: livesPerPlayer === n ? 'var(--gold)' : undefined,
+                         color: livesPerPlayer === n ? 'var(--gold)' : undefined }}>
+                {n}
+              </button>
+            ))}
+          </div>
+        )}
+      </>)}
+
       {isHost && needsZones && (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--text3)' }}>Karten-Tap setzt:</span>
@@ -332,93 +421,6 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           );
         })}
       </div>
-
-      {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
-          (ar_settings.hsVariant), keine eigenen Modi. */}
-      {subMode === 'hide_and_seek' && (
-        <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-          <button className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ hsVariant: 'classic' })}
-            style={{ borderColor: hsVariant === 'classic' ? 'var(--gold)' : undefined,
-                     color: hsVariant === 'classic' ? 'var(--gold)' : undefined }}>
-            🫥 Team
-          </button>
-          <Tip text={GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription}>
-            <button className="btn btn-ghost btn-sm" disabled={!isHost}
-              onClick={() => emitUpdate({ hsVariant: 'ffa' })}
-              style={{ borderColor: hsVariant === 'ffa' ? 'var(--gold)' : undefined,
-                       color: hsVariant === 'ffa' ? 'var(--gold)' : undefined }}>
-              🎯 Jeder gegen jeden
-            </button>
-          </Tip>
-          <Tip text={GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription}>
-            <button className="btn btn-ghost btn-sm" disabled={!isHost}
-              onClick={() => emitUpdate({ hsVariant: 'the_ship' })}
-              style={{ borderColor: hsVariant === 'the_ship' ? 'var(--gold)' : undefined,
-                       color: hsVariant === 'the_ship' ? 'var(--gold)' : undefined }}>
-              🎭 The Ship
-            </button>
-          </Tip>
-        </div>
-      )}
-      {rolesApply && (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Gefunden:</span>
-          {[['spectator', '👻 Zuschauer'], ['seeker', '🔁 Weiterspielen'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
-            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
-              onClick={() => emitUpdate({ foundMode: id })}
-              style={{ borderColor: foundMode === id ? 'var(--gold)' : undefined,
-                       color: foundMode === id ? 'var(--gold)' : undefined }}>
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-      {subMode === 'seek_destroy' && (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Zerstören:</span>
-          {[['instant', 'Symmetrisch'], ['defuse', 'Entschärfen']].map(([id, label]) => (
-            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
-              onClick={() => emitUpdate({ destroyVariant: id })}
-              style={{ borderColor: destroyVariant === id ? 'var(--gold)' : undefined,
-                       color: destroyVariant === id ? 'var(--gold)' : undefined }}>
-              {label}
-            </button>
-          ))}
-          <button className="btn btn-ghost btn-sm" disabled={!isHost}
-            onClick={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}
-            style={{ borderColor: ar.destroyReactivate ? 'var(--gold)' : undefined,
-                     color: ar.destroyReactivate ? 'var(--gold)' : undefined }}>
-            🔁 Ziele reaktivieren
-          </button>
-        </div>
-      )}
-      {subMode === 'deathmatch' && (<>
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>Treffer:</span>
-          {[['respawn', 'Leben verlieren'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
-            <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
-              onClick={() => emitUpdate({ deathmatchOnHit: id })}
-              style={{ borderColor: deathmatchOnHit === id ? 'var(--gold)' : undefined,
-                       color: deathmatchOnHit === id ? 'var(--gold)' : undefined }}>
-              {label}
-            </button>
-          ))}
-        </div>
-        {deathmatchOnHit === 'respawn' && (
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 10, color: 'var(--text3)' }}>Leben:</span>
-            {[1, 3, 5].map(n => (
-              <button key={n} className="btn btn-ghost btn-sm" disabled={!isHost}
-                onClick={() => emitUpdate({ livesPerPlayer: n })}
-                style={{ borderColor: livesPerPlayer === n ? 'var(--gold)' : undefined,
-                         color: livesPerPlayer === n ? 'var(--gold)' : undefined }}>
-                {n}
-              </button>
-            ))}
-          </div>
-        )}
-      </>)}
 
       {/* Timers */}
       <div style={{ display: 'grid', gridTemplateColumns: rolesApply ? '1fr 1fr' : '1fr', gap: 10 }}>

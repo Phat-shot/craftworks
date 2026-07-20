@@ -477,6 +477,73 @@ export default function LobbyScreen({
           </TouchableOpacity>
         </View>
       )}
+      {/* Alle Modus-spezifischen Einstellungen konsistent direkt unter dem
+          Modus-Umschalter, für jeden Modus gleich positioniert (vorher lagen
+          Gefunden/Zerstören/Deathmatch-Einstellungen unter der Karte, nur
+          hsVariant war oben — uneinheitlich). */}
+      {isHost && rolesApply && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Gefunden:</Text>
+          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ foundMode: 'spectator' })}>
+            <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ foundMode: 'seeker' })}>
+            <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ foundMode: 'freeze' })}>
+            <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {isHost && subMode === 'seek_destroy' && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Zerstören:</Text>
+          <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ destroyVariant: 'instant' })}>
+            <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ destroyVariant: 'defuse' })}>
+            <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.smallBtnActive]}
+            onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
+            <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {isHost && subMode === 'deathmatch' && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Treffer:</Text>
+          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'respawn' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ deathmatchOnHit: 'respawn' })}>
+            <Text style={[st.smallTxt, deathmatchOnHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'freeze' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ deathmatchOnHit: 'freeze' })}>
+            <Icon name="snowflake" size={13} color={deathmatchOnHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, deathmatchOnHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {isHost && subMode === 'deathmatch' && deathmatchOnHit === 'respawn' && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Leben:</Text>
+          {[1, 3, 5].map(n => (
+            <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
+              onPress={() => emitUpdate({ livesPerPlayer: n })}>
+              <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
       <View style={st.divider} />
 
       {isHost && (
@@ -660,70 +727,6 @@ export default function LobbyScreen({
               </View>
             </>
           )}
-          {rolesApply && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Gefunden:</Text>
-              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'spectator' })}>
-                <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'seeker' })}>
-                <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'freeze' })}>
-                <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          {subMode === 'seek_destroy' && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Zerstören:</Text>
-              <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ destroyVariant: 'instant' })}>
-                <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ destroyVariant: 'defuse' })}>
-                <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.smallBtnActive]}
-                onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
-                <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          {subMode === 'deathmatch' && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Treffer:</Text>
-              <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'respawn' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ deathmatchOnHit: 'respawn' })}>
-                <Text style={[st.smallTxt, deathmatchOnHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'freeze' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ deathmatchOnHit: 'freeze' })}>
-                <Icon name="snowflake" size={13} color={deathmatchOnHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, deathmatchOnHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          {subMode === 'deathmatch' && deathmatchOnHit === 'respawn' && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Leben:</Text>
-              {[1, 3, 5].map(n => (
-                <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
-                  onPress={() => emitUpdate({ livesPerPlayer: n })}>
-                  <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
           <View style={st.divider} />
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>

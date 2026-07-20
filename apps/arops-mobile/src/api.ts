@@ -1,6 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { io, Socket } from 'socket.io-client';
 import { SERVER_URL } from './config';
+import { withTimeout } from './utils/withTimeout';
+
+// fetch() has no built-in timeout — a slow/unresponsive server (or a bad
+// mobile network) can leave it hanging far longer than any user will wait,
+// with no rejection to react to. Bounded here the same way expo-location's
+// equally timeout-less promises already are (see withTimeout's own
+// comment) — this runs at boot (restoreSession -> tryRefresh) before the
+// player can do anything at all, so a hang here reads as "the whole app is
+// stuck", not just one failed request.
+const FETCH_TIMEOUT_MS = 10_000;
 
 export interface User { id: string; username: string; avatar_color?: string; }
 
@@ -15,11 +25,11 @@ export function getUser(): User | null { return currentUser; }
 async function tryRefresh(): Promise<boolean> {
   if (!refreshToken) return false;
   try {
-    const res = await fetch(`${SERVER_URL}/api/auth/refresh`, {
+    const res = await withTimeout(fetch(`${SERVER_URL}/api/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
-    });
+    }), FETCH_TIMEOUT_MS);
     if (!res.ok) return false;
     const d = await res.json();
     if (!d.access_token) return false;
@@ -36,17 +46,24 @@ async function tryRefresh(): Promise<boolean> {
 }
 
 async function req(path: string, body?: unknown, method = 'POST', retry = true): Promise<any> {
-  const res = await fetch(`${SERVER_URL}/api${path}`, {
+  const res = await withTimeout(fetch(`${SERVER_URL}/api${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  }), FETCH_TIMEOUT_MS);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401 && retry) {
+    // /auth/* endpoints' own 401s mean something specific to that endpoint
+    // (login: wrong password) — never "your access token expired". There's
+    // no access token involved in a fresh login/register/guest attempt at
+    // all, so refreshing one and retrying makes no sense here; worse, it
+    // masked the real error (e.g. invalid_credentials) behind a misleading
+    // "session_expired" for every failed login attempt.
+    const isAuthEndpoint = path.startsWith('/auth/');
+    if (res.status === 401 && retry && !isAuthEndpoint) {
       if (await tryRefresh()) return req(path, body, method, false);
       // Refresh failed → session is truly dead; clear it so next boot re-logins
       await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
