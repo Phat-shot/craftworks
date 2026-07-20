@@ -53,6 +53,17 @@ interface Snap {
   hidersRemaining: number;
   me: {
     role: string; team?: 'a'|'b'|null; status: string; score: number;
+    class?: 'scout' | 'sniper' | 'bomber' | null;
+    // Own effective hit-test shape (see server's effectiveHitInfo) — differs
+    // from the top-level hitRangeM/hitConeHalfAngleDeg above if this player
+    // has a class. 'cone' (Scout/default): hitRangeM + hitConeHalfAngleDeg.
+    // 'lateral' (Sniper): hitRangeM (doubled) + lateralToleranceM (meters,
+    // not an angle). 'omni' (Bomber): hitRangeM (quartered) only, no
+    // direction at all.
+    hitShape?: 'cone' | 'lateral' | 'omni';
+    hitRangeM?: number;
+    hitConeHalfAngleDeg?: number;
+    lateralToleranceM?: number;
     isCaptain?: boolean;
     geofence: string; proximityAlert: boolean;
     frozenRemainingMs?: number; freezeViolations?: number;
@@ -156,26 +167,38 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   }, []);
 
   // Reported: GPS (and, same underlying reasoning, the compass) recovers
-  // reliably once its status icon is manually tapped, but not on its own —
-  // the hook's own internal 4s-silence watchdog (useTelemetry.ts) respects
-  // an in-flight guard that a manual tap force-clears, so it doesn't
-  // reliably unstick things by itself. This automates exactly what tapping
-  // does, every 30s, so a player doesn't have to notice and act on a stuck
-  // fix themselves. Read via refs (not a `telemetry.sample`/`retryPosition`/
-  // `activeHeadingDeg` dependency) since retryPosition/retryHeading are
-  // fresh, unmemoized closures every render — depending on them directly
-  // would tear down and restart this interval on every single tick, never
-  // letting it actually fire. activeHeadingDegRef is written just after
-  // activeHeadingDeg is computed further down (has to be, since it depends
-  // on hasCam/viewMode defined later in this function).
+  // reliably once its status icon is manually tapped, but not reliably on
+  // its own — the hook's own internal 4s-silence watchdog (useTelemetry.ts)
+  // respects an in-flight guard that a manual tap force-clears, so it
+  // doesn't always unstick things by itself. This automates exactly what
+  // tapping does, every 15s.
+  //
+  // GPS retries UNCONDITIONALLY (not gated on `!telemetry.sample`) —
+  // reported as still not reliably kicking in with that gate, and
+  // `sample` is a poor staleness signal anyway: buildSample() stamps
+  // `ts: Date.now()` fresh on every call, not the underlying fix's actual
+  // age, so `sample` reads as "fine" forever after just one fix even if
+  // the GPS died completely afterward. Removing the gate trades a
+  // harmless periodic resubscribe (near-instant if the fix is already
+  // healthy) for never silently failing to retry. Compass keeps its own
+  // gate — its icon disappears once fixed, so there's nothing left to
+  // retry for once activeHeadingDeg is non-null.
+  //
+  // Read via refs (not a `retryPosition`/`activeHeadingDeg` dependency)
+  // since retryPosition/retryHeading are fresh, unmemoized closures every
+  // render — depending on them directly would tear down and restart this
+  // interval on every single tick, never letting it actually fire.
+  // activeHeadingDegRef is written just after activeHeadingDeg is computed
+  // further down (has to be, since it depends on hasCam/viewMode defined
+  // later in this function).
   const telemetryRef = useRef(telemetry);
   telemetryRef.current = telemetry;
   const activeHeadingDegRef = useRef<number | null>(null);
   useEffect(() => {
     const iv = setInterval(() => {
-      if (!telemetryRef.current.sample) telemetryRef.current.retryPosition();
+      telemetryRef.current.retryPosition();
       if (activeHeadingDegRef.current === null) telemetryRef.current.retryHeading();
-    }, 30_000);
+    }, 15_000);
     return () => clearInterval(iv);
   }, []);
 
@@ -215,7 +238,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     const onTick = (s: Snap) => {
       if (s.sessionId && s.sessionId !== sessionId) return; // stale session
       tickCounterRef.current++;
-      if (s.hitRangeM) hitRangeRef.current = s.hitRangeM;
+      // Own class-aware range (Sniper 2x, Bomber 0.25x) — the "Außer
+      // Reichweite" toast below used to always show the match-wide default,
+      // wrong for anyone with a non-default class.
+      if (s.me?.hitRangeM ?? s.hitRangeM) hitRangeRef.current = (s.me?.hitRangeM ?? s.hitRangeM)!;
       setSnap(s);
     };
     const onResult = (r: any) => {
@@ -439,11 +465,23 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // is stored server-side as an angle (baseConeHalfAngleDeg, same formula
   // hit.ts validates with), translated back to a meters-wide lane here using
   // the same 10m reference distance the Lobby setting uses.
+  //
+  // Reported: perk/class overlays weren't reflected in the actual match —
+  // this used to read the top-level snap.hitRangeM/hitConeHalfAngleDeg,
+  // which the server deliberately keeps match-wide/unclassed (see its own
+  // comment on those fields in getAropsSnapshot) specifically FOR backward
+  // compat with this not-yet-existing client behavior. The viewer's own
+  // effective (class-aware) values are in snap.me instead — reading those
+  // now, with the match-wide ones only as a last-resort fallback (e.g. no
+  // `me` at all, spectator-ish states).
   const REF_DIST_M = 10;
-  const effectiveMaxRangeM = snap?.hitRangeM ?? DEFAULT_HIT_CONFIG.maxRangeM;
-  const effectiveLaneWidthM = snap?.hitConeHalfAngleDeg !== undefined
-    ? 2 * REF_DIST_M * Math.tan(snap.hitConeHalfAngleDeg * Math.PI / 180)
-    : 2;
+  const myHitShape = snap?.me?.hitShape ?? 'cone';
+  const effectiveMaxRangeM = snap?.me?.hitRangeM ?? snap?.hitRangeM ?? DEFAULT_HIT_CONFIG.maxRangeM;
+  const effectiveLaneWidthM = myHitShape === 'lateral'
+    ? 2 * (snap?.me?.lateralToleranceM ?? 2)
+    : (snap?.me?.hitConeHalfAngleDeg ?? snap?.hitConeHalfAngleDeg) !== undefined
+      ? 2 * REF_DIST_M * Math.tan((snap!.me!.hitConeHalfAngleDeg ?? snap!.hitConeHalfAngleDeg!) * Math.PI / 180)
+      : 2;
 
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
@@ -826,13 +864,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <FillLayer id="fadeFill" style={{ fillColor: '#05040a', fillOpacity: ['get', 'op'] as any }} />
         </ShapeSource>
       )}
-      {rangeGeoJSON && (
+      {/* Bomber (omni) has no aim direction at all — a circle is the honest
+          shape for "hit anything within range, any direction". Everyone
+          else (cone: Scout/default, lateral: Sniper) gets the directional
+          corridor instead — showing both at once (the old, class-blind
+          behavior) was misleading for whichever shape didn't actually apply. */}
+      {myHitShape === 'omni' && rangeGeoJSON && (
         <ShapeSource id="range" shape={rangeGeoJSON}>
           <FillLayer id="rangeFill" style={{ fillColor: 'rgba(240,200,64,0.05)' }} />
           <LineLayer id="rangeLine" style={{ lineColor: '#f0c840', lineWidth: 1.5, lineDasharray: [2, 2] as any }} />
         </ShapeSource>
       )}
-      {coneGeoJSON && (
+      {myHitShape !== 'omni' && coneGeoJSON && (
         <ShapeSource id="hitcone" shape={coneGeoJSON}>
           <FillLayer id="coneFill" style={{ fillColor: 'rgba(255,120,40,0.16)' }} />
           <LineLayer id="coneLine" style={{ lineColor: '#ff7828', lineWidth: 1.5 }} />
@@ -965,6 +1008,34 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       ))}
     </View>
   );
+
+  // Bomber (omni) — no aim direction at all, so the converging "gun-sight"
+  // funnel above (laneOverlay) is actively misleading for this class: it
+  // implies you need to point at something. A horizontal marker through the
+  // middle instead — "anything within this radius, any direction" — doesn't
+  // depend on telemetry.heading at all, matching that Bomber doesn't need a
+  // compass fix to shoot (see canShoot's class exception server-side).
+  const radiusArcOverlay = (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={{
+        position: 'absolute', top: '55%', left: '6%', right: '6%', height: 3, borderRadius: 2,
+        backgroundColor: `rgba(240,200,64,${(0.6 * OVERLAY_OPACITY).toFixed(2)})`,
+      }} />
+      <Text style={{
+        position: 'absolute', top: '57%', left: 0, right: 0, textAlign: 'center',
+        color: '#fff', fontSize: 11, fontWeight: '800',
+      }}>
+        Radius {Math.round(effectiveMaxRangeM)}m — keine Zielrichtung nötig
+      </Text>
+    </View>
+  );
+
+  // Swap the funnel for the radius marker whenever the shooter's actual
+  // (class-aware, see myHitShape above) shape is 'omni' — Sniper's
+  // 'lateral' still uses the funnel, it's a fixed-meters-wide directional
+  // corridor just like Scout's cone, only the width source differs
+  // (already handled via effectiveLaneWidthM above).
+  const aimOverlay = myHitShape === 'omni' ? radiusArcOverlay : laneOverlay;
 
   const targetOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -1144,7 +1215,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
                 worried about. */}
             {viewMode === 'split' && (
               <View style={{ flex: 1 }}>
-                <View style={{ flex: 1 }}>{crosshair}{laneOverlay}{targetOverlay}</View>
+                <View style={{ flex: 1 }}>{crosshair}{aimOverlay}{targetOverlay}</View>
                 <View style={{ flex: 1 }}>{renderMap(false)}</View>
               </View>
             )}
@@ -1153,10 +1224,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
                 <View style={[StyleSheet.absoluteFill, { opacity: OVERLAY_OPACITY }]} pointerEvents="none">
                   {renderMap(false)}
                 </View>
-                {crosshair}{laneOverlay}{targetOverlay}
+                {crosshair}{aimOverlay}{targetOverlay}
               </>
             )}
-            {viewMode === 'camera' && <>{crosshair}{laneOverlay}{targetOverlay}</>}
+            {viewMode === 'camera' && <>{crosshair}{aimOverlay}{targetOverlay}</>}
           </CameraLayer>
         )}
 
@@ -1256,43 +1327,46 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       )}
 
       {/* Verbindungs-Icons, oben links, konsistente Reihenfolge + Farbschema:
-          IR/ESP → GPS → Uhr. Grün = verfügbar/aktiv, gedimmtes Grau = normal
-          aus (nichts Falsches daran, z.B. Uhr nicht gekoppelt — Kopplung ist
-          optional und läuft nur übers Hauptmenü, hier nichts zum Neustarten).
+          IR/ESP → GPS → Uhr. Alle vier Fabs (inkl. Kompass rechts) teilen
+          jetzt dieselbe statische Hintergrund-/Rahmenfarbe — vorher hatten
+          IR/Uhr zusätzlich modeBtnActive (verändert Hintergrund+Rahmen bei
+          "aktiv"), GPS/Kompass nicht, was zwischen den Fabs uneinheitlich
+          aussah. Nur noch die Icon-Farbe signalisiert Status: Grün =
+          verfügbar/aktiv, gedimmtes Grau = normal aus (nichts Falsches
+          daran, z.B. Uhr nicht gekoppelt — Kopplung ist optional und läuft
+          nur übers Hauptmenü). IR immer sichtbar (nicht mehr an irEnabled
+          gebunden), grau solange keine Kamera-Erkennung läuft/aktiv ist.
           Nur GPS hat einen echten Fehlschlag-Zustand (Rot) und ist deshalb
           antippbar — IR/Uhr haben in-Game nichts, was ein Tap sinnvoll
           neu starten könnte. */}
-      {irEnabled && (
-        <View style={[st.espStatusFab, irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) && st.modeBtnActive]}>
-          <Icon name="flash" size={18} color={irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) ? '#80ff40' : '#605850'} />
-        </View>
-      )}
+      <View style={st.espStatusFab}>
+        <Icon name="flash" size={18} color={irScan.lastScan && (Date.now() - irScan.lastScan.ts < 3000) ? '#80ff40' : '#605850'} />
+      </View>
       {/* GPS-Status — antippbar (erzwingt telemetry.retryPosition, dieselbe
           Aktion wie die frühere volle Banner-Leiste, die diese Fab ersetzt):
           grau = sucht noch (Grace-Zeit läuft), rot = nicht verfügbar (Grace
-          um, kein Fix), grün = verfügbar. Zusätzlich alle 30s automatischer
-          Retry-Versuch solange kein Fix da ist (siehe telemetryRef-Effect
-          oben) — Tippen bleibt trotzdem für sofortigen Neustart nützlich. */}
+          um, kein Fix), grün = verfügbar. Zusätzlich alle 15s automatischer
+          Retry-Versuch (siehe telemetryRef-Effect oben) — Tippen bleibt
+          trotzdem für sofortigen Neustart nützlich. */}
       <TouchableOpacity style={st.gpsStatusFab} onPress={telemetry.retryPosition}>
         <Icon name="crosshair" size={18}
           color={telemetry.sample ? '#80ff40' : initGraceOver ? '#ff6040' : '#605850'} />
       </TouchableOpacity>
-      <View style={[st.watchStatusFab, watchSync.paired && st.modeBtnActive]}>
+      <View style={st.watchStatusFab}>
         <Icon name="watch" size={18} color={watchSync.paired ? '#80ff40' : '#605850'} />
       </View>
 
       {/* Kompass-Status, oben rechts, spiegelbildlich zur linken Reihe —
           antippbar wie GPS (erzwingt telemetry.retryHeading), automatischer
-          30s-Retry solange keine Ausrichtung da ist (siehe
-          telemetryRef-Effect oben, gleiches Prinzip wie GPS). Sobald
-          verfügbar wechselt das generische Status-Icon zum tatsächlich
-          rotierenden Kompass-Symbol (zeigt die echte Peilung), statt nur
-          "irgendwie verfügbar" anzuzeigen — der "bekannte echte Kompass". */}
-      <TouchableOpacity style={st.compassStatusFab} onPress={telemetry.retryHeading}>
-        <Icon name="compass" size={18}
-          color={activeHeadingDeg !== null ? '#80ff40' : initGraceOver ? '#ff6040' : '#605850'}
-          style={activeHeadingDeg !== null ? { transform: [{ rotate: `${-activeHeadingDeg}deg` }] } : undefined} />
-      </TouchableOpacity>
+          15s-Retry solange keine Ausrichtung da ist (siehe
+          telemetryRef-Effect oben, gleiches Prinzip wie GPS). Verschwindet
+          komplett sobald eine Ausrichtung da ist — kein permanentes
+          Icon mehr für einen Zustand, der nichts mehr zu melden hat. */}
+      {activeHeadingDeg === null && (
+        <TouchableOpacity style={st.compassStatusFab} onPress={telemetry.retryHeading}>
+          <Icon name="compass" size={18} color={initGraceOver ? '#ff6040' : '#605850'} />
+        </TouchableOpacity>
+      )}
 
       {/* Floating settings toggle — pulled out of the bottom bar so that bar
           can stay exactly Perk1 | Schuss | Perk2, symmetric. Sits directly
