@@ -4,7 +4,7 @@ import { scaleTimings, isInZone, scaleDroneRangeM, scaleCoreConfig } from '../sr
 import { destinationPoint } from '../src/geo';
 
 const MUC = { lat: 48.13743, lon: 11.57549 };
-const REF_AREA_M2 = 224 * 224; // matches scaleCoreConfig's internal REF_L_M
+const REF_AREA_M2 = 224 * 224; // a "medium" reference field, L≈224m
 
 test('timings: small field hits lower clamps', () => {
   const t = scaleTimings(10_000); // 100×100m → L=100
@@ -27,7 +27,7 @@ test('timings: monotonic with field size', () => {
 
 test('timings: huge field hits upper clamps', () => {
   const t = scaleTimings(3_000_000);
-  assert.equal(t.freezeMs, 120_000);
+  assert.equal(t.freezeMs, 30_000);
   assert.equal(t.baseSettingMs, 300_000);
   assert.equal(t.zoneRadiusM, 45);
 });
@@ -86,16 +86,23 @@ test('scaleCoreConfig: a short match never gets a cooldown longer than the match
   assert.ok(tiny.revealTrapCooldownMs < tiny.gameDurationMs);
 });
 
-test('scaleCoreConfig: hitHalfWidthM matches the "Normal" manual preset at the reference field size', () => {
+test('scaleCoreConfig: hitHalfWidthM matches the "Normal" manual preset', () => {
   const ref = scaleCoreConfig(REF_AREA_M2);
   assert.ok(Math.abs(ref.hitHalfWidthM - 1) < 0.05);
 });
 
-test('scaleCoreConfig: hitHalfWidthM scales with field size, within clamps', () => {
+test('scaleCoreConfig: hitHalfWidthM stays fixed regardless of field size (unlike hitRangeM)', () => {
   const tiny = scaleCoreConfig(2_000);
   const huge = scaleCoreConfig(1_000_000_000);
-  assert.equal(tiny.hitHalfWidthM, 0.5);
-  assert.equal(huge.hitHalfWidthM, 5);
+  assert.equal(tiny.hitHalfWidthM, 1);
+  assert.equal(huge.hitHalfWidthM, 1);
+});
+
+test('scaleCoreConfig: hitRangeM stays within the 10-100m Scout range regardless of field size', () => {
+  const tiny = scaleCoreConfig(2_000);
+  const huge = scaleCoreConfig(1_000_000_000);
+  assert.ok(tiny.hitRangeM >= 10);
+  assert.ok(huge.hitRangeM <= 100);
 });
 
 test('zone: inside / outside', () => {

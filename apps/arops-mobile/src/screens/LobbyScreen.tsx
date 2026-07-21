@@ -9,6 +9,7 @@ import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig, scaleTimings, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
+import { useTheme, ThemeTokens } from '../theme';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -125,6 +126,8 @@ const DEBUG_COOLDOWNS = {
 export default function LobbyScreen({
   lobbyId, isHost = false, lobbyCode, onGameStart,
 }: { lobbyId: string; isHost?: boolean; lobbyCode?: string; onGameStart: (sessionId: string) => void }) {
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
   const [members, setMembers] = useState<Member[]>([]);
   const [ar, setAr] = useState<ArSettings>({});
   const [polyErrs, setPolyErrs] = useState<string[]>([]);
@@ -587,12 +590,11 @@ export default function LobbyScreen({
   const HIDING = [{ l: '1m', ms: 60_000 }, { l: '2m', ms: 120_000 }, { l: '3m', ms: 180_000 }];
   const DURATION = [{ l: '10m', ms: 600_000 }, { l: '15m', ms: 900_000 }, { l: '20m', ms: 1_200_000 }, { l: '30m', ms: 1_800_000 }];
   // Freeze duration is always field-size-scaled by default (server's
-  // scaleTimings, independent of autoScale) but host-adjustable here like
-  // any other manual preset — shown regardless of Auto/manual mode, unlike
-  // HIDING/DURATION above. `null` = explicit "Auto" (clears an override).
-  const FREEZE_OPTIONS: { l: string; ms: number | null }[] = [
-    { l: '30s', ms: 30_000 }, { l: '60s', ms: 60_000 }, { l: '90s', ms: 90_000 },
-    { l: '120s', ms: 120_000 }, { l: 'Auto', ms: null },
+  // scaleTimings, 3-30s range, independent of autoScale) but host-adjustable
+  // here like Reichweite/Breite/Versteckzeit/Spielzeit — hidden while Auto
+  // is on (see !autoScale gate below), same convention as those.
+  const FREEZE_OPTIONS: { l: string; ms: number }[] = [
+    { l: '3s', ms: 3_000 }, { l: '10s', ms: 10_000 }, { l: '20s', ms: 20_000 }, { l: '30s', ms: 30_000 },
   ];
   const hitRangeM = ar.hitConfig?.maxRangeM || 75;
   const hitHalfAngleDeg = ar.hitConfig?.baseConeHalfAngleDeg;
@@ -638,19 +640,19 @@ export default function LobbyScreen({
       {/* Oben: Erkennungsmodus + Debug links, Code rechts */}
       <View style={st.topRow}>
         <View style={st.topLeft}>
-          <Icon name="satellite" size={19} color="#f0c840" />
+          <Icon name="satellite" size={19} color={theme.accent} />
           {isHost && (
             <>
               <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode !== 'ir' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-                <Icon name="compass" size={19} color={hitTrackingMode !== 'ir' ? '#f0c840' : '#c0a0f0'} />
+                <Icon name="compass" size={19} color={hitTrackingMode !== 'ir' ? theme.accent : theme.text2} />
               </TouchableOpacity>
               <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode === 'ir' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'ir' })}>
-                <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? '#f0c840' : '#c0a0f0'} />
+                <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? theme.accent : theme.text2} />
               </TouchableOpacity>
               <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
-                <Icon name="bug" size={19} color={debugMode ? '#f0c840' : '#c0a0f0'} />
+                <Icon name="bug" size={19} color={debugMode ? theme.accent : theme.text2} />
               </TouchableOpacity>
             </>
           )}
@@ -662,7 +664,7 @@ export default function LobbyScreen({
               aktiv (kein totes Icon für den Normalfall). */}
           {!isHost && debugMode && (
             <View style={[st.iconBtnLg, st.smallBtnActive]}>
-              <Icon name="bug" size={19} color="#f0c840" />
+              <Icon name="bug" size={19} color={theme.accent} />
             </View>
           )}
         </View>
@@ -674,7 +676,7 @@ export default function LobbyScreen({
           >
             <Text style={st.codeTxt}>{lobbyCode}</Text>
             <View style={st.codeSubRow}>
-              {copied === 'code' && <Icon name="checkCircle" size={9} color="#807050" />}
+              {copied === 'code' && <Icon name="checkCircle" size={9} color={theme.text3} />}
               <Text style={st.codeSub}>
                 {copied === 'code' ? 'kopiert' : qr ? 'antippen: QR · halten: kopieren' : 'halten zum Kopieren'}
               </Text>
@@ -689,7 +691,7 @@ export default function LobbyScreen({
             <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
               onPress={() => emitUpdate({ subMode: m.id })}
               onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
-              <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
+              <Icon name={m.icon} size={13} color={subMode === m.id ? theme.accent : theme.text2} />
               <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
             </TouchableOpacity>
           ))}
@@ -703,21 +705,21 @@ export default function LobbyScreen({
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'classic' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'classic' })}
             onLongPress={() => Alert.alert('Team', GAME_MODE_PROFILES.hide_and_seek?.shortDescription || '')}>
-            <Icon name="ghost" size={13} color={hsVariant === 'classic' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="ghost" size={13} color={hsVariant === 'classic' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Team</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'ffa' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'ffa' })}
             onLongPress={() => Alert.alert('Jeder gegen jeden',
               GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
-            <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'the_ship' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'the_ship' })}
             onLongPress={() => Alert.alert('The Ship',
               GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription || '')}>
-            <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
           </TouchableOpacity>
         </View>
@@ -739,14 +741,14 @@ export default function LobbyScreen({
           <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'team' && st.smallBtnActive]}
             disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'team' })}
             onLongPress={() => Alert.alert('Team (A vs. B)', 'Zwei feste Seiten treten gegeneinander an.')}>
-            <Icon name="people" size={13} color={teamVariant === 'team' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="people" size={13} color={teamVariant === 'team' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, teamVariant === 'team' && st.smallTxtActive]}>Team (A vs. B)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'ffa' && st.smallBtnActive]}
             disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'ffa' })}
             onLongPress={() => Alert.alert('Jeder gegen jeden',
               GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
-            <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, teamVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>
           {(subMode === 'ctf' || onHit === 'respawn') && (
@@ -761,17 +763,17 @@ export default function LobbyScreen({
           <Text style={st.wpCount}>Gefunden:</Text>
           <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
             onPress={() => emitUpdate({ foundMode: 'spectator' })}>
-            <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="ghost" size={13} color={foundMode === 'spectator' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
             onPress={() => emitUpdate({ foundMode: 'seeker' })}>
-            <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="loop" size={13} color={foundMode === 'seeker' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
             onPress={() => emitUpdate({ foundMode: 'freeze' })}>
-            <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Freeze für Hider</Text>
           </TouchableOpacity>
         </View>
@@ -791,7 +793,7 @@ export default function LobbyScreen({
           )}
           <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.toggleOn]}
             onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
-            <Icon name="loop" size={13} color={ar.destroyReactivate ? '#1a1000' : '#c0a0f0'} />
+            <Icon name="loop" size={13} color={ar.destroyReactivate ? theme.onAccent : theme.text2} />
             <Text style={[st.smallTxt, ar.destroyReactivate && st.toggleOnTxt]}>
               Ziele reaktivieren: {ar.destroyReactivate ? 'AN' : 'AUS'}
             </Text>
@@ -807,7 +809,7 @@ export default function LobbyScreen({
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, onHit === 'freeze' && st.smallBtnActive]}
             onPress={() => emitUpdate({ onHit: 'freeze' })}>
-            <Icon name="snowflake" size={13} color={onHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="snowflake" size={13} color={onHit === 'freeze' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, onHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
           </TouchableOpacity>
         </View>
@@ -873,7 +875,7 @@ export default function LobbyScreen({
           disabled={myPosLoading}
         >
           {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
-            <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
+            <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? theme.danger : '#40a0ff'} />
           )}
         </TouchableOpacity>
         {myPosLoading && (
@@ -916,13 +918,13 @@ export default function LobbyScreen({
       {/* Drawing errors: only meaningful for the host while drawing */}
       {isHost && polyErrs.length > 0 && (
         <View style={st.errRow}>
-          <Icon name="warning" size={13} color="#ff6040" />
+          <Icon name="warning" size={13} color={theme.danger} />
           <Text style={st.err}>{polyErrs.map(e => POLY_ERR_DE[e] || e).join(' · ')}</Text>
         </View>
       )}
       {!isHost && polygon.length < 3 && (
         <View style={st.hintRow}>
-          <Icon name="hourglass" size={12} color="#807050" />
+          <Icon name="hourglass" size={12} color={theme.text3} />
           <Text style={st.hint}>Der Host zeichnet das Spielfeld…</Text>
         </View>
       )}
@@ -931,10 +933,10 @@ export default function LobbyScreen({
         <>
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
-              <Icon name="undo" size={19} color="#c0a0f0" />
+              <Icon name="undo" size={19} color={theme.text2} />
             </TouchableOpacity>
             <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Icon name="close" size={19} color="#c0a0f0" />
+              <Icon name="close" size={19} color={theme.text2} />
             </TouchableOpacity>
             <Text style={st.wpCount}>{polygon.length}</Text>
             {NEEDS_ZONES[subMode] !== undefined && (
@@ -946,7 +948,7 @@ export default function LobbyScreen({
                   <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen {zones.length}/{NEEDS_ZONES[subMode]}+</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                  <Icon name="trash" size={19} color="#c0a0f0" />
+                  <Icon name="trash" size={19} color={theme.text2} />
                 </TouchableOpacity>
               </>
             )}
@@ -958,14 +960,14 @@ export default function LobbyScreen({
                   tap was still needed to "really" refresh. Once any map
                   exists at all, always show the refresh icon; onPress
                   already regenerates unconditionally either way. */}
-              {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={ar.comicMap ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
+              {comicMapLoading ? <ActivityIndicator size="small" color={theme.text2} /> : (
+                <Icon name={ar.comicMap ? 'loop' : 'palette'} size={19} color={theme.text2} />
               )}
             </TouchableOpacity>
           </View>
           {!!comicMapErr && (
             <View style={st.errRow}>
-              <Icon name="warning" size={13} color="#ff6040" />
+              <Icon name="warning" size={13} color={theme.danger} />
               <Text style={st.err}>{comicMapErr}</Text>
             </View>
           )}
@@ -974,7 +976,7 @@ export default function LobbyScreen({
           <View style={st.rowBtns}>
             <TouchableOpacity style={[st.smallBtnRow, autoScale && st.smallBtnActive]}
               onPress={() => emitUpdate({ autoScale: !autoScale })}>
-              <Icon name="loop" size={13} color={autoScale ? '#f0c840' : '#c0a0f0'} />
+              <Icon name="loop" size={13} color={autoScale ? theme.accent : theme.text2} />
               <Text style={[st.smallTxt, autoScale && st.smallTxtActive]}>
                 Auto (nach Feldgröße) {autoScale ? 'AN' : 'AUS'}
               </Text>
@@ -1039,9 +1041,9 @@ export default function LobbyScreen({
               </View>
             </>
           )}
-          {showFreezeInPreview && (
+          {showFreezeInPreview && !autoScale && (
             <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Freeze-Zeit{freezeMs == null ? ' (Auto):' : ':'}</Text>
+              <Text style={st.wpCount}>Freeze-Zeit:</Text>
               {FREEZE_OPTIONS.map(o => (
                 <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
                   onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
@@ -1053,7 +1055,7 @@ export default function LobbyScreen({
           <View style={st.divider} />
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
-              <Icon name="robot" size={13} color="#c0a0f0" />
+              <Icon name="robot" size={13} color={theme.text2} />
               <Text style={st.smallTxt}>Bot hinzufügen</Text>
             </TouchableOpacity>
           </View>
@@ -1061,7 +1063,7 @@ export default function LobbyScreen({
       )}
       <View style={st.divider} />
       <View style={st.sectionRow}>
-        <Icon name="people" size={13} color="#e0c080" />
+        <Icon name="people" size={13} color={theme.text} />
         <Text style={st.section}>
           Spieler {isHost ? ((teamMode && teamVariant === 'team') ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
         </Text>
@@ -1074,7 +1076,7 @@ export default function LobbyScreen({
       {me && displayMembers.length > 0 && ((teamMode && teamVariant === 'team') || rolesApply) && (
         <View style={st.roleRow}>
           <Icon name={teamMode ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
-            size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : '#e0c080'} />
+            size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : theme.text} />
           <Text style={st.role}>
             {teamMode
               ? `Dein Team: ${teamOf(me.id) === 'a' ? 'A' : 'B'}`
@@ -1084,7 +1086,7 @@ export default function LobbyScreen({
       )}
       {me && displayMembers.length > 0 && !(teamMode && teamVariant === 'team') && !rolesApply && (
         <View style={st.roleRow}>
-          <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color="#e0c080" />
+          <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color={theme.text} />
           <Text style={st.role}>
             {hsVariant === 'the_ship'
               ? 'Dein Ziel wird nur dir angezeigt, sobald das Spiel startet'
@@ -1096,7 +1098,7 @@ export default function LobbyScreen({
       )}
       {!!startErr && (
         <View style={st.errRow}>
-          <Icon name="warning" size={13} color="#ff6040" />
+          <Icon name="warning" size={13} color={theme.danger} />
           <Text style={st.err}>{startErr}</Text>
         </View>
       )}
@@ -1127,7 +1129,7 @@ export default function LobbyScreen({
         contentContainerStyle={{ paddingBottom: 32 }}
         renderItem={({ item }) => (
           <View style={st.row}>
-            {item.isBot && <Icon name="robot" size={13} color="#807050" />}
+            {item.isBot && <Icon name="robot" size={13} color={theme.text3} />}
             <Text style={st.name}>{item.username}</Text>
             {(teamMode && teamVariant === 'team') ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleTeam(item.id)}>
@@ -1138,13 +1140,13 @@ export default function LobbyScreen({
               </TouchableOpacity>
             ) : rolesApply ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleRole(item.id)}>
-                <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color="#c0a0f0" />
+                <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color={theme.text2} />
                 <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? 'Seeker' : 'Hider'}</Text>
               </TouchableOpacity>
             ) : null}
             {hitTrackingMode === 'ir' && (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => cycleIrId(item.id)}>
-                <Icon name="flash" size={12} color="#f0c840" />
+                <Icon name="flash" size={12} color={theme.accent} />
                 <Text style={st.roleTag}>{irIdOf(item.id) !== undefined ? `IR ${irIdOf(item.id)}` : 'IR –'}</Text>
               </TouchableOpacity>
             )}
@@ -1161,16 +1163,16 @@ export default function LobbyScreen({
                   cls ? PLAYER_TYPE_PROFILES[cls].shortDescription : 'Standard-Schusswerte, kein Klassen-Perk.'
                 );
               }}>
-              <Icon name="shieldAccount" size={12} color={classOf(item.id) ? '#f0c840' : '#807050'} />
-              <Text style={[st.roleTag, classOf(item.id) && { color: '#f0c840' }]}>
+              <Icon name="shieldAccount" size={12} color={classOf(item.id) ? theme.accent : theme.text3} />
+              <Text style={[st.roleTag, classOf(item.id) && { color: theme.accent }]}>
                 {classOf(item.id) ? PLAYER_TYPE_PROFILES[classOf(item.id)!].name : '–'}
               </Text>
             </TouchableOpacity>
             <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}
-              color={item.ready ? '#80ff40' : '#807050'} style={{ marginLeft: 8 }} />
+              color={item.ready ? '#80ff40' : theme.text3} style={{ marginLeft: 8 }} />
             {isHost && item.isBot && (
               <TouchableOpacity onPress={() => removeBot(item.id)} style={{ marginLeft: 8 }}>
-                <Icon name="close" size={14} color="#ff6040" />
+                <Icon name="close" size={14} color={theme.danger} />
               </TouchableOpacity>
             )}
           </View>
@@ -1199,81 +1201,91 @@ export default function LobbyScreen({
   );
 }
 
-const st = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0a0810', padding: 16, paddingTop: 52 },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 },
-  topLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
-  modeRowTight: { flexDirection: 'row', gap: 6, marginBottom: 8 },
-  smallBtnTight: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
-    borderRadius: 7, paddingHorizontal: 4, paddingVertical: 7,
-  },
-  codeChip: { backgroundColor: 'rgba(240,200,64,.12)', borderWidth: 1.5, borderColor: '#f0c840', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6, alignItems: 'center' },
-  codeTxt: { color: '#f0c840', fontSize: 18, fontWeight: '900', letterSpacing: 2, fontFamily: 'monospace' as any },
-  codeSubRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  codeSub: { color: '#807050', fontSize: 9 },
-  hostHint: { color: '#807050', fontSize: 11, marginBottom: 8 },
-  mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
-  locateBtn: {
-    position: 'absolute', bottom: 10, right: 10, width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  gpsStatusBadge: {
-    position: 'absolute', bottom: 14, left: 10, backgroundColor: 'rgba(20,16,32,.9)',
-    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
-    borderWidth: 1, borderColor: '#40a0ff',
-  },
-  gpsStatusTxt: { color: '#40a0ff', fontSize: 10, fontWeight: '700' },
-  comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
-  comicStaleBadge: {
-    position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
-  },
-  comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
-  comicCachedBadge: { backgroundColor: '#80e070' },
-  rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
-  smallBtn: { backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
-  smallBtnRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(40,32,64,.6)',
-    borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7,
-  },
-  smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
-  smallBtnDisabled: { opacity: 0.5 },
-  // A true on/off toggle, not a pick-one-of-several option (smallBtnActive
-  // above) — filled solid when on instead of just a faint tint, so it reads
-  // unambiguously as ON/OFF rather than "another choice in this row".
-  toggleOn: { borderColor: '#f0c840', backgroundColor: '#f0c840' },
-  toggleOnTxt: { color: '#1a1000', fontWeight: '800' },
-  iconBtnLg: {
-    width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
-  },
-  smallTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
-  smallTxtActive: { color: '#f0c840' },
-  wpCount: { color: '#807050', fontSize: 11 },
-  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 4 },
-  section: { color: '#e0c080', fontSize: 12, fontWeight: '800' },
-  divider: { height: 1, backgroundColor: '#2a2040', marginVertical: 10 },
-  hintRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 8 },
-  hint: { color: '#807050', fontSize: 12, textAlign: 'center' },
-  errRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
-  err: { color: '#ff6040', fontSize: 12 },
-  roleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 8 },
-  role: { color: '#e0c080', fontSize: 14, fontWeight: '700' },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#1a1428', gap: 8 },
-  name: { flex: 1, color: '#e0c080', fontSize: 14 },
-  roleTagRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  roleTag: { fontSize: 13, color: '#c0a0f0', fontWeight: '700' },
-  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  btn: { backgroundColor: 'rgba(60,160,20,.2)', borderWidth: 2, borderColor: '#3a8020', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
-  btnActive: { backgroundColor: 'rgba(60,160,20,.45)' },
-  btnTxt: { color: '#80ff40', fontSize: 15, fontWeight: '800' },
-  startBtn: { backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: '#803aa0', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
-  startTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },
-  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,.85)', alignItems: 'center', justifyContent: 'center' },
-  modalBox: { backgroundColor: '#141020', borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 24, alignItems: 'center', gap: 12 },
-  modalCode: { color: '#f0c840', fontSize: 26, fontWeight: '900', letterSpacing: 4, fontFamily: 'monospace' as any },
-  linkTxt: { color: '#40a0ff', fontSize: 12, fontFamily: 'monospace' as any, maxWidth: 260, textDecorationLine: 'underline' },
-});
+function makeStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    wrap: { flex: 1, backgroundColor: theme.bg, padding: 16, paddingTop: 52 },
+    topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 },
+    topLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+    modeRowTight: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+    smallBtnTight: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+      backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
+      borderRadius: 7, paddingHorizontal: 4, paddingVertical: 7,
+    },
+    codeChip: { backgroundColor: theme.bg3, borderWidth: 1.5, borderColor: theme.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6, alignItems: 'center' },
+    codeTxt: { color: theme.accent, fontSize: 18, fontWeight: '900', letterSpacing: 2, fontFamily: 'monospace' as any },
+    codeSubRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    codeSub: { color: theme.text3, fontSize: 9 },
+    hostHint: { color: theme.text3, fontSize: 11, marginBottom: 8 },
+    mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+    // Location UI (locate button, GPS status badge, own-position dot on the
+    // map, "copy link" text) keeps its own literal blue "location/info"
+    // identity across every theme — same convention a map pin's color
+    // usually doesn't change with light/dark mode.
+    locateBtn: {
+      position: 'absolute', bottom: 10, right: 10, width: 38, height: 38, borderRadius: 19,
+      backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
+      alignItems: 'center', justifyContent: 'center',
+    },
+    gpsStatusBadge: {
+      position: 'absolute', bottom: 14, left: 10, backgroundColor: 'rgba(20,16,32,.9)',
+      borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
+      borderWidth: 1, borderColor: '#40a0ff',
+    },
+    gpsStatusTxt: { color: '#40a0ff', fontSize: 10, fontWeight: '700' },
+    comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+    // Stale/cached status badges — semantic (warning-gold / ok-green),
+    // stays literal across themes same as everywhere else status color is used.
+    comicStaleBadge: {
+      position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
+      backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+    },
+    comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
+    comicCachedBadge: { backgroundColor: '#80e070' },
+    rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
+    smallBtn: { backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
+    smallBtnRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: theme.bg3,
+      borderWidth: 1, borderColor: theme.border, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7,
+    },
+    smallBtnActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg2 },
+    smallBtnDisabled: { opacity: 0.5 },
+    // A true on/off toggle, not a pick-one-of-several option (smallBtnActive
+    // above) — filled solid when on instead of just a faint tint, so it reads
+    // unambiguously as ON/OFF rather than "another choice in this row".
+    toggleOn: { borderColor: theme.borderStrong, backgroundColor: theme.accent },
+    toggleOnTxt: { color: theme.onAccent, fontWeight: '800' },
+    iconBtnLg: {
+      width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
+    },
+    smallTxt: { color: theme.text2, fontSize: 12, fontWeight: '700' },
+    smallTxtActive: { color: theme.accent },
+    wpCount: { color: theme.text3, fontSize: 11 },
+    sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 4 },
+    section: { color: theme.text, fontSize: 12, fontWeight: '800' },
+    divider: { height: 1, backgroundColor: theme.border, marginVertical: 10 },
+    hintRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 8 },
+    hint: { color: theme.text3, fontSize: 12, textAlign: 'center' },
+    errRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
+    err: { color: theme.danger, fontSize: 12 },
+    roleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 8 },
+    role: { color: theme.text, fontSize: 14, fontWeight: '700' },
+    row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.border, gap: 8 },
+    name: { flex: 1, color: theme.text, fontSize: 14 },
+    roleTagRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    roleTag: { fontSize: 13, color: theme.text2, fontWeight: '700' },
+    btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    // Ready/Start keep their literal green/purple brand accents, same
+    // convention as every other primary CTA across the app.
+    btn: { backgroundColor: 'rgba(60,160,20,.2)', borderWidth: 2, borderColor: '#3a8020', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
+    btnActive: { backgroundColor: 'rgba(60,160,20,.45)' },
+    btnTxt: { color: '#80ff40', fontSize: 15, fontWeight: '800' },
+    startBtn: { backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: '#803aa0', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
+    startTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },
+    modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,.85)', alignItems: 'center', justifyContent: 'center' },
+    modalBox: { backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent, borderRadius: 16, padding: 24, alignItems: 'center', gap: 12 },
+    modalCode: { color: theme.accent, fontSize: 26, fontWeight: '900', letterSpacing: 4, fontFamily: 'monospace' as any },
+    linkTxt: { color: '#40a0ff', fontSize: 12, fontFamily: 'monospace' as any, maxWidth: 260, textDecorationLine: 'underline' },
+  });
+}

@@ -21,12 +21,16 @@ const zone = { id: 'z1', lat: MUC.lat, lon: MUC.lon, radiusM: 15 };
     strict_1.default.ok(outside > 0 && Math.abs(outside - 10) < 0.5);
 });
 (0, node_test_1.test)('scaleTimings: bigger field → longer timings, within clamps', () => {
+    // freezeMs' 3-30s range is narrow enough that a 200m and a 1km field both
+    // saturate the upper clamp (not useful for demonstrating monotonicity) —
+    // a small field well under the ceiling is needed for `tiny` instead.
+    const tiny = (0, timings_1.scaleTimings)(400); // 20x20m, L=20 — stays unclamped
     const small = (0, timings_1.scaleTimings)(40000); // 200x200m park, L=200
     const big = (0, timings_1.scaleTimings)(1000000); // 1km², L=1000
-    strict_1.default.ok(big.freezeMs > small.freezeMs);
+    strict_1.default.ok(small.freezeMs > tiny.freezeMs);
     strict_1.default.ok(big.captureDwellMs >= small.captureDwellMs);
-    strict_1.default.ok(small.freezeMs >= 30000, 'freeze floor');
-    strict_1.default.ok(big.freezeMs <= 120000, 'freeze cap');
+    strict_1.default.ok(tiny.freezeMs >= 3000, 'freeze floor');
+    strict_1.default.ok(big.freezeMs <= 30000, 'freeze cap');
     strict_1.default.ok(small.captureDwellMs >= 5000, 'user-specified 5s minimum dwell');
     strict_1.default.equal(small.freezeMoveToleranceM, 15, 'move tolerance fixed (GPS drift)');
 });

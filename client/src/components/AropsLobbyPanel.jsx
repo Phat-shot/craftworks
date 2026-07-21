@@ -45,15 +45,13 @@ const DURATION_OPTIONS = [
   { label: '30 min', ms: 1_800_000 },
 ];
 // Freeze duration is always field-size-scaled by default (server's
-// scaleTimings, independent of autoScale — see arops.js createAropsGame),
-// but host-adjustable here like any other manual preset. `null` = explicit
-// "Auto" (clears a previous override, see platform.js's freezeMs handling).
+// scaleTimings, 3-30s range, independent of autoScale — see arops.js
+// createAropsGame), but host-adjustable here like any other manual preset.
 const FREEZE_OPTIONS = [
+  { label: '3s', ms: 3_000 },
+  { label: '10s', ms: 10_000 },
+  { label: '20s', ms: 20_000 },
   { label: '30s', ms: 30_000 },
-  { label: '60s', ms: 60_000 },
-  { label: '90s', ms: 90_000 },
-  { label: '120s', ms: 120_000 },
-  { label: 'Auto', ms: null },
 ];
 // Short labels — 5 modes need to fit on one line.
 const SUB_MODES = [

@@ -50,9 +50,9 @@ export function scaleTimings(areaM2: number): ModeTimings {
   const L = Math.sqrt(Math.max(1, areaM2)); // characteristic length in m
   return {
     zoneRadiusM:          clamp(L / 25, 12, 45),
-    freezeMs:             clamp(((L / 2) / 1.4) * 1000, 30_000, 120_000),
+    freezeMs:             clamp(((L / 2) / 1.4) * 1000, 3_000, 30_000),
     freezeMoveToleranceM: 15, // fixed: below GPS drift would punish standing still
-    freezeExtensionMs:    clamp((((L / 2) / 1.4) * 1000) * 0.25, 10_000, 30_000),
+    freezeExtensionMs:    clamp((((L / 2) / 1.4) * 1000) * 0.25, 1_000, 8_000),
     baseSettingMs:        clamp((L / 1.4) * 1000, 90_000, 300_000),
     flagPickupDwellMs:    clamp((L / 50) * 1000, 4_000, 15_000),
     flagReturnMs:         clamp(L * 200, 30_000, 90_000),
@@ -95,10 +95,6 @@ export interface CoreScaledConfig {
   livesPerPlayer: number;
 }
 
-// A "medium" reference field (~50,000 m², L≈224m) roughly matching the
-// fixed defaults these values replace (server/src/game/arops.js DEFAULTS).
-const REF_L_M = 224;
-
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
  * straight from the playfield size — an alternative to the host manually
@@ -134,8 +130,14 @@ export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
   return {
     hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45_000, 600_000),
     gameDurationMs,
-    hitRangeM:        clamp(L * 0.5, 20, 500),
-    hitHalfWidthM:    clamp((L / REF_L_M) * 1, 0.5, 5),
+    // Scout's base range — 10-100m regardless of field size (other classes'
+    // ranges derive from this via their own shotRangeMultiplier, see
+    // profiles.ts's PLAYER_TYPE_PROFILES).
+    hitRangeM:        clamp(L * 0.5, 10, 100),
+    // Fixed, NOT field-size-scaled (unlike hitRangeM above) — matches the
+    // Lobby's manual "Normal (2m)" preset (REF_DIST_M=10, halfWidthM=1)
+    // regardless of field size.
+    hitHalfWidthM:    1,
     // Fractions reflect relative perk power (radar reveals positions outright
     // → rarest; drone/aufscheuchen are cheap one-bit signals → most frequent).
     radarCooldownMs:        perkCooldown(1 / 4, 15 * 60_000),

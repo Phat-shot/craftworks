@@ -7,22 +7,16 @@
 //  sane bounds. Every value can be overridden via ar_settings.
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.scaleTimings = scaleTimings;
-exports.scaleDroneRangeM = scaleDroneRangeM;
-exports.scaleCoreConfig = scaleCoreConfig;
-exports.isInZone = isInZone;
-exports.distanceToZoneM = distanceToZoneM;
-exports.validateZones = validateZones;
-exports.generateRandomZones = generateRandomZones;
+exports.generateRandomZones = exports.validateZones = exports.distanceToZoneM = exports.isInZone = exports.scaleCoreConfig = exports.scaleDroneRangeM = exports.scaleTimings = void 0;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 /** Compute all mode timings from the playfield area. */
 function scaleTimings(areaM2) {
     const L = Math.sqrt(Math.max(1, areaM2)); // characteristic length in m
     return {
         zoneRadiusM: clamp(L / 25, 12, 45),
-        freezeMs: clamp(((L / 2) / 1.4) * 1000, 30000, 120000),
+        freezeMs: clamp(((L / 2) / 1.4) * 1000, 3000, 30000),
         freezeMoveToleranceM: 15, // fixed: below GPS drift would punish standing still
-        freezeExtensionMs: clamp((((L / 2) / 1.4) * 1000) * 0.25, 10000, 30000),
+        freezeExtensionMs: clamp((((L / 2) / 1.4) * 1000) * 0.25, 1000, 8000),
         baseSettingMs: clamp((L / 1.4) * 1000, 90000, 300000),
         flagPickupDwellMs: clamp((L / 50) * 1000, 4000, 15000),
         flagReturnMs: clamp(L * 200, 30000, 90000),
@@ -35,14 +29,13 @@ function scaleTimings(areaM2) {
         spawnCheckDwellMs: clamp((L / 40) * 1000, 5000, 15000),
     };
 }
+exports.scaleTimings = scaleTimings;
 /** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
 function scaleDroneRangeM(areaM2) {
     const L = Math.sqrt(Math.max(1, areaM2));
     return clamp(L * 0.4, 50, 200);
 }
-// A "medium" reference field (~50,000 m², L≈224m) roughly matching the
-// fixed defaults these values replace (server/src/game/arops.js DEFAULTS).
-const REF_L_M = 224;
+exports.scaleDroneRangeM = scaleDroneRangeM;
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
  * straight from the playfield size — an alternative to the host manually
@@ -77,8 +70,14 @@ function scaleCoreConfig(areaM2) {
     return {
         hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45000, 600000),
         gameDurationMs,
-        hitRangeM: clamp(L * 0.5, 20, 500),
-        hitHalfWidthM: clamp((L / REF_L_M) * 1, 0.5, 5),
+        // Scout's base range — 10-100m regardless of field size (other classes'
+        // ranges derive from this via their own shotRangeMultiplier, see
+        // profiles.ts's PLAYER_TYPE_PROFILES).
+        hitRangeM: clamp(L * 0.5, 10, 100),
+        // Fixed, NOT field-size-scaled (unlike hitRangeM above) — matches the
+        // Lobby's manual "Normal (2m)" preset (REF_DIST_M=10, halfWidthM=1)
+        // regardless of field size.
+        hitHalfWidthM: 1,
         // Fractions reflect relative perk power (radar reveals positions outright
         // → rarest; drone/aufscheuchen are cheap one-bit signals → most frequent).
         radarCooldownMs: perkCooldown(1 / 4, 15 * 60000),
@@ -90,14 +89,17 @@ function scaleCoreConfig(areaM2) {
         livesPerPlayer,
     };
 }
+exports.scaleCoreConfig = scaleCoreConfig;
 const geo_1 = require("./geo");
 function isInZone(p, z) {
     return (0, geo_1.haversineMeters)(p, { lat: z.lat, lon: z.lon }) <= z.radiusM;
 }
+exports.isInZone = isInZone;
 /** Negative = inside (meters past the rim), positive = outside. */
 function distanceToZoneM(p, z) {
     return (0, geo_1.haversineMeters)(p, { lat: z.lat, lon: z.lon }) - z.radiusM;
 }
+exports.distanceToZoneM = distanceToZoneM;
 // ── Zone validation (host setup) ────────────────────────────
 const geo_2 = require("./geo");
 /**
@@ -125,6 +127,7 @@ function validateZones(zones, polygon, maxZones = 8) {
     }
     return { ok: errors.length === 0, errors };
 }
+exports.validateZones = validateZones;
 // ── Random zone/target generation (host "random" toggle) ───────────────────
 // A public, multi-point counterpart to server/src/game/arops.js's private,
 // single-point `randomPointInPolygon` (used there only for fake-marker
@@ -171,3 +174,4 @@ function generateRandomZones(polygon, count, minSeparationM, radiusM, maxAttempt
     }
     return zones;
 }
+exports.generateRandomZones = generateRandomZones;
