@@ -3,6 +3,8 @@ import { AppState } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { SERVER_URL } from './config';
 import { withTimeout } from './utils/withTimeout';
+import type { ThemeName } from './theme';
+export type { ThemeName } from './theme';
 
 // fetch() has no built-in timeout — a slow/unresponsive server (or a bad
 // mobile network) can leave it hanging far longer than any user will wait,
@@ -67,6 +69,27 @@ export async function loadHeadingSettings(): Promise<void> {
   const raw = await AsyncStorage.getItem('heading_settings').catch(() => null);
   if (!raw) return;
   try { headingSettings = { ...DEFAULT_HEADING_SETTINGS, ...JSON.parse(raw) }; } catch {}
+}
+
+// UI theme (Color/Nacht/Tag) — device-level, same persistence shape as
+// HeadingSettings above. Default 'color' (today's only look, unchanged) so
+// existing installs see no visual change until the player explicitly opts
+// into Night/Day via the Einstellungen picker. Type lives in theme.ts (the
+// canonical definition, re-exported here) rather than duplicated.
+const DEFAULT_THEME: ThemeName = 'color';
+let currentTheme: ThemeName = DEFAULT_THEME;
+
+export function getTheme(): ThemeName { return currentTheme; }
+
+export async function saveTheme(name: ThemeName): Promise<void> {
+  currentTheme = name;
+  await AsyncStorage.setItem('theme', name).catch(() => {});
+}
+
+/** Independent of restoreSession, same as loadLastPosition/loadHeadingSettings. */
+export async function loadTheme(): Promise<void> {
+  const raw = await AsyncStorage.getItem('theme').catch(() => null);
+  if (raw === 'color' || raw === 'night' || raw === 'day') currentTheme = raw;
 }
 
 // 'ok' — refreshed successfully. 'rejected' — the SERVER actually responded

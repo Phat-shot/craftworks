@@ -222,6 +222,12 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   const coreStyle = { backgroundColor: color, opacity: pulse as any, borderRadius: 1 };
   return (
     <View style={[StyleSheet.absoluteFill, { borderRadius: 12, overflow: 'hidden' }]} pointerEvents="none">
+      {/* Reported: the border-perimeter glow alone was hard to read as "how
+          much time is left" at a glance — tracing a thin shrinking outline
+          takes real attention. A plain fill rising from the bottom (classic
+          "gauge"/battery-level look) reads instantly, so it's added here as
+          a first, lowest layer — the border glow paints on top of it. */}
+      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: frac, backgroundColor: color, opacity: 0.22 }} />
       {/* Right half. */}
       <View style={[{ position: 'absolute', top: 0, left: '50%', height: 4, width: frac }, haloStyle]} />
       <Animated.View style={[{ position: 'absolute', top: 0, left: '50%', height: 2, width: frac }, coreStyle]} />
@@ -254,24 +260,35 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
 // 45° once compass-oriented) — without it this flat overlay reads as a
 // sticker "slapped on top" of the map's own tilted 3D perspective instead of
 // looking like it lies on the same ground plane.
-function ShotOverlay({ rotateDeg, pitchDeg, myHitShape, effectiveConeHalfAngleDeg, color }: {
-  rotateDeg: number; pitchDeg: number; myHitShape: 'cone' | 'lateral' | 'omni';
-  effectiveConeHalfAngleDeg: number; color: string;
+// `lengthPx` is the on-screen px equivalent of effectiveMaxRangeM at the
+// map's current meters-per-pixel scale (see shotOverlayLengthPx above) — the
+// cone/lane's reach then lines up with the map's own geo-referenced range
+// ring instead of a fixed pixel guess that drifts out of sync on zoom.
+// `anchorPx` is the player's actual screen position in free-2D mode (where
+// the Camera is user-panned, not locked to the player) — null everywhere
+// else, where the Camera is always centered on the player and '50%'/'50%'
+// is already correct.
+function ShotOverlay({ rotateDeg, pitchDeg, lengthPx, anchorPx, myHitShape, effectiveConeHalfAngleDeg, color }: {
+  rotateDeg: number; pitchDeg: number; lengthPx: number; anchorPx: [number, number] | null;
+  myHitShape: 'cone' | 'lateral' | 'omni'; effectiveConeHalfAngleDeg: number; color: string;
 }) {
   if (myHitShape === 'omni') return null; // omni's range circle stays map-anchored (rotation-irrelevant)
-  const LENGTH_PX = 130;
+  const LENGTH_PX = lengthPx;
   const fill = hexToRgba(color, 0.45);
   const border = hexToRgba(color, 0.8);
-  // Wrapper is a zero-size anchor pinned exactly at screen-center — rotating
-  // IT (not the shape itself) pivots the whole wedge around the player's own
-  // position, regardless of how far the shape extends above that point.
+  // Wrapper is a zero-size anchor pinned exactly at the player's screen
+  // position — rotating IT (not the shape itself) pivots the whole wedge
+  // around that point, regardless of how far the shape extends above it.
   // `rotateX` tilts that same rigid (already heading-rotated, since `rotate`
   // is listed AFTER `rotateX` and so is applied to the point first/innermost)
   // shape to match the map's own pitch — `perspective` first in the list is
   // what makes that tilt read as actual depth instead of a flat vertical
   // squash, the standard RN recipe for a "tilted card" look.
   const anchor = {
-    position: 'absolute' as const, top: '50%' as const, left: '50%' as const, width: 0, height: 0,
+    position: 'absolute' as const,
+    top: anchorPx ? anchorPx[1] : ('50%' as const),
+    left: anchorPx ? anchorPx[0] : ('50%' as const),
+    width: 0, height: 0,
     transform: [{ perspective: 800 }, { rotateX: `${pitchDeg}deg` }, { rotate: `${rotateDeg}deg` }] as any,
   };
   // Apex AT the anchor (the player's own position, y=0 here), widening
@@ -332,18 +349,28 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
+  const mapRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
-  // Live map bearing, read back from the MapView itself — only actually
-  // changes in free-2D mode (user's own rotate gesture, see rotateEnabled
-  // below); every other mode drives the map's heading directly (mapHeading)
-  // so there's nothing to read back. Feeds ShotOverlay's rotation in 2D mode
-  // so it tracks the REAL on-screen map orientation, not a separately
-  // duplicated value that could drift out of sync with it.
+  // Live map bearing + zoom, read back from the MapView itself. Bearing only
+  // actually changes in free-2D mode (user's own rotate gesture, see
+  // rotateEnabled below); every other mode drives the map's heading directly
+  // (mapHeading) so there's nothing to read back there. Zoom can change in
+  // EVERY mode (zoomEnabled follows `interactive`, independent of rotate) —
+  // needed so ShotOverlay's on-screen size can track the same meters-per-
+  // pixel scale the map's own geo-referenced range ring renders at,
+  // regardless of how far the player has pinch-zoomed.
   const [mapBearingDeg, setMapBearingDeg] = useState(0);
+  const [mapZoomLevel, setMapZoomLevel] = useState(16.5); // matches the initial Camera zoomLevel prop below
   const onMapRegionChange = (feature: any) => {
     const h = feature?.properties?.heading;
     if (typeof h === 'number') setMapBearingDeg(h);
+    const z = feature?.properties?.zoomLevel;
+    if (typeof z === 'number') setMapZoomLevel(z);
   };
+  // Screen-space position of the player's own marker, in px relative to the
+  // MapView — only needed in free-2D mode (see the effect near isFree2D
+  // below for why).
+  const [screenAnchorPx, setScreenAnchorPx] = useState<[number, number] | null>(null);
   // Compass smoothing (see useTelemetry's setHeadingInterpolation/
   // setHeadingSampleIntervalMs/setHeadingRenderRateHz doc for the full
   // performance investigation) is a device-level tradeoff, not a per-match
@@ -727,6 +754,25 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
   const isFree2D = viewMode === 'comic2d';
+  // Every non-free-2D mode keeps a CONTROLLED Camera centered exactly on the
+  // player (see `center`/`<Camera centerCoordinate={center}>` in renderMap
+  // below), so the player is always dead-center there and ShotOverlay can
+  // just anchor at '50%'/'50%' directly, no lookup needed (screenAnchorPx
+  // stays null). Free-2D's Camera is uncontrolled (the user pans/zooms it
+  // freely) — the player can be anywhere on screen, or off it entirely — so
+  // the overlay has to track their actual projected screen point instead of
+  // assuming screen-center, recomputed whenever the player moves or the map
+  // itself is panned/zoomed/rotated (region-change) under them. Reported:
+  // without this, the overlay sat at screen-center regardless of where the
+  // player's marker actually was once the map had been panned away from it.
+  useEffect(() => {
+    if (!isFree2D || !telemetry.sample || !mapRef.current?.getPointInView) { setScreenAnchorPx(null); return; }
+    let cancelled = false;
+    mapRef.current.getPointInView([telemetry.sample.lon, telemetry.sample.lat])
+      .then((pt: [number, number]) => { if (!cancelled) setScreenAnchorPx(pt); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isFree2D, telemetry.sample?.lat, telemetry.sample?.lon, mapBearingDeg, mapZoomLevel]);
   // Whichever heading is actually meaningful for how the phone is currently
   // expected to be held: flat/screen-up in pure map mode (top-edge heading),
   // upright/screen-towards-you once the camera is showing (camera-forward
@@ -1084,6 +1130,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // up the difference between the real heading and however the map is
   // currently (manually) oriented.
   const shotOverlayRotateDeg = isFree2D ? (activeHeadingDeg ?? 0) - mapBearingDeg : 0;
+  // Standard Web Mercator meters-per-pixel at a given latitude/zoom (256px
+  // tiles) — lets ShotOverlay's screen-space wedge be sized in real px that
+  // match the SAME scale the map's own geo-referenced range ring
+  // (rangeGeoJSON) renders at, so the two stay visually congruent instead of
+  // the overlay's reach silently disagreeing with the actual max-range
+  // circle drawn on the map (reported: not "deckungsgleich").
+  const metersPerPixel = (latDeg: number, zoom: number) =>
+    (156543.03392 * Math.cos(latDeg * Math.PI / 180)) / Math.pow(2, zoom);
+  const shotOverlayLengthPx = telemetry.sample
+    ? Math.max(8, effectiveMaxRangeM / metersPerPixel(telemetry.sample.lat, mapZoomLevel))
+    : 130;
   const recenterMap = () => {
     if (!telemetry.sample) return;
     cameraRef.current?.setCamera({
@@ -1127,10 +1184,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const hasComicMap = (snap?.comicMap?.features?.length ?? 0) > 0;
   const renderMap = (interactive: boolean, free2d: boolean = false) => (
     <View style={{ flex: 1 }}>
-    <MapView style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
+    <MapView ref={mapRef} style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
       scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}
-      onRegionIsChanging={free2d ? onMapRegionChange : undefined}
-      onRegionDidChange={free2d ? onMapRegionChange : undefined}>
+      // Zoom can change whenever zoomEnabled/`interactive` is true, in every
+      // view mode (not just free-2D) — tracked here regardless of free2d so
+      // ShotOverlay's meters-per-pixel sizing (shotOverlayLengthPx) stays
+      // correct if the player pinch-zooms in compass/3D mode too. Bearing is
+      // only ever read back for the free-2D rotation calc, but there's no
+      // harm updating it here unconditionally as well.
+      onRegionIsChanging={interactive ? onMapRegionChange : undefined}
+      onRegionDidChange={interactive ? onMapRegionChange : undefined}>
       {/* Pitch only once the compass is actually driving the rotation — a
           tilted-but-static (non-rotating) map reads as broken, not "3D".
           The free-2D mode is uncontrolled (defaultSettings, no ref-less
@@ -1233,7 +1296,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       )}
     </MapView>
     {showRange && telemetry.sample && activeHeadingDeg !== null && (
-      <ShotOverlay rotateDeg={shotOverlayRotateDeg} pitchDeg={mapPitch} myHitShape={myHitShape}
+      <ShotOverlay rotateDeg={shotOverlayRotateDeg} pitchDeg={mapPitch}
+        lengthPx={shotOverlayLengthPx} anchorPx={screenAnchorPx} myHitShape={myHitShape}
         effectiveConeHalfAngleDeg={effectiveConeHalfAngleDeg} color={classAccentColor} />
     )}
     </View>
