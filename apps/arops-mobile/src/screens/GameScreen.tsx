@@ -13,6 +13,7 @@ import { useIrScan } from '../hooks/useIrScan';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
+import { useTheme, ThemeTokens } from '../theme';
 
 // owner/capture's key is a team letter in team mode, a userId in the ffa
 // variant (every player captures individually) — see arops.js's Domination
@@ -320,6 +321,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
 }) {
   useKeepAwake(); // screen lock would stop GPS → target_stale for everyone else
+  // Only the game screen's own structural chrome (backgrounds, popup/modal
+  // borders, action-bar frame, status bar) follows the Color/Nacht/Tag
+  // theme — gameplay-semantic colors (class accents, team colors, hit/
+  // freeze/status banners, the aim reticle) stay literal, see theme.ts's
+  // header comment for why.
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
   const socket = getSocket();
   const me = getUser();
   const [snap, setSnap] = useState<Snap | null>(null);
@@ -1162,7 +1170,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             hiccup on THIS particular call could land here without it being
             a real denial. Retry re-asks instead of being a dead end. */}
         <TouchableOpacity style={st.permRetryBtn} onPress={telemetry.retryPermission}>
-          <Icon name="crosshair" size={16} color="#f0c840" />
+          <Icon name="crosshair" size={16} color={theme.accent} />
           <Text style={st.permRetryTxt}>Erneut versuchen</Text>
         </TouchableOpacity>
       </View>
@@ -1682,7 +1690,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         {!hasCam && viewMode === 'comic3d' && renderMap(true, false)}
         {!hasCam && viewMode === 'comic2d' && (
           <TouchableOpacity style={st.recenterBtn} onPress={recenterMap}>
-            <Icon name="crosshair" size={20} color="#f0c840" />
+            <Icon name="crosshair" size={20} color={theme.accent} />
           </TouchableOpacity>
         )}
         {hasCam && (
@@ -1753,7 +1761,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <TouchableOpacity style={st.rosterOverlay} activeOpacity={1} onPress={() => setRosterOpen(false)}>
             <View style={st.rosterCard}>
               <View style={st.rosterHeader}>
-                <Icon name="trophy" size={16} color="#f0c840" />
+                <Icon name="trophy" size={16} color={theme.accent} />
                 <Text style={st.rosterTitle}>Rangliste</Text>
               </View>
               {[...(snap?.players || [])].sort((a, b) => b.score - a.score).map((p, i) => (
@@ -1786,7 +1794,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         return (
           <View style={st.endOverlay}>
             <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => setEndRecapOpen(o => !o)}>
-              <Icon name={end.icon} size={32} color="#f0c840" style={{ marginBottom: 8 }} />
+              <Icon name={end.icon} size={32} color={theme.accent} style={{ marginBottom: 8 }} />
               <Text style={st.endTitle}>{end.text}</Text>
               <Text style={st.endScore}>Deine Punkte: {snap.me?.score ?? 0}</Text>
               {!endRecapOpen && <Text style={st.endHint}>Antippen für Recap</Text>}
@@ -1795,16 +1803,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               <View style={st.endRecap}>
                 {!!scoreLine && (
                   <View style={st.iconTextRow}>
-                    <Icon name={scoreIcon} size={13} color="#f0c840" />
+                    <Icon name={scoreIcon} size={13} color={theme.accent} />
                     <Text style={st.endRecapTxt}>{scoreLine}</Text>
                   </View>
                 )}
                 <View style={st.iconTextRow}>
-                  <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color="#a090c0" />
+                  <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color={theme.text2} />
                   <Text style={st.endRecapTxt}>Verbleibende Hider: {snap.hidersRemaining}</Text>
                 </View>
                 <TouchableOpacity style={st.endExitBtn} onPress={onExit}>
-                  <Icon name="home" size={16} color="#0a0810" />
+                  <Icon name="home" size={16} color={theme.onAccent} />
                   <Text style={st.endExitTxt}>Beenden</Text>
                 </TouchableOpacity>
               </View>
@@ -1826,19 +1834,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               <TouchableOpacity key={m.id}
                 style={[st.modeBtn, viewMode === m.id && st.modeBtnActive]}
                 onPress={() => setViewMode(m.id)}>
-                <Icon name={m.icon} size={18} color={viewMode === m.id ? '#f0c840' : '#c0a0f0'} />
+                <Icon name={m.icon} size={18} color={viewMode === m.id ? theme.accent : theme.text2} />
               </TouchableOpacity>
             ))}
             <TouchableOpacity
               style={[st.modeBtn, showRange && st.modeBtnActive]}
               onPress={() => setShowRange(r => !r)}>
-              <Icon name="target" size={18} color={showRange ? '#f0c840' : '#c0a0f0'} />
+              <Icon name="target" size={18} color={showRange ? theme.accent : theme.text2} />
             </TouchableOpacity>
             {debugMode && (
               <TouchableOpacity
                 style={[st.modeBtn, debugOpen && st.modeBtnActive]}
                 onPress={() => setDebugOpen(o => !o)}>
-                <Icon name="bug" size={18} color={debugOpen ? '#f0c840' : '#c0a0f0'} />
+                <Icon name="bug" size={18} color={debugOpen ? theme.accent : theme.text2} />
               </TouchableOpacity>
             )}
           </View>
@@ -1894,7 +1902,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       <TouchableOpacity
         style={[st.settingsFab, { bottom: bottomBarH + 8 }, viewPopupOpen && st.modeBtnActive]}
         onPress={() => setViewPopupOpen(o => !o)}>
-        <Icon name="settings" size={20} color={viewPopupOpen ? '#f0c840' : '#c0a0f0'} />
+        <Icon name="settings" size={20} color={viewPopupOpen ? theme.accent : theme.text2} />
       </TouchableOpacity>
 
       {/* Bottom bar: Perk1 | Schuss | Perk2 */}
@@ -1907,7 +1915,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       }}>
         {isCaptainSetup && (
           <TouchableOpacity style={[st.baseBtn, st.btnRow, st.baseBtnRow]} onPress={() => setBase()}>
-            <Icon name="flag" size={14} color="#f0c840" />
+            <Icon name="flag" size={14} color={theme.accent} />
             <Text style={st.baseTxt}>Base HIER setzen</Text>
           </TouchableOpacity>
         )}
@@ -1921,17 +1929,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   );
 }
 
-const st = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0a0810' },
+function makeStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+  wrap: { flex: 1, backgroundColor: theme.bg },
   permRetryBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
-    backgroundColor: 'rgba(240,200,64,.15)', borderWidth: 2, borderColor: '#f0c840',
+    backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent,
     borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12,
   },
-  permRetryTxt: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
+  permRetryTxt: { color: theme.accent, fontWeight: '800', fontSize: 14 },
   status: {
     paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
-    backgroundColor: '#141020',
+    backgroundColor: theme.bg2,
   },
   statusRow: { flexDirection: 'row', alignItems: 'center' },
   // Three-slot single row: timer/indicator each take an equal side flex
@@ -1942,16 +1951,16 @@ const st = StyleSheet.create({
   statusSideRight: { justifyContent: 'flex-end' },
   statusCenter: { flex: 1.3, justifyContent: 'center' },
   iconTextRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  phase: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
+  phase: { color: theme.accent, fontWeight: '800', fontSize: 14 },
   timer: { color: '#80ff80', fontWeight: '800', fontSize: 14 },
-  info: { color: '#a090c0', fontSize: 13 },
+  info: { color: theme.text2, fontSize: 13 },
   proxAlert: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(224,48,32,.9)', padding: 8, alignItems: 'center' },
   cloakBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(120,60,200,.9)', padding: 8, alignItems: 'center' },
   cloakTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   frozenBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(80,160,255,.92)', padding: 8, alignItems: 'center' },
   frozenTxt: { color: '#04121f', fontWeight: '900', fontSize: 12 },
-  baseBtn: { backgroundColor: 'rgba(240,200,64,.2)', borderWidth: 2, borderColor: '#f0c840', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
-  baseTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
+  baseBtn: { backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
+  baseTxt: { color: theme.accent, fontWeight: '800', fontSize: 13 },
   proxTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   geoWarn: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(240,200,64,.85)', padding: 6, alignItems: 'center' },
   geoOut: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(224,48,32,.95)', padding: 6, alignItems: 'center' },
@@ -1970,25 +1979,25 @@ const st = StyleSheet.create({
   shutterCd: { borderColor: '#605030' },
   shutterTxt: { fontSize: 24, color: '#f0c840', fontWeight: '800' },
   endOverlay: {
-    position: 'absolute', top: '35%', left: 24, right: 24, backgroundColor: 'rgba(10,8,16,.95)',
-    borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 24, alignItems: 'center', zIndex: 50,
+    position: 'absolute', top: '35%', left: 24, right: 24, backgroundColor: theme.bg2,
+    borderWidth: 2, borderColor: theme.accent, borderRadius: 16, padding: 24, alignItems: 'center', zIndex: 50,
   },
-  endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
+  endTitle: { color: theme.accent, fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
-  endHint: { color: '#807050', fontSize: 11, marginTop: 8 },
+  endHint: { color: theme.text3, fontSize: 11, marginTop: 8 },
   endRecap: { marginTop: 16, width: '100%', gap: 8, alignItems: 'center' },
-  endRecapTxt: { color: '#c0a0f0', fontSize: 13, fontWeight: '700' },
+  endRecapTxt: { color: theme.text2, fontSize: 13, fontWeight: '700' },
   endExitBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
-    backgroundColor: '#f0c840', borderRadius: 12, paddingHorizontal: 22, paddingVertical: 12,
+    backgroundColor: theme.accent, borderRadius: 12, paddingHorizontal: 22, paddingVertical: 12,
   },
-  endExitTxt: { color: '#0a0810', fontWeight: '900', fontSize: 15 },
+  endExitTxt: { color: theme.onAccent, fontWeight: '900', fontSize: 15 },
   viewPopup: {
     // Floating flyout anchored to the left of the settings FAB (right: 60 —
     // FAB width 42 + margin) instead of a full-width bar; `bottom` is set
     // inline to match the FAB's own measured offset above the action bar.
-    position: 'absolute', right: 60, backgroundColor: '#1a1428',
-    borderWidth: 1, borderColor: '#2a2040', borderRadius: 10,
+    position: 'absolute', right: 60, backgroundColor: theme.bg2,
+    borderWidth: 1, borderColor: theme.border, borderRadius: 10,
     paddingHorizontal: 10, paddingVertical: 8, gap: 8, zIndex: 20,
   },
   debugBar: {
@@ -2004,44 +2013,44 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(5,4,10,.7)', alignItems: 'center', justifyContent: 'center', zIndex: 60,
   },
   rosterCard: {
-    width: '82%', maxHeight: '70%', backgroundColor: 'rgba(20,16,32,.97)',
-    borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 16,
+    width: '82%', maxHeight: '70%', backgroundColor: theme.bg2,
+    borderWidth: 2, borderColor: theme.accent, borderRadius: 16, padding: 16,
   },
   rosterHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10, justifyContent: 'center' },
-  rosterTitle: { color: '#f0c840', fontSize: 16, fontWeight: '900' },
+  rosterTitle: { color: theme.accent, fontSize: 16, fontWeight: '900' },
   rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  rosterRank: { color: '#807050', fontSize: 12, width: 20 },
+  rosterRank: { color: theme.text3, fontSize: 12, width: 20 },
   rosterDot: { width: 10, height: 10, borderRadius: 5 },
-  rosterName: { color: '#e0d8f0', fontSize: 14, flex: 1 },
-  rosterNameMe: { color: '#f0c840', fontWeight: '900' },
+  rosterName: { color: theme.text, fontSize: 14, flex: 1 },
+  rosterNameMe: { color: theme.accent, fontWeight: '900' },
   rosterScore: { color: '#80ff80', fontSize: 14, fontWeight: '800' },
-  bottomBar: { backgroundColor: '#141020', paddingBottom: 24, paddingTop: 8 },
+  bottomBar: { backgroundColor: theme.bg2, paddingBottom: 24, paddingTop: 8 },
   modeRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 },
   modeBtn: {
-    width: 46, height: 40, borderRadius: 8, backgroundColor: 'rgba(40,32,64,.6)',
-    borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
+    width: 46, height: 40, borderRadius: 8, backgroundColor: theme.bg3,
+    borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center',
   },
-  modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
+  modeBtnActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg2 },
   bottomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
   bottomSide: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   bottomCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
   btnRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   radarBtn: {
-    backgroundColor: 'rgba(40,32,64,.9)', borderWidth: 2, borderColor: '#4a3a70',
+    backgroundColor: theme.bg3, borderWidth: 2, borderColor: theme.border,
     borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
   },
-  actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
+  actTxt: { color: theme.text2, fontWeight: '800', fontSize: 14 },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
   settingsFab: {
     // `bottom` here is just a fallback for the first render before bottomBarH
     // is measured — the actual value is always overridden inline (bottomBarH + 8).
     position: 'absolute', right: 14, bottom: 108, width: 42, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   recenterBtn: {
     position: 'absolute', right: 14, bottom: 70, width: 46, height: 46, borderRadius: 23,
-    backgroundColor: 'rgba(20,16,32,.85)', borderWidth: 2, borderColor: '#f0c840',
+    backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   classBadge: {
@@ -2054,23 +2063,24 @@ const st = StyleSheet.create({
   // Left row, in order: esp/IR, gps, watch (see the render comment above).
   espStatusFab: {
     position: 'absolute', left: 14, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   gpsStatusFab: {
     position: 'absolute', left: 58, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   watchStatusFab: {
     position: 'absolute', left: 102, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   // Right side, mirrors the left row.
   compassStatusFab: {
     position: 'absolute', right: 14, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
-});
+  });
+}
