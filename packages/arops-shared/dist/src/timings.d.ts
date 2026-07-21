@@ -54,6 +54,11 @@ export interface CoreScaledConfig {
     /** Scout class perk (any mode) — previously not auto-scaled at all (stuck
      *  at the fixed DEFAULTS value regardless of field/match size). */
     revealTrapCooldownMs: number;
+    /** Combat modes' respawn variant (cfg.onHit === 'respawn'): lives before
+     *  elimination. Longer matches can afford more lives before someone's
+     *  permanently out — previously not auto-scaled at all (stuck at the
+     *  fixed DEFAULTS value of 3 regardless of match length). */
+    livesPerPlayer: number;
 }
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns

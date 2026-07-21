@@ -88,6 +88,11 @@ export interface CoreScaledConfig {
   /** Scout class perk (any mode) — previously not auto-scaled at all (stuck
    *  at the fixed DEFAULTS value regardless of field/match size). */
   revealTrapCooldownMs: number;
+  /** Combat modes' respawn variant (cfg.onHit === 'respawn'): lives before
+   *  elimination. Longer matches can afford more lives before someone's
+   *  permanently out — previously not auto-scaled at all (stuck at the
+   *  fixed DEFAULTS value of 3 regardless of match length). */
+  livesPerPlayer: number;
 }
 
 // A "medium" reference field (~50,000 m², L≈224m) roughly matching the
@@ -121,6 +126,11 @@ export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
   // suddenly grant an absurdly long cooldown either.
   const perkCooldown = (fractionOfMatch: number, referenceMs: number) =>
     clamp(gameDurationMs * fractionOfMatch, 15_000, referenceMs);
+  // One life per ~5 minutes of match — the same "field size -> match length
+  // -> derived value" chain every other auto value here follows (perkCooldown
+  // above included), so a bigger field naturally affords more lives via its
+  // longer auto-derived match, not via its own separate area formula.
+  const livesPerPlayer = clamp(Math.round(gameDurationMs / 300_000), 2, 6);
   return {
     hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45_000, 600_000),
     gameDurationMs,
@@ -134,6 +144,7 @@ export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
     fakeMarkerCooldownMs:   perkCooldown(1 / 6, 90_000),
     aufscheuchenCooldownMs: perkCooldown(1 / 10, 45_000),
     revealTrapCooldownMs:   perkCooldown(1 / 8, 60_000),
+    livesPerPlayer,
   };
 }
 

@@ -257,9 +257,11 @@ function registerPlatformHandlers(io, socket, db) {
       if (typeof arSettings?.destroyReactivate === 'boolean') {
         next.destroyReactivate = arSettings.destroyReactivate;
       }
-      // Deathmatch: on-hit consequence + lives (respawn variant only).
-      if (['respawn', 'freeze'].includes(arSettings?.deathmatchOnHit)) {
-        next.deathmatchOnHit = arSettings.deathmatchOnHit;
+      // On-hit consequence + lives (respawn variant only) — all 4 combat
+      // modes (Domination, CTF, Seek&Destroy, Deathmatch), see MODES'
+      // resolveCombatHit in arops.js.
+      if (['respawn', 'freeze'].includes(arSettings?.onHit)) {
+        next.onHit = arSettings.onHit;
       }
       // Team/FFA variant for the 4 team-capable modes (domination, ctf,
       // seek_destroy, deathmatch) — see MODES.*'s cfg.teamVariant handling

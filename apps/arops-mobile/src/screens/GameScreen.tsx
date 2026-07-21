@@ -166,6 +166,11 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
+function hexToRgba(hex: string, alpha: number) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
 // Cooldown/duration indicator for the action-bar buttons below — a glowing
 // border traced around the BUTTON ITSELF (not a separate icon-sized donut).
 // Previous version was a pie/ring badge next to the icon that just vanished
@@ -208,24 +213,71 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   // the button's own edge (no negative offsets, no shadow/elevation, which
   // RN never clips to the View's own box) so nothing can bleed past the
   // button's border the way the old shadow-based version did.
+  // Third report: halo was 7px against the button's own 2px border (see
+  // st.radarBtn: borderWidth 2, borderRadius 12) — read as "a much wider
+  // line than the button's edge", not a glow around it. Thinned to 4px, and
+  // the whole overlay clipped to the button's own corner radius so the
+  // straight per-edge bars don't visibly overshoot the rounded corners.
   const haloStyle = { backgroundColor: color, opacity: 0.22, borderRadius: 3 };
   const coreStyle = { backgroundColor: color, opacity: pulse as any, borderRadius: 1 };
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+    <View style={[StyleSheet.absoluteFill, { borderRadius: 12, overflow: 'hidden' }]} pointerEvents="none">
       {/* Right half. */}
-      <View style={[{ position: 'absolute', top: 0, left: '50%', height: 7, width: frac }, haloStyle]} />
+      <View style={[{ position: 'absolute', top: 0, left: '50%', height: 4, width: frac }, haloStyle]} />
       <Animated.View style={[{ position: 'absolute', top: 0, left: '50%', height: 2, width: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', top: 0, right: 0, width: 7, height: frac }, haloStyle]} />
+      <View style={[{ position: 'absolute', top: 0, right: 0, width: 4, height: frac }, haloStyle]} />
       <Animated.View style={[{ position: 'absolute', top: 0, right: 0, width: 2, height: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', bottom: 0, right: 0, height: 7, width: frac }, haloStyle]} />
+      <View style={[{ position: 'absolute', bottom: 0, right: 0, height: 4, width: frac }, haloStyle]} />
       <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, height: 2, width: frac }, coreStyle]} />
       {/* Left half, mirrored. */}
-      <View style={[{ position: 'absolute', top: 0, right: '50%', height: 7, width: frac }, haloStyle]} />
+      <View style={[{ position: 'absolute', top: 0, right: '50%', height: 4, width: frac }, haloStyle]} />
       <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 2, width: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', top: 0, left: 0, width: 7, height: frac }, haloStyle]} />
+      <View style={[{ position: 'absolute', top: 0, left: 0, width: 4, height: frac }, haloStyle]} />
       <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 2, height: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', bottom: 0, left: 0, height: 7, width: frac }, haloStyle]} />
+      <View style={[{ position: 'absolute', bottom: 0, left: 0, height: 4, width: frac }, haloStyle]} />
       <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 2, width: frac }, coreStyle]} />
+    </View>
+  );
+}
+
+// Screen-space shot-range overlay for the map views (2D/3D/Split) — a
+// stylized, fixed-pixel wedge/lane anchored at the player's own screen
+// position (always screen-center, same convention the camera-mode aim
+// overlays below already use), NOT a geo-referenced shape scaled to real
+// meters/zoom. See the "Shot-range indicator" comment above (near
+// activeHeadingDeg) for why this is deliberately a plain rotated View
+// instead of a MapLibre ShapeSource baked into the map's own MapView.
+// `rotateDeg` is 0 in every compass-driven view mode (map itself rotates,
+// this stays screen-fixed) and the live heading-vs-map-bearing delta in
+// free-2D mode (map doesn't rotate on its own, this does) — see renderMap.
+function ShotOverlay({ rotateDeg, myHitShape, effectiveConeHalfAngleDeg, color }: {
+  rotateDeg: number; myHitShape: 'cone' | 'lateral' | 'omni';
+  effectiveConeHalfAngleDeg: number; color: string;
+}) {
+  if (myHitShape === 'omni') return null; // omni's range circle stays map-anchored (rotation-irrelevant)
+  const LENGTH_PX = 130;
+  const fill = hexToRgba(color, 0.45);
+  const border = hexToRgba(color, 0.8);
+  // Wrapper is a zero-size anchor pinned exactly at screen-center — rotating
+  // IT (not the shape itself) pivots the whole wedge around the player's own
+  // position, regardless of how far the shape extends above that point.
+  const anchor = { position: 'absolute' as const, top: '50%' as const, left: '50%' as const, width: 0, height: 0 };
+  const shape = myHitShape === 'cone'
+    ? (() => {
+        const halfWidthPx = Math.tan(effectiveConeHalfAngleDeg * Math.PI / 180) * LENGTH_PX;
+        return {
+          position: 'absolute' as const, left: -halfWidthPx, top: -LENGTH_PX, width: 0, height: 0,
+          borderLeftWidth: halfWidthPx, borderRightWidth: halfWidthPx, borderBottomWidth: LENGTH_PX,
+          borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: fill,
+        };
+      })()
+    : { position: 'absolute' as const, left: -18, top: -LENGTH_PX, width: 36, height: LENGTH_PX,
+        backgroundColor: fill, borderWidth: 1.5, borderColor: border };
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={[anchor, { transform: [{ rotate: `${rotateDeg}deg` }] }]}>
+        <View style={shape} />
+      </View>
     </View>
   );
 }
@@ -264,6 +316,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
+  // Live map bearing, read back from the MapView itself — only actually
+  // changes in free-2D mode (user's own rotate gesture, see rotateEnabled
+  // below); every other mode drives the map's heading directly (mapHeading)
+  // so there's nothing to read back. Feeds ShotOverlay's rotation in 2D mode
+  // so it tracks the REAL on-screen map orientation, not a separately
+  // duplicated value that could drift out of sync with it.
+  const [mapBearingDeg, setMapBearingDeg] = useState(0);
+  const onMapRegionChange = (feature: any) => {
+    const h = feature?.properties?.heading;
+    if (typeof h === 'number') setMapBearingDeg(h);
+  };
   // Compass smoothing (see useTelemetry's setHeadingInterpolation/
   // setHeadingSampleIntervalMs/setHeadingRenderRateHz doc for the full
   // performance investigation) is a device-level tradeoff, not a per-match
@@ -644,37 +707,41 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     : myHitShape === 'cone'
     ? `${Math.round(effectiveMaxRangeM)}m Reichweite · ${Math.round(effectiveConeHalfAngleDeg * 2)}° Sichtfeld`
     : `${Math.round(effectiveMaxRangeM)}m Reichweite · ${effectiveLaneWidthM.toFixed(1)}m breit`;
-  const hexToRgba = (hex: string, alpha: number) => {
-    const n = parseInt(hex.slice(1), 16);
-    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
-  };
 
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
   const isFree2D = viewMode === 'comic2d';
   // Whichever heading is actually meaningful for how the phone is currently
   // expected to be held: flat/screen-up in pure map mode (top-edge heading),
   // upright/screen-towards-you once the camera is showing (camera-forward
-  // heading — the same one used for aiming/hit-validation). Computed here
-  // (not just once near the map-rendering code below) because coneGeoJSON
-  // needs it too — it used to always read telemetry.heading regardless of
-  // mode, which is the camera-forward sensor even while the phone is held
-  // flat for a pure map view. That mismatch against the map's own rotation
-  // (which already correctly switched on hasCam) is exactly what produced
-  // the reported "hybrid" cone in comic3d: map rotates by top-edge heading,
-  // cone polygon rotates by camera-forward heading, so they disagree the
-  // moment the two sensor readings diverge (any non-flat, non-upright hold).
+  // heading — the same one used for aiming/hit-validation). It used to
+  // always read telemetry.heading regardless of mode, which is the
+  // camera-forward sensor even while the phone is held flat for a pure map
+  // view — that mismatch against the map's own rotation (which already
+  // correctly switched on hasCam) is what produced a reported "hybrid" cone
+  // in comic3d: map rotates by top-edge heading, the old cone overlay
+  // rotated by camera-forward heading, disagreeing the moment the two
+  // sensor readings diverged (any non-flat, non-upright hold).
   const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
   activeHeadingDegRef.current = activeHeadingDeg;
-  // A previous version of this drew the cone at a CONSTANT bearing in every
-  // compass-locked mode, on the theory that the map's own rotation would
-  // carry it to the same on-screen spot regardless — backwards. A map with
-  // camera heading H shows an absolute-bearing-B feature at screen angle
-  // (B − H); that's only ever a constant (pointing "up") when B TRACKS H,
-  // i.e. B = activeHeadingDeg — a fixed B instead drifts by −H as H changes,
-  // which is exactly the "hybrid" cone reported again across comic3d/split/
-  // overlay. There's no way around the cone needing the same live sensor
-  // value as the map's own heading; both must move together — see
-  // coneGeoJSON below, which just uses activeHeadingDeg directly again.
+  // Shot-range indicator: TWO independent layers (see ShotOverlay below),
+  // not one geo-referenced shape baked into the same MapView as the map
+  // tiles. That used to still visibly "swim" against the map's own native
+  // rotation even once both were driven by the identical activeHeadingDeg
+  // value (reported again after two earlier fixes) — MapLibre's native
+  // Camera.heading transform and a ShapeSource geometry update go through
+  // separate, independently-scheduled native paint passes, so they can
+  // still land a frame apart under rapid heading changes even with matching
+  // source data. A plain screen-space View with its own `transform: rotate`
+  // has no such second pipeline to race against.
+  //  - compass/3D view modes: the MAP layer rotates (native Camera.heading);
+  //    the overlay applies NO rotation of its own, so it just stays
+  //    screen-fixed "pointing up" while the world turns under it — nothing
+  //    to desync since it never re-renders on a heading change at all.
+  //  - map/2D mode: the map only rotates via the user's own manual gesture,
+  //    never the compass — the OVERLAY layer rotates instead, driven by
+  //    activeHeadingDeg minus the map's own live bearing (mapBearingDeg,
+  //    read back from the MapView itself below), so it keeps pointing the
+  //    real heading regardless of how the user has the map oriented.
 
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
@@ -691,54 +758,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     };
   }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, effectiveMaxRangeM]);
 
-  // Cone (Scout/default) gets a true widening angular fan — the honest shape
-  // for an angle-based hit-test viewed from the shooter's own apex; it was
-  // previously converted to a constant-METERS lane (same rectangle Sniper's
-  // fixed-tolerance shape uses), which silently misrepresented it as
-  // constant-width instead of widening with distance. Lateral (Sniper) still
-  // gets that rectangle — a fixed-meters lane, unrelated to any angle, is the
-  // honest shape for ITS shot. Not the wider GPS-tolerance cone the server
-  // actually validates with (hitToleranceDeg still widens at close range for
-  // the real inCone check above; this is deliberately the simpler, honest-
-  // about-the-target-size preview, and previews the fixed-width IR lane too).
-  const coneGeoJSON = useMemo(() => {
-    // Must rotate around the SAME heading basis as the map itself
-    // (activeHeadingDeg — camera-forward while a cam view is showing,
-    // top-edge while it's a pure flat map) every tick, in every mode — see
-    // activeHeadingDeg's and this section's own comments above for why.
-    if (!showRange || !telemetry.sample || activeHeadingDeg === null) return null;
-    const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
-    const h = activeHeadingDeg;
-    if (myHitShape === 'cone') {
-      const steps = 20;
-      const ring: [number, number][] = [[origin.lon, origin.lat]];
-      for (let i = 0; i <= steps; i++) {
-        const brg = h - effectiveConeHalfAngleDeg + (2 * effectiveConeHalfAngleDeg) * (i / steps);
-        const p = destinationPoint(origin, brg, effectiveMaxRangeM);
-        ring.push([p.lon, p.lat]);
-      }
-      ring.push([origin.lon, origin.lat]);
-      return {
-        type: 'Feature' as const, properties: {},
-        geometry: { type: 'Polygon' as const, coordinates: [ring] },
-      };
-    }
-    const halfW = effectiveLaneWidthM / 2;
-    const nearLeft = destinationPoint(origin, h - 90, halfW);
-    const nearRight = destinationPoint(origin, h + 90, halfW);
-    const farLeft = destinationPoint(nearLeft, h, effectiveMaxRangeM);
-    const farRight = destinationPoint(nearRight, h, effectiveMaxRangeM);
-    const ring = [
-      [nearLeft.lon, nearLeft.lat], [farLeft.lon, farLeft.lat],
-      [farRight.lon, farRight.lat], [nearRight.lon, nearRight.lat],
-      [nearLeft.lon, nearLeft.lat],
-    ];
-    return {
-      type: 'Feature' as const, properties: {},
-      geometry: { type: 'Polygon' as const, coordinates: [ring] },
-    };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, activeHeadingDeg, myHitShape,
-      effectiveConeHalfAngleDeg, effectiveLaneWidthM, effectiveMaxRangeM]);
+  // The directional cone/lane itself is now the screen-space ShotOverlay
+  // layer (see its own component below + renderMap) instead of a geo
+  // ShapeSource here — only the rotation-invariant omni range circle/ring
+  // above stays map-anchored.
 
   // Zones (domination), targets (Zerstören), bases (CTF/Deathmatch) as
   // circles — real-world-meter-accurate polygons (not CircleLayer's
@@ -973,6 +996,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     : snap?.phase === 'ended' ? { icon: 'flagCheckered', text: 'Beendet' }
     : (snap?.subMode && snap?.phase && PHASE_LABELS[snap.subMode]?.[snap.phase])
     || (snap?.phase === 'base_setup' ? { icon: 'flag', text: 'Base setzen' }
+      : snap?.phase === 'warmup' ? { icon: 'hourglass', text: 'Warmup' }
       : snap?.phase === 'live' ? { icon: 'circle', text: 'Live' } : { icon: 'hourglass', text: '' });
   const frozenMs = snap?.me?.frozenRemainingMs ?? 0;
   const isCaptainSetup = snap?.phase === 'base_setup' && snap?.me?.isCaptain;
@@ -1037,6 +1061,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // mode is compass-oriented (heading-up).
   const mapHeading = isFree2D ? 0 : (activeHeadingDeg ?? 0);
   const mapPitch = isFree2D ? 0 : (activeHeadingDeg !== null ? 45 : 0);
+  // ShotOverlay rotation: screen-fixed (0) wherever the MAP is the layer
+  // doing the rotating (mapHeading above already = activeHeadingDeg there);
+  // in free-2D mode the map doesn't rotate on its own, so the OVERLAY makes
+  // up the difference between the real heading and however the map is
+  // currently (manually) oriented.
+  const shotOverlayRotateDeg = isFree2D ? (activeHeadingDeg ?? 0) - mapBearingDeg : 0;
   const recenterMap = () => {
     if (!telemetry.sample) return;
     cameraRef.current?.setCamera({
@@ -1079,8 +1109,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // playable with a real map underneath.
   const hasComicMap = (snap?.comicMap?.features?.length ?? 0) > 0;
   const renderMap = (interactive: boolean, free2d: boolean = false) => (
+    <View style={{ flex: 1 }}>
     <MapView style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
-      scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}>
+      scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}
+      onRegionIsChanging={free2d ? onMapRegionChange : undefined}
+      onRegionDidChange={free2d ? onMapRegionChange : undefined}>
       {/* Pitch only once the compass is actually driving the rotation — a
           tilted-but-static (non-rotating) map reads as broken, not "3D".
           The free-2D mode is uncontrolled (defaultSettings, no ref-less
@@ -1093,14 +1126,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       ) : (
         // animationDuration=0 (unlike the free2d Camera above): heading comes
         // from the live compass and changes on every telemetry tick, same as
-        // coneGeoJSON/hitboxGeoJSON below — those redraw instantly on each
-        // tick since they're plain synchronous geometry, but an eased
-        // transition here would still be mid-flight catching up to the
-        // previous tick's heading when the next one already lands, so the
-        // map perpetually lags a beat behind the overlay instead of the two
-        // staying rigidly pinned together — reported as the hitbox/cone
-        // overlay "swaying" on its own in 3D mode instead of just rotating
-        // along with the map like everything else drawn on it.
+        // hitboxGeoJSON below — that redraws instantly on each tick since
+        // it's plain synchronous geometry, but an eased transition here would
+        // still be mid-flight catching up to the previous tick's heading when
+        // the next one already lands, so the map perpetually lags a beat
+        // behind everything drawn on it instead of staying rigidly pinned
+        // together — reported as the hitbox overlay "swaying" on its own in
+        // 3D mode instead of just rotating along with the map.
         <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading}
           pitch={mapPitch} animationDuration={0} />
       )}
@@ -1111,22 +1143,15 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </ShapeSource>
       )}
       {/* Bomber (omni) has no aim direction at all — a circle is the honest
-          shape for "hit anything within range, any direction". Everyone
-          else (cone: Scout/default, lateral: Sniper) gets the directional
-          corridor instead — showing both at once (the old, class-blind
-          behavior) was misleading for whichever shape didn't actually apply.
-          Soft 50%-opacity fill, no hard edge (dropped the LineLayer border
-          every shape used to carry) — reads as a translucent zone instead of
-          a harshly outlined shape. The range ring below still marks the
-          overall boundary for every class, this is just the shot AREA. */}
+          shape for "hit anything within range, any direction", and stays
+          map-anchored since a circle is rotation-invariant either way.
+          Everyone else (cone: Scout/default, lateral: Sniper) gets the
+          directional corridor instead, via the screen-space ShotOverlay
+          layer below (outside this MapView) rather than a shape here — see
+          the "Shot-range indicator" comment near activeHeadingDeg above. */}
       {myHitShape === 'omni' && rangeGeoJSON && (
         <ShapeSource id="range" shape={rangeGeoJSON}>
           <FillLayer id="rangeFill" style={{ fillColor: classAccentColor, fillOpacity: 0.5 }} />
-        </ShapeSource>
-      )}
-      {myHitShape !== 'omni' && coneGeoJSON && (
-        <ShapeSource id="hitcone" shape={coneGeoJSON}>
-          <FillLayer id="coneFill" style={{ fillColor: classAccentColor, fillOpacity: 0.5 }} />
         </ShapeSource>
       )}
       {/* Range ring — every class, not just Bomber: a thin dashed outline at
@@ -1190,6 +1215,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </ShapeSource>
       )}
     </MapView>
+    {showRange && telemetry.sample && activeHeadingDeg !== null && (
+      <ShotOverlay rotateDeg={shotOverlayRotateDeg} myHitShape={myHitShape}
+        effectiveConeHalfAngleDeg={effectiveConeHalfAngleDeg} color={classAccentColor} />
+    )}
+    </View>
   );
 
   const crosshair = (

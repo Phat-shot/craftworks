@@ -69,6 +69,11 @@ function scaleCoreConfig(areaM2) {
     // (huge field), so a differently-tuned bomb-timer-scale match doesn't
     // suddenly grant an absurdly long cooldown either.
     const perkCooldown = (fractionOfMatch, referenceMs) => clamp(gameDurationMs * fractionOfMatch, 15000, referenceMs);
+    // One life per ~5 minutes of match — the same "field size -> match length
+    // -> derived value" chain every other auto value here follows (perkCooldown
+    // above included), so a bigger field naturally affords more lives via its
+    // longer auto-derived match, not via its own separate area formula.
+    const livesPerPlayer = clamp(Math.round(gameDurationMs / 300000), 2, 6);
     return {
         hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45000, 600000),
         gameDurationMs,
@@ -82,6 +87,7 @@ function scaleCoreConfig(areaM2) {
         fakeMarkerCooldownMs: perkCooldown(1 / 6, 90000),
         aufscheuchenCooldownMs: perkCooldown(1 / 10, 45000),
         revealTrapCooldownMs: perkCooldown(1 / 8, 60000),
+        livesPerPlayer,
     };
 }
 const geo_1 = require("./geo");

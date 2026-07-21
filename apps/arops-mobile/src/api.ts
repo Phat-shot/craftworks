@@ -46,7 +46,7 @@ export async function loadLastPosition(): Promise<void> {
 }
 
 export interface HeadingSettings { interpolation: boolean; sampleMs: number; renderHz: number; }
-const DEFAULT_HEADING_SETTINGS: HeadingSettings = { interpolation: true, sampleMs: 250, renderHz: 12 };
+const DEFAULT_HEADING_SETTINGS: HeadingSettings = { interpolation: true, sampleMs: 250, renderHz: 30 };
 let headingSettings: HeadingSettings = { ...DEFAULT_HEADING_SETTINGS };
 
 /** Compass smoothing prefs (see useTelemetry's setHeadingInterpolation/

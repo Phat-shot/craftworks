@@ -56,10 +56,12 @@ const SUB_MODES = [
 // ffa "Jeder gegen jeden", the_ship) has no teams at all (usesTeams: false
 // server-side, see server/src/game/arops.js's MODES table).
 const TEAM_MODES = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
-// Modes with a captain-driven base_setup phase (see arops.js) — only these
-// two actually place a base; domination/seek_destroy never did despite the
-// old caption implying otherwise for every team mode.
-const HAS_CAPTAIN_BASE = ['ctf', 'deathmatch'];
+// Modes with an ALWAYS-present captain-driven base_setup phase (see
+// arops.js) — CTF's base is core to the flag mechanic itself, independent
+// of onHit. Domination/Seek&Destroy/Deathmatch have no base concept of
+// their own — they only place one when onHit==='respawn' (see hasCaptainBase
+// below), needed purely as a respawn checkpoint.
+const ALWAYS_HAS_BASE = ['ctf'];
 const ERR_LABELS = {
   too_few_points: 'Mindestens 3 Wegpunkte setzen',
   self_intersecting: 'Fläche überschneidet sich selbst',
@@ -187,7 +189,11 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   const subMode = ar.subMode || 'hide_and_seek';
   const isTeamMode = TEAM_MODES.includes(subMode);
   const needsZones = subMode === 'domination' || subMode === 'seek_destroy';
-  const hasCaptainBase = HAS_CAPTAIN_BASE.includes(subMode);
+  // On-hit consequence for the 4 combat modes — 'freeze' is every mode's
+  // original, pre-toggle default (only Deathmatch defaulted to 'respawn'),
+  // mirrors arops.js createAropsGame's defaultOnHit exactly.
+  const onHit = ['freeze', 'respawn'].includes(ar.onHit) ? ar.onHit : (subMode === 'deathmatch' ? 'respawn' : 'freeze');
+  const hasCaptainBase = ALWAYS_HAS_BASE.includes(subMode) || (isTeamMode && onHit === 'respawn');
   const hsVariant = ['ffa', 'the_ship'].includes(ar.hsVariant) ? ar.hsVariant : 'classic';
   // ffa/The Ship have no roles at all (not seeker/hider, not team) — the
   // per-player role toggle only makes sense for the classic variant.
@@ -197,7 +203,6 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   const teamVariant = isTeamMode && ar.teamVariant === 'ffa' ? 'ffa' : 'team';
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
-  const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
   const livesPerPlayer = ar.livesPerPlayer || 3;
   const teamOf = (uid) => effective?.teams?.[uid] || (ar.teams || {})[uid] || 'a';
   const seekerCount = members.filter(m => roleOf(m.id) === 'seeker').length;
@@ -334,19 +339,19 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
           </button>
         </div>
       )}
-      {subMode === 'deathmatch' && (<>
+      {TEAM_MODES.includes(subMode) && (<>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 10, color: 'var(--text3)' }}>Treffer:</span>
           {[['respawn', 'Leben verlieren'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
             <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
-              onClick={() => emitUpdate({ deathmatchOnHit: id })}
-              style={{ borderColor: deathmatchOnHit === id ? 'var(--gold)' : undefined,
-                       color: deathmatchOnHit === id ? 'var(--gold)' : undefined }}>
+              onClick={() => emitUpdate({ onHit: id })}
+              style={{ borderColor: onHit === id ? 'var(--gold)' : undefined,
+                       color: onHit === id ? 'var(--gold)' : undefined }}>
               {label}
             </button>
           ))}
         </div>
-        {deathmatchOnHit === 'respawn' && (
+        {onHit === 'respawn' && (
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 10, color: 'var(--text3)' }}>Leben:</span>
             {[1, 3, 5].map(n => (

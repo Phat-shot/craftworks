@@ -7,7 +7,7 @@ import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition } f
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
-import { polygonAreaM2, scaleCoreConfig, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
+import { polygonAreaM2, scaleCoreConfig, scaleTimings, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
@@ -46,8 +46,9 @@ interface ArSettings {
   // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
   destroyVariant?: 'instant' | 'defuse';
   destroyReactivate?: boolean;
-  // Deathmatch: on-hit consequence + lives (respawn variant only).
-  deathmatchOnHit?: 'respawn' | 'freeze';
+  // On-hit consequence + lives (respawn variant only) — all 4 combat modes
+  // (Domination, CTF, Seek&Destroy, Deathmatch).
+  onHit?: 'respawn' | 'freeze';
   livesPerPlayer?: number;
   bots?: { id: string; username: string }[];
   debugMode?: boolean;
@@ -408,7 +409,10 @@ export default function LobbyScreen({
   const teamVariant = teamMode && ar.teamVariant === 'ffa' ? 'ffa' : 'team';
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
-  const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
+  // 'freeze' is every combat mode's original, pre-toggle default (only
+  // Deathmatch defaulted to 'respawn') — mirrors arops.js createAropsGame's
+  // defaultOnHit exactly.
+  const onHit = ar.onHit === 'respawn' || ar.onHit === 'freeze' ? ar.onHit : (subMode === 'deathmatch' ? 'respawn' : 'freeze');
   const livesPerPlayer = ar.livesPerPlayer || 3;
   const bots = ar.bots || [];
   const debugMode = ar.debugMode || false;
@@ -597,9 +601,25 @@ export default function LobbyScreen({
     () => (polygon.length >= 3 ? scaleCoreConfig(polygonAreaM2(polygon)) : null),
     [autoScale, JSON.stringify(polygon)]
   );
+  // Freeze duration is always field-size-scaled server-side (scaleTimings,
+  // independent of the autoScale toggle — see arops.js createAropsGame) —
+  // computed here purely for the preview line below, same field area input
+  // as autoPreview.
+  const autoFreezeMs = useMemo(
+    () => (polygon.length >= 3 ? scaleTimings(polygonAreaM2(polygon)).freezeMs : null),
+    [JSON.stringify(polygon)]
+  );
   const round1 = (v: number) => Math.round(v * 10) / 10;
   const fmtMin = (ms: number) => `${round1(ms / 60_000)}min`;
   const fmtM = (m: number) => `${round1(m)}m`;
+  const fmtSec = (ms: number) => `${Math.round(ms / 1000)}s`;
+  // Lives only matter for the 4 combat modes' respawn variant (elimination),
+  // never under freeze — see resolveCombatHit in arops.js. Freeze time only
+  // matters wherever a freeze can actually happen: the combat modes' freeze
+  // variant, or Hide & Seek's foundMode==='freeze'.
+  const showLivesInPreview = teamMode && onHit === 'respawn';
+  const showFreezeInPreview = (teamMode && onHit === 'freeze')
+    || (subMode === 'hide_and_seek' && foundMode === 'freeze');
 
   const header = (
     <View>
@@ -717,7 +737,7 @@ export default function LobbyScreen({
             <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
             <Text style={[st.smallTxt, teamVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>
-          {(subMode === 'ctf' || subMode === 'deathmatch') && (
+          {(subMode === 'ctf' || onHit === 'respawn') && (
             <Text style={st.smallTxt}>
               {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
             </Text>
@@ -764,21 +784,21 @@ export default function LobbyScreen({
           </TouchableOpacity>
         </View>
       )}
-      {isHost && subMode === 'deathmatch' && (
+      {isHost && teamMode && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Treffer:</Text>
-          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'respawn' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ deathmatchOnHit: 'respawn' })}>
-            <Text style={[st.smallTxt, deathmatchOnHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
+          <TouchableOpacity style={[st.smallBtnRow, onHit === 'respawn' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ onHit: 'respawn' })}>
+            <Text style={[st.smallTxt, onHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'freeze' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ deathmatchOnHit: 'freeze' })}>
-            <Icon name="snowflake" size={13} color={deathmatchOnHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, deathmatchOnHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+          <TouchableOpacity style={[st.smallBtnRow, onHit === 'freeze' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ onHit: 'freeze' })}>
+            <Icon name="snowflake" size={13} color={onHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, onHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
           </TouchableOpacity>
         </View>
       )}
-      {isHost && subMode === 'deathmatch' && deathmatchOnHit === 'respawn' && (
+      {isHost && teamMode && onHit === 'respawn' && !autoScale && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Leben:</Text>
           {[1, 3, 5].map(n => (
@@ -951,6 +971,8 @@ export default function LobbyScreen({
               <Text style={st.wpCount}>
                 {autoPreview
                   ? `Reichweite ~${fmtM(autoPreview.hitRangeM)} · Breite ~${fmtM(autoPreview.hitHalfWidthM * 2)} · Versteckzeit ${fmtMin(autoPreview.hidingDurationMs)} · Spielzeit ${fmtMin(autoPreview.gameDurationMs)}`
+                    + (showLivesInPreview ? ` · Leben ${autoPreview.livesPerPlayer}` : '')
+                    + (showFreezeInPreview && autoFreezeMs != null ? ` · Freeze ${fmtSec(autoFreezeMs)}` : '')
                   : 'Erst das Spielfeld zeichnen, um die Auto-Werte zu sehen'}
               </Text>
             </View>
