@@ -303,6 +303,21 @@ function registerPlatformHandlers(io, socket, db) {
       // get derived from field size in createAropsGame instead — overrides
       // the manual presets above once a match actually starts.
       if (typeof arSettings?.autoScale === 'boolean') next.autoScale = arSettings.autoScale;
+      // Freeze duration — always field-size-scaled by default (scaleTimings,
+      // independent of autoScale, see arops.js createAropsGame), but
+      // host-adjustable like any other manual preset via the Lobby's
+      // freeze-time row. Only freezeMs is exposed here, not the rest of
+      // ModeTimings — that broader surface stays test-only. Explicit `null`
+      // clears a previous override back to the auto-scaled value (the
+      // Lobby's "Auto" preset button) — dropping the key isn't distinguishable
+      // from "no change", so unsetting needs its own explicit signal.
+      if (arSettings?.timings && typeof arSettings.timings === 'object') {
+        if (Number.isFinite(arSettings.timings.freezeMs)) {
+          next.timings = { freezeMs: Math.min(300_000, Math.max(5_000, Math.round(+arSettings.timings.freezeMs))) };
+        } else if (arSettings.timings.freezeMs === null) {
+          delete next.timings;
+        }
+      }
       if (Array.isArray(arSettings?.bots)) {
         next.bots = arSettings.bots
           .filter(b => b && typeof b.id === 'string' && b.id.startsWith('bot_') && typeof b.username === 'string')

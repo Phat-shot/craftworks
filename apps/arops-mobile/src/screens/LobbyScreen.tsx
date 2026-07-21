@@ -59,6 +59,9 @@ interface ArSettings {
   // mode, optional (unset = classless, unchanged combat stats).
   classes?: Record<string, 'scout' | 'sniper' | 'bomber'>;
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
+  // Freeze-time override (host-adjustable, see the Lobby's freeze-time row)
+  // — the rest of ModeTimings stays test-only, not host-facing.
+  timings?: { freezeMs?: number | null };
   autoScale?: boolean;
 }
 
@@ -583,6 +586,14 @@ export default function LobbyScreen({
   const dur = ar.gameDurationMs || 1_200_000;
   const HIDING = [{ l: '1m', ms: 60_000 }, { l: '2m', ms: 120_000 }, { l: '3m', ms: 180_000 }];
   const DURATION = [{ l: '10m', ms: 600_000 }, { l: '15m', ms: 900_000 }, { l: '20m', ms: 1_200_000 }, { l: '30m', ms: 1_800_000 }];
+  // Freeze duration is always field-size-scaled by default (server's
+  // scaleTimings, independent of autoScale) but host-adjustable here like
+  // any other manual preset — shown regardless of Auto/manual mode, unlike
+  // HIDING/DURATION above. `null` = explicit "Auto" (clears an override).
+  const FREEZE_OPTIONS: { l: string; ms: number | null }[] = [
+    { l: '30s', ms: 30_000 }, { l: '60s', ms: 60_000 }, { l: '90s', ms: 90_000 },
+    { l: '120s', ms: 120_000 }, { l: 'Auto', ms: null },
+  ];
   const hitRangeM = ar.hitConfig?.maxRangeM || 75;
   const hitHalfAngleDeg = ar.hitConfig?.baseConeHalfAngleDeg;
   const setHitRange = (maxRangeM: number) => emitUpdate({ hitConfig: { ...ar.hitConfig, maxRangeM } });
@@ -620,6 +631,7 @@ export default function LobbyScreen({
   const showLivesInPreview = teamMode && onHit === 'respawn';
   const showFreezeInPreview = (teamMode && onHit === 'freeze')
     || (subMode === 'hide_and_seek' && foundMode === 'freeze');
+  const freezeMs: number | null = ar.timings?.freezeMs ?? null;
 
   const header = (
     <View>
@@ -760,7 +772,7 @@ export default function LobbyScreen({
           <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
             onPress={() => emitUpdate({ foundMode: 'freeze' })}>
             <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+            <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Freeze für Hider</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -777,10 +789,12 @@ export default function LobbyScreen({
               <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.smallBtnActive]}
+          <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.toggleOn]}
             onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
-            <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
+            <Icon name="loop" size={13} color={ar.destroyReactivate ? '#1a1000' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, ar.destroyReactivate && st.toggleOnTxt]}>
+              Ziele reaktivieren: {ar.destroyReactivate ? 'AN' : 'AUS'}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
@@ -1025,6 +1039,17 @@ export default function LobbyScreen({
               </View>
             </>
           )}
+          {showFreezeInPreview && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Freeze-Zeit{freezeMs == null ? ' (Auto):' : ':'}</Text>
+              {FREEZE_OPTIONS.map(o => (
+                <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
+                  onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
+                  <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           <View style={st.divider} />
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
@@ -1216,6 +1241,11 @@ const st = StyleSheet.create({
   },
   smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
   smallBtnDisabled: { opacity: 0.5 },
+  // A true on/off toggle, not a pick-one-of-several option (smallBtnActive
+  // above) — filled solid when on instead of just a faint tint, so it reads
+  // unambiguously as ON/OFF rather than "another choice in this row".
+  toggleOn: { borderColor: '#f0c840', backgroundColor: '#f0c840' },
+  toggleOnTxt: { color: '#1a1000', fontWeight: '800' },
   iconBtnLg: {
     width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',

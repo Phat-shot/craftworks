@@ -44,6 +44,17 @@ const DURATION_OPTIONS = [
   { label: '20 min', ms: 1_200_000 },
   { label: '30 min', ms: 1_800_000 },
 ];
+// Freeze duration is always field-size-scaled by default (server's
+// scaleTimings, independent of autoScale — see arops.js createAropsGame),
+// but host-adjustable here like any other manual preset. `null` = explicit
+// "Auto" (clears a previous override, see platform.js's freezeMs handling).
+const FREEZE_OPTIONS = [
+  { label: '30s', ms: 30_000 },
+  { label: '60s', ms: 60_000 },
+  { label: '90s', ms: 90_000 },
+  { label: '120s', ms: 120_000 },
+  { label: 'Auto', ms: null },
+];
 // Short labels — 5 modes need to fit on one line.
 const SUB_MODES = [
   { id: 'hide_and_seek', label: '🫥 H&S', zones: 0 },
@@ -204,6 +215,11 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   const livesPerPlayer = ar.livesPerPlayer || 3;
+  // Freeze can only ever happen in the 4 combat modes' 'freeze' variant, or
+  // Hide & Seek's foundMode==='freeze' — no point showing a freeze-time
+  // picker for a match where nothing can ever freeze.
+  const freezeRelevant = (isTeamMode && onHit === 'freeze') || (subMode === 'hide_and_seek' && foundMode === 'freeze');
+  const freezeMs = ar.timings?.freezeMs ?? null;
   const teamOf = (uid) => effective?.teams?.[uid] || (ar.teams || {})[uid] || 'a';
   const seekerCount = members.filter(m => roleOf(m.id) === 'seeker').length;
   // Player classes (scout/sniper/bomber) — additive to role/team, every
@@ -310,7 +326,7 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
       {rolesApply && (
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 10, color: 'var(--text3)' }}>Gefunden:</span>
-          {[['spectator', '👻 Zuschauer'], ['seeker', '🔁 Weiterspielen'], ['freeze', '❄️ Einfrieren']].map(([id, label]) => (
+          {[['spectator', '👻 Zuschauer'], ['seeker', '🔁 Weiterspielen'], ['freeze', '❄️ Freeze für Hider']].map(([id, label]) => (
             <button key={id} className="btn btn-ghost btn-sm" disabled={!isHost}
               onClick={() => emitUpdate({ foundMode: id })}
               style={{ borderColor: foundMode === id ? 'var(--gold)' : undefined,
@@ -331,11 +347,17 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
               {label}
             </button>
           ))}
+          {/* A true on/off toggle, not a pick-one-of-several option like the
+              buttons above it — filled solid when on (not just a border/text
+              tint) plus an explicit AN/AUS suffix, so it doesn't read as just
+              another (unselected-looking) choice in the same row. */}
           <button className="btn btn-ghost btn-sm" disabled={!isHost}
             onClick={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}
             style={{ borderColor: ar.destroyReactivate ? 'var(--gold)' : undefined,
-                     color: ar.destroyReactivate ? 'var(--gold)' : undefined }}>
-            🔁 Ziele reaktivieren
+                     color: ar.destroyReactivate ? '#1a1000' : undefined,
+                     backgroundColor: ar.destroyReactivate ? 'var(--gold)' : undefined,
+                     fontWeight: ar.destroyReactivate ? 800 : undefined }}>
+            🔁 Ziele reaktivieren: {ar.destroyReactivate ? 'AN' : 'AUS'}
           </button>
         </div>
       )}
@@ -487,7 +509,8 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
       </div>
 
       {/* Timers */}
-      <div style={{ display: 'grid', gridTemplateColumns: rolesApply ? '1fr 1fr' : '1fr', gap: 10 }}>
+      <div style={{ display: 'grid',
+        gridTemplateColumns: `repeat(${(rolesApply ? 1 : 0) + 1 + (freezeRelevant ? 1 : 0)}, 1fr)`, gap: 10 }}>
         {rolesApply && (
         <div>
           <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text2)', marginBottom: 4 }}>Versteck-Vorsprung</div>
@@ -518,6 +541,24 @@ export default function AropsLobbyPanel({ lobbyId, isHost, members, hostId, sock
             ))}
           </div>
         </div>
+        {freezeRelevant && (
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text2)', marginBottom: 4 }}>
+            Freeze-Zeit {freezeMs == null && '(Auto)'}
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {FREEZE_OPTIONS.map(o => (
+              <button key={o.label} disabled={!isHost}
+                className="btn btn-ghost btn-sm"
+                onClick={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}
+                style={{ flex: 1, borderColor: freezeMs === o.ms ? 'var(--gold)' : undefined,
+                         color: freezeMs === o.ms ? 'var(--gold)' : undefined }}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        )}
       </div>
     </div>
   );
