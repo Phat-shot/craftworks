@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Animated } from 'react-native';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import {
   destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg, haversineMeters, bearingDeg, angleDeltaDeg,
@@ -166,40 +166,42 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
-// Radial cooldown/duration ring for the action-bar buttons below — no SVG
-// dependency (deliberately: this project got burned earlier this session
-// pulling in a native module that turned out unnecessary, see the reverted
-// native-location experiment; a pure-View pie is enough for a progress
-// wheel and needs no native rebuild to verify). Classic 2-half-circle pie
-// technique: the right half is either solid or empty depending on whether
-// we're past the 50% mark, and the left half is a semicircle that rotates
-// in from vertical — together they sweep a full circle. A same-color-as-
-// background disc on top turns the filled pie into a ring/donut.
-function ProgressRing({ size = 30, strokeWidth = 3, progress, color, bgColor }: {
-  size?: number; strokeWidth?: number; progress: number; color: string; bgColor: string;
-}) {
+// Cooldown/duration indicator for the action-bar buttons below — a glowing
+// border traced around the BUTTON ITSELF (not a separate icon-sized donut).
+// Previous version was a pie/ring badge next to the icon that just vanished
+// outright once the perk came off cooldown (reported as an abrupt "half-
+// circle that disappears"); this instead lights up the button's own edge in
+// 4 quarters (top → right → bottom → left, same clockwise reading a pie
+// sweep had) with the lit length shrinking as `progress` counts down from 1
+// to 0, plus a slow opacity pulse so it visibly "glows" rather than sitting
+// static — vanishing the same way the old ring did once the perk is ready
+// again (progress hits 0 → nothing rendered). Deliberately still no SVG
+// dependency (see the reverted native-location experiment earlier this
+// session) — pure Views + the built-in Animated API only.
+function GlowBorder({ progress, color }: { progress: number; color: string }) {
+  const pulse = useRef(new Animated.Value(0.6)).current;
+  useEffect(() => {
+    const anim = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 650, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0.55, duration: 650, useNativeDriver: true }),
+    ]));
+    anim.start();
+    return () => anim.stop();
+  }, [pulse]);
   const p = Math.max(0, Math.min(1, progress));
-  const angle = p * 360;
-  const holeSize = size - strokeWidth * 2;
+  if (p <= 0) return null;
+  const frac = (i: number): `${number}%` => `${Math.max(0, Math.min(1, p * 4 - i)) * 100}%`;
+  const glow = {
+    backgroundColor: color, borderRadius: 2, opacity: pulse,
+    shadowColor: color, shadowOpacity: 0.9, shadowRadius: 5,
+    shadowOffset: { width: 0, height: 0 }, elevation: 6,
+  };
   return (
-    <View style={{ width: size, height: size, position: 'absolute' }} pointerEvents="none">
-      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: 'rgba(255,255,255,.12)', overflow: 'hidden' }}>
-        <View style={{
-          position: 'absolute', top: 0, right: 0, width: size / 2, height: size,
-          backgroundColor: angle > 180 ? color : 'transparent',
-        }} />
-        <View style={{ position: 'absolute', top: 0, left: 0, width: size / 2, height: size, overflow: 'hidden' }}>
-          <View style={{
-            width: size / 2, height: size, backgroundColor: color,
-            transform: [{ rotate: `${Math.min(angle, 180)}deg` }],
-            transformOrigin: 'right center' as any,
-          }} />
-        </View>
-      </View>
-      <View style={{
-        position: 'absolute', top: strokeWidth, left: strokeWidth,
-        width: holeSize, height: holeSize, borderRadius: holeSize / 2, backgroundColor: bgColor,
-      }} />
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Animated.View style={[{ position: 'absolute', top: -2, left: 0, height: 3, width: frac(0) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: -2, width: 3, height: frac(1) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', bottom: -2, right: 0, height: 3, width: frac(2) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, left: -2, width: 3, height: frac(3) }, glow]} />
     </View>
   );
 }
@@ -213,7 +215,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [snap, setSnap] = useState<Snap | null>(null);
   const telemetry = useTelemetry(socket, sessionId);
   const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
-  // Action-bar cooldown/duration rings (ProgressRing above): the server only
+  // Action-bar cooldown/duration indicators (GlowBorder above): the server only
   // ever sends *RemainingMs, never each perk's total duration (which varies
   // by field-size auto-scaling and host overrides anyway) — so the ring's
   // "total" is self-calibrated by remembering the highest remaining value
@@ -573,6 +575,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // now, with the match-wide ones only as a last-resort fallback (e.g. no
   // `me` at all, spectator-ish states).
   const REF_DIST_M = 10;
+  const myClass = snap?.me?.class;
   const myHitShape = snap?.me?.hitShape ?? 'cone';
   const effectiveMaxRangeM = snap?.me?.hitRangeM ?? snap?.hitRangeM ?? DEFAULT_HIT_CONFIG.maxRangeM;
   const effectiveLaneWidthM = myHitShape === 'lateral'
@@ -580,6 +583,34 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     : (snap?.me?.hitConeHalfAngleDeg ?? snap?.hitConeHalfAngleDeg) !== undefined
       ? 2 * REF_DIST_M * Math.tan((snap!.me!.hitConeHalfAngleDeg ?? snap!.hitConeHalfAngleDeg!) * Math.PI / 180)
       : 2;
+  // Reported: the aim overlay (cone/lane on the map, funnel in camera modes)
+  // looked identical regardless of class — same generic orange everywhere,
+  // no label — so it always read as "still showing Sniper" (or whichever
+  // class was last actually distinguishable) with no way to confirm which
+  // hitbox shape/size was actually loaded. Every class now gets its own
+  // accent color (reused for the map cone, the camera funnel/radius, AND the
+  // shared classInfoBadge below), plus that badge spells out the class name
+  // and its current range/width numbers in text.
+  const CLASS_COLOR: Record<'scout' | 'sniper' | 'bomber', string> = {
+    scout: '#ff7828', sniper: '#40c0ff', bomber: '#f0c840',
+  };
+  const CLASS_LABEL: Record<'scout' | 'sniper' | 'bomber', string> = {
+    scout: 'Scout', sniper: 'Sniper', bomber: 'Bomber',
+  };
+  const CLASS_ICON: Record<'scout' | 'sniper' | 'bomber', IconName> = {
+    scout: 'crosshair', sniper: 'target', bomber: 'bomb',
+  };
+  const classKey = (myClass ?? 'scout') as 'scout' | 'sniper' | 'bomber';
+  const classAccentColor = CLASS_COLOR[classKey];
+  const classLabel = CLASS_LABEL[classKey];
+  const classIcon = CLASS_ICON[classKey];
+  const classStatText = myHitShape === 'omni'
+    ? `Radius ${Math.round(effectiveMaxRangeM)}m`
+    : `${Math.round(effectiveMaxRangeM)}m Reichweite · ${effectiveLaneWidthM.toFixed(1)}m breit`;
+  const hexToRgba = (hex: string, alpha: number) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+  };
 
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
   const isFree2D = viewMode === 'comic2d';
@@ -871,7 +902,6 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const fakeMarkerActive = !!snap?.me?.fakeMarkerActive;
   const fakeMarkerRemainingS = Math.ceil((snap?.me?.fakeMarkerRemainingMs ?? 0) / 1000);
   const aufscheuchenCd = snap?.me?.aufscheuchenCooldownRemainingMs ?? 0;
-  const myClass = snap?.me?.class;
   const trapCd = snap?.me?.revealTrapCooldownRemainingMs ?? 0;
   const trapArmed = !!snap?.me?.trapArmed;
   const trapAlert = snap?.me?.trapAlert ?? null;
@@ -988,8 +1018,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           defaultSettings={{ centerCoordinate: center, zoomLevel: 16.5, heading: 0, pitch: 0 }}
           animationDuration={250} />
       ) : (
+        // animationDuration=0 (unlike the free2d Camera above): heading comes
+        // from the live compass and changes on every telemetry tick, same as
+        // coneGeoJSON/hitboxGeoJSON below — those redraw instantly on each
+        // tick since they're plain synchronous geometry, but an eased
+        // transition here would still be mid-flight catching up to the
+        // previous tick's heading when the next one already lands, so the
+        // map perpetually lags a beat behind the overlay instead of the two
+        // staying rigidly pinned together — reported as the hitbox/cone
+        // overlay "swaying" on its own in 3D mode instead of just rotating
+        // along with the map like everything else drawn on it.
         <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading}
-          pitch={mapPitch} animationDuration={250} />
+          pitch={mapPitch} animationDuration={0} />
       )}
       {hasComicMap && <ComicMapLayers features={snap!.comicMap!.features} />}
       {fadeGeoJSON && (
@@ -1004,14 +1044,14 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           behavior) was misleading for whichever shape didn't actually apply. */}
       {myHitShape === 'omni' && rangeGeoJSON && (
         <ShapeSource id="range" shape={rangeGeoJSON}>
-          <FillLayer id="rangeFill" style={{ fillColor: 'rgba(240,200,64,0.05)' }} />
-          <LineLayer id="rangeLine" style={{ lineColor: '#f0c840', lineWidth: 1.5, lineDasharray: [2, 2] as any }} />
+          <FillLayer id="rangeFill" style={{ fillColor: classAccentColor, fillOpacity: 0.05 }} />
+          <LineLayer id="rangeLine" style={{ lineColor: classAccentColor, lineWidth: 1.5, lineDasharray: [2, 2] as any }} />
         </ShapeSource>
       )}
       {myHitShape !== 'omni' && coneGeoJSON && (
         <ShapeSource id="hitcone" shape={coneGeoJSON}>
-          <FillLayer id="coneFill" style={{ fillColor: 'rgba(255,120,40,0.16)' }} />
-          <LineLayer id="coneLine" style={{ lineColor: '#ff7828', lineWidth: 1.5 }} />
+          <FillLayer id="coneFill" style={{ fillColor: classAccentColor, fillOpacity: 0.16 }} />
+          <LineLayer id="coneLine" style={{ lineColor: classAccentColor, lineWidth: 1.5 }} />
         </ShapeSource>
       )}
       {hitboxGeoJSON.features.length > 0 && (
@@ -1131,12 +1171,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     return out;
   }, [showRange, telemetry.heading, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
 
+  // Class-tinted (classAccentColor) instead of a flat generic gold — Scout
+  // and Sniper both used to render this identical funnel in the same color,
+  // so it always read as "the same shape" (reported as "still showing
+  // Sniper") with nothing on screen to tell them apart.
   const laneOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       {laneBands.map((b, i) => (
         <View key={i} style={{
           position: 'absolute', top: `${b.topPct}%`, left: '50%', marginLeft: -b.wPx / 2,
-          width: b.wPx, height: `${b.heightPct}%`, backgroundColor: `rgba(240,200,64,${(0.35 * OVERLAY_OPACITY * 2).toFixed(2)})`,
+          width: b.wPx, height: `${b.heightPct}%`, backgroundColor: hexToRgba(classAccentColor, 0.35 * OVERLAY_OPACITY * 2),
         }} />
       ))}
     </View>
@@ -1152,7 +1196,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={{
         position: 'absolute', top: '55%', left: '6%', right: '6%', height: 3, borderRadius: 2,
-        backgroundColor: `rgba(240,200,64,${(0.6 * OVERLAY_OPACITY).toFixed(2)})`,
+        backgroundColor: hexToRgba(classAccentColor, 0.6 * OVERLAY_OPACITY),
       }} />
       <Text style={{
         position: 'absolute', top: '57%', left: 0, right: 0, textAlign: 'center',
@@ -1169,6 +1213,21 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // corridor just like Scout's cone, only the width source differs
   // (already handled via effectiveLaneWidthM above).
   const aimOverlay = myHitShape === 'omni' ? radiusArcOverlay : laneOverlay;
+
+  // Persistent "which hitbox is loaded" badge — shown across every view mode
+  // (comic2d/3d, split, overlay, camera) whenever the Schussbereich/showRange
+  // preview is on, same gate as the cone/lane/hitbox visuals above so it only
+  // appears alongside the thing it's explaining. Rendered once here (not
+  // duplicated inside laneOverlay/radiusArcOverlay, which only mount inside
+  // camera-showing modes) so map-only modes get the same clarity.
+  const classInfoBadge = showRange && (
+    <View style={st.classBadge} pointerEvents="none">
+      <Icon name={classIcon} size={13} color={classAccentColor} />
+      <Text style={[st.classBadgeTxt, { color: classAccentColor }]} numberOfLines={1}>
+        {classLabel} · {classStatText}
+      </Text>
+    </View>
+  );
 
   const targetOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -1213,19 +1272,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // permanently disabled outside Hide & Seek — reported as "Radar geht
   // nicht", but that only ever got a chance to matter in H&S, since
   // everywhere else the button was already dead from this.
-  // Ring colors: muted purple while recharging (cooldown), cyan while an
-  // effect is actively running (cloak/fake-marker) — visually distinct so
+  // Glow-border colors: muted purple while recharging (cooldown), cyan while
+  // an effect is actively running (cloak/fake-marker) — visually distinct so
   // "still recharging" never reads as "buffed right now".
   const CD_RING_COLOR = '#8a6ad0';
   const ACTIVE_RING_COLOR = '#40e0ff';
-  const RADAR_BTN_BG = 'rgba(40,32,64,.9)';
   const perkEls: React.ReactNode[] = [
     <TouchableOpacity key="radar" style={[st.radarBtn, st.btnRow]} onPress={useRadar}
       disabled={radarCd > 0 || !shootPhase}>
-      <View style={st.perkIconWrap}>
-        {radarCd > 0 && <ProgressRing progress={cdFraction(radarCd, radarCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
-        <Icon name="radar" size={15} color="#c0a0f0" />
-      </View>
+      {radarCd > 0 && <GlowBorder progress={cdFraction(radarCd, radarCdTotalRef)} color={CD_RING_COLOR} />}
+      <Icon name="radar" size={15} color="#c0a0f0" />
       <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
     </TouchableOpacity>,
   ];
@@ -1233,10 +1289,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     perkEls.push(
       <TouchableOpacity key="drone" style={[st.radarBtn, st.btnRow]} onPress={useDrone}
         disabled={droneCd > 0 || !shootPhase}>
-        <View style={st.perkIconWrap}>
-          {droneCd > 0 && <ProgressRing progress={cdFraction(droneCd, droneCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
-          <Icon name="drone" size={15} color="#c0a0f0" />
-        </View>
+        {droneCd > 0 && <GlowBorder progress={cdFraction(droneCd, droneCdTotalRef)} color={CD_RING_COLOR} />}
+        <Icon name="drone" size={15} color="#c0a0f0" />
         <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
       </TouchableOpacity>,
     );
@@ -1250,12 +1304,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     perkEls.push(
       <TouchableOpacity key="cloak" style={[st.radarBtn, st.btnRow]} onPress={useCloak}
         disabled={cloakCd > 0 || cloakActive || !shootPhase}>
-        <View style={st.perkIconWrap}>
-          {cloakActive
-            ? <ProgressRing progress={cdFraction(snap?.me?.cloakRemainingMs ?? 0, cloakActiveTotalRef)} color={ACTIVE_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />
-            : cloakCd > 0 && <ProgressRing progress={cdFraction(cloakCd, cloakCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
-          <Icon name="ghost" size={15} color="#c0a0f0" />
-        </View>
+        {cloakActive
+          ? <GlowBorder progress={cdFraction(snap?.me?.cloakRemainingMs ?? 0, cloakActiveTotalRef)} color={ACTIVE_RING_COLOR} />
+          : cloakCd > 0 && <GlowBorder progress={cdFraction(cloakCd, cloakCdTotalRef)} color={CD_RING_COLOR} />}
+        <Icon name="ghost" size={15} color="#c0a0f0" />
         <Text style={st.actTxt}>
           {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
         </Text>
@@ -1266,12 +1318,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     perkEls.push(
       <TouchableOpacity key="fake" style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
         disabled={fakeMarkerCd > 0 || !shootPhase}>
-        <View style={st.perkIconWrap}>
-          {fakeMarkerActive
-            ? <ProgressRing progress={cdFraction(snap?.me?.fakeMarkerRemainingMs ?? 0, fakeActiveTotalRef)} color={ACTIVE_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />
-            : fakeMarkerCd > 0 && <ProgressRing progress={cdFraction(fakeMarkerCd, fakeCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
-          <Icon name="mask" size={15} color="#c0a0f0" />
-        </View>
+        {fakeMarkerActive
+          ? <GlowBorder progress={cdFraction(snap?.me?.fakeMarkerRemainingMs ?? 0, fakeActiveTotalRef)} color={ACTIVE_RING_COLOR} />
+          : fakeMarkerCd > 0 && <GlowBorder progress={cdFraction(fakeMarkerCd, fakeCdTotalRef)} color={CD_RING_COLOR} />}
+        <Icon name="mask" size={15} color="#c0a0f0" />
         <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
       </TouchableOpacity>,
     );
@@ -1283,10 +1333,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     perkEls.push(
       <TouchableOpacity key="trap" style={[st.radarBtn, st.btnRow]} onPress={useRevealTrap}
         disabled={trapCd > 0 || trapArmed || !shootPhase}>
-        <View style={st.perkIconWrap}>
-          {trapCd > 0 && <ProgressRing progress={cdFraction(trapCd, trapCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
-          <Icon name="trap" size={15} color="#c0a0f0" />
-        </View>
+        {trapCd > 0 && <GlowBorder progress={cdFraction(trapCd, trapCdTotalRef)} color={CD_RING_COLOR} />}
+        <Icon name="trap" size={15} color="#c0a0f0" />
         <Text style={st.actTxt}>
           {trapArmed ? 'Aktiv' : trapCd > 0 ? Math.ceil(trapCd / 1000) + 's' : 'Falle'}
         </Text>
@@ -1297,10 +1345,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     perkEls.push(
       <TouchableOpacity key="scare" style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
         disabled={aufscheuchenCd > 0 || !shootPhase}>
-        <View style={st.perkIconWrap}>
-          {aufscheuchenCd > 0 && <ProgressRing progress={cdFraction(aufscheuchenCd, aufscheuchenCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
-          <Icon name="scare" size={15} color="#c0a0f0" />
-        </View>
+        {aufscheuchenCd > 0 && <GlowBorder progress={cdFraction(aufscheuchenCd, aufscheuchenCdTotalRef)} color={CD_RING_COLOR} />}
+        <Icon name="scare" size={15} color="#c0a0f0" />
         <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Scheuchen'}</Text>
       </TouchableOpacity>,
     );
@@ -1311,32 +1357,28 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 
   return (
     <View style={st.wrap}>
-      {/* Status bar — phase/timer/hider-count row, plus a second row folding
-          in mode-specific status (Domination/CTF %, Zerstören armed/defuse
-          countdown) that used to be its own separate banner (scoreBar)
-          further down the screen. Same background/container now, reads as
-          one cohesive bar instead of two stacked ones. */}
+      {/* Status bar — single row: timer | phase (centered) | mode indicator
+          (tappable for the ranked roster). Used to be phase/timer/indicator
+          on one row plus a second row (statusScoreRow) folding in the
+          mode-specific score text (Domination/CTF %, Zerstören armed/defuse
+          countdown) — reported as reading like two separate banners; the
+          score text is still one tap away via the roster, so it's dropped
+          here rather than crammed alongside the other three. */}
       <View style={st.status}>
         <View style={st.statusRow}>
-          <View style={st.iconTextRow}>
-            <Icon name={phaseLabel.icon} size={13} color="#f0c840" />
-            <Text style={st.phase}>{phaseLabel.text}</Text>
-          </View>
-          <View style={st.iconTextRow}>
+          <View style={[st.iconTextRow, st.statusSide]}>
             <Icon name="clock" size={13} color="#80ff80" />
             <Text style={st.timer}>{Math.floor(remainingS / 60)}:{String(remainingS % 60).padStart(2, '0')}</Text>
           </View>
-          <TouchableOpacity style={[st.iconTextRow, { marginLeft: 'auto' }]} onPress={() => setRosterOpen(o => !o)}>
+          <View style={[st.iconTextRow, st.statusCenter]}>
+            <Icon name={phaseLabel.icon} size={13} color="#f0c840" />
+            <Text style={st.phase} numberOfLines={1}>{phaseLabel.text}</Text>
+          </View>
+          <TouchableOpacity style={[st.iconTextRow, st.statusSide, st.statusSideRight]} onPress={() => setRosterOpen(o => !o)}>
             <Icon name={statusIndicator.icon} size={13} color="#a090c0" />
-            <Text style={st.info}>{statusIndicator.text}</Text>
+            <Text style={st.info} numberOfLines={1}>{statusIndicator.text}</Text>
           </TouchableOpacity>
         </View>
-        {!!scoreLine && (
-          <View style={st.statusScoreRow}>
-            <Icon name={scoreIcon} size={12} color="#f0c840" />
-            <Text style={st.scoreTxt}>{scoreLine}</Text>
-          </View>
-        )}
       </View>
 
       {frozenMs > 0 && (
@@ -1436,6 +1478,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             {viewMode === 'camera' && <>{crosshair}{aimOverlay}{targetOverlay}</>}
           </CameraLayer>
         )}
+        {classInfoBadge}
 
         {/* Debug overlay: floats directly over whichever view is active —
             rendered last so it actually paints on top of the native
@@ -1641,11 +1684,14 @@ const st = StyleSheet.create({
     paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
     backgroundColor: '#141020',
   },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  // Folds in what used to be the separate scoreBar banner (Domination/CTF %,
-  // Zerstören armed/defuse countdown) — same background as the row above,
-  // just a second line, so it reads as one status bar instead of two.
-  statusScoreRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
+  statusRow: { flexDirection: 'row', alignItems: 'center' },
+  // Three-slot single row: timer/indicator each take an equal side flex
+  // (indicator's flipped to flex-end so its text hugs the right edge),
+  // phase gets a slightly bigger center flex so its label reads as the
+  // visual anchor of the bar.
+  statusSide: { flex: 1 },
+  statusSideRight: { justifyContent: 'flex-end' },
+  statusCenter: { flex: 1.3, justifyContent: 'center' },
   iconTextRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   phase: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
   timer: { color: '#80ff80', fontWeight: '800', fontSize: 14 },
@@ -1655,7 +1701,6 @@ const st = StyleSheet.create({
   cloakTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   frozenBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(80,160,255,.92)', padding: 8, alignItems: 'center' },
   frozenTxt: { color: '#04121f', fontWeight: '900', fontSize: 12 },
-  scoreTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
   baseBtn: { backgroundColor: 'rgba(240,200,64,.2)', borderWidth: 2, borderColor: '#f0c840', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
   baseTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
   proxTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
@@ -1737,7 +1782,6 @@ const st = StyleSheet.create({
     borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
   },
   actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
-  perkIconWrap: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
   settingsFab: {
     // `bottom` here is just a fallback for the first render before bottomBarH
@@ -1751,6 +1795,13 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(20,16,32,.85)', borderWidth: 2, borderColor: '#f0c840',
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
+  classBadge: {
+    position: 'absolute', top: 8, left: 40, right: 40, zIndex: 15,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+    backgroundColor: 'rgba(10,8,16,.75)', borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  classBadgeTxt: { fontSize: 11, fontWeight: '800' },
   // Left row, in order: esp/IR, gps, watch (see the render comment above).
   espStatusFab: {
     position: 'absolute', left: 14, top: 86, width: 38, height: 38, borderRadius: 8,

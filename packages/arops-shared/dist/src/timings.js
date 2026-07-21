@@ -41,9 +41,7 @@ function scaleDroneRangeM(areaM2) {
     return clamp(L * 0.4, 50, 200);
 }
 // A "medium" reference field (~50,000 m², L≈224m) roughly matching the
-// fixed defaults these values replace (server/src/game/arops.js DEFAULTS) —
-// cooldowns scale down from their reference value as the field grows past
-// this, never up past it for a smaller field.
+// fixed defaults these values replace (server/src/game/arops.js DEFAULTS).
 const REF_L_M = 224;
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
@@ -55,17 +53,35 @@ const REF_L_M = 224;
  */
 function scaleCoreConfig(areaM2) {
     const L = Math.sqrt(Math.max(1, areaM2));
-    const cooldown = (referenceMs) => clamp(referenceMs * (REF_L_M / L), 15000, referenceMs);
+    const gameDurationMs = clamp((L / 1.4) * 1000 * 2.5, 300000, 3600000);
+    // Perk cooldowns used to be derived purely from a field-size ratio against
+    // a fixed reference (bigger field → shorter cooldown, capped at the
+    // reference value) — completely decoupled from gameDurationMs. A small
+    // field's cooldown sat at (or near) that fixed reference ceiling
+    // regardless of how short its own auto-derived match actually was, e.g.
+    // radar's 15min reference cooldown inside a field whose whole match lasts
+    // 5min (gameDurationMs's own lower clamp) — the perk was then barely or
+    // never usable ("cooldowns nicht an die Match-Dauer angepasst"). Deriving
+    // each cooldown as a fraction of the match's own gameDurationMs instead
+    // fixes that directly — field size still matters, just indirectly via its
+    // effect on gameDurationMs, same as every timing above. The old reference
+    // constants now only serve as the absolute ceiling for a very long match
+    // (huge field), so a differently-tuned bomb-timer-scale match doesn't
+    // suddenly grant an absurdly long cooldown either.
+    const perkCooldown = (fractionOfMatch, referenceMs) => clamp(gameDurationMs * fractionOfMatch, 15000, referenceMs);
     return {
         hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45000, 600000),
-        gameDurationMs: clamp((L / 1.4) * 1000 * 2.5, 300000, 3600000),
+        gameDurationMs,
         hitRangeM: clamp(L * 0.5, 20, 500),
         hitHalfWidthM: clamp((L / REF_L_M) * 1, 0.5, 5),
-        radarCooldownMs: cooldown(15 * 60000),
-        droneCooldownMs: cooldown(60000),
-        cloakCooldownMs: cooldown(90000),
-        fakeMarkerCooldownMs: cooldown(90000),
-        aufscheuchenCooldownMs: cooldown(45000),
+        // Fractions reflect relative perk power (radar reveals positions outright
+        // → rarest; drone/aufscheuchen are cheap one-bit signals → most frequent).
+        radarCooldownMs: perkCooldown(1 / 4, 15 * 60000),
+        droneCooldownMs: perkCooldown(1 / 10, 60000),
+        cloakCooldownMs: perkCooldown(1 / 6, 90000),
+        fakeMarkerCooldownMs: perkCooldown(1 / 6, 90000),
+        aufscheuchenCooldownMs: perkCooldown(1 / 10, 45000),
+        revealTrapCooldownMs: perkCooldown(1 / 8, 60000),
     };
 }
 const geo_1 = require("./geo");

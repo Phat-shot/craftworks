@@ -85,12 +85,13 @@ export interface CoreScaledConfig {
   cloakCooldownMs: number;
   fakeMarkerCooldownMs: number;
   aufscheuchenCooldownMs: number;
+  /** Scout class perk (any mode) — previously not auto-scaled at all (stuck
+   *  at the fixed DEFAULTS value regardless of field/match size). */
+  revealTrapCooldownMs: number;
 }
 
 // A "medium" reference field (~50,000 m², L≈224m) roughly matching the
-// fixed defaults these values replace (server/src/game/arops.js DEFAULTS) —
-// cooldowns scale down from their reference value as the field grows past
-// this, never up past it for a smaller field.
+// fixed defaults these values replace (server/src/game/arops.js DEFAULTS).
 const REF_L_M = 224;
 
 /**
@@ -103,17 +104,36 @@ const REF_L_M = 224;
  */
 export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
   const L = Math.sqrt(Math.max(1, areaM2));
-  const cooldown = (referenceMs: number) => clamp(referenceMs * (REF_L_M / L), 15_000, referenceMs);
+  const gameDurationMs = clamp((L / 1.4) * 1000 * 2.5, 300_000, 3_600_000);
+  // Perk cooldowns used to be derived purely from a field-size ratio against
+  // a fixed reference (bigger field → shorter cooldown, capped at the
+  // reference value) — completely decoupled from gameDurationMs. A small
+  // field's cooldown sat at (or near) that fixed reference ceiling
+  // regardless of how short its own auto-derived match actually was, e.g.
+  // radar's 15min reference cooldown inside a field whose whole match lasts
+  // 5min (gameDurationMs's own lower clamp) — the perk was then barely or
+  // never usable ("cooldowns nicht an die Match-Dauer angepasst"). Deriving
+  // each cooldown as a fraction of the match's own gameDurationMs instead
+  // fixes that directly — field size still matters, just indirectly via its
+  // effect on gameDurationMs, same as every timing above. The old reference
+  // constants now only serve as the absolute ceiling for a very long match
+  // (huge field), so a differently-tuned bomb-timer-scale match doesn't
+  // suddenly grant an absurdly long cooldown either.
+  const perkCooldown = (fractionOfMatch: number, referenceMs: number) =>
+    clamp(gameDurationMs * fractionOfMatch, 15_000, referenceMs);
   return {
     hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45_000, 600_000),
-    gameDurationMs:   clamp((L / 1.4) * 1000 * 2.5, 300_000, 3_600_000),
+    gameDurationMs,
     hitRangeM:        clamp(L * 0.5, 20, 500),
     hitHalfWidthM:    clamp((L / REF_L_M) * 1, 0.5, 5),
-    radarCooldownMs:        cooldown(15 * 60_000),
-    droneCooldownMs:        cooldown(60_000),
-    cloakCooldownMs:        cooldown(90_000),
-    fakeMarkerCooldownMs:   cooldown(90_000),
-    aufscheuchenCooldownMs: cooldown(45_000),
+    // Fractions reflect relative perk power (radar reveals positions outright
+    // → rarest; drone/aufscheuchen are cheap one-bit signals → most frequent).
+    radarCooldownMs:        perkCooldown(1 / 4, 15 * 60_000),
+    droneCooldownMs:        perkCooldown(1 / 10, 60_000),
+    cloakCooldownMs:        perkCooldown(1 / 6, 90_000),
+    fakeMarkerCooldownMs:   perkCooldown(1 / 6, 90_000),
+    aufscheuchenCooldownMs: perkCooldown(1 / 10, 45_000),
+    revealTrapCooldownMs:   perkCooldown(1 / 8, 60_000),
   };
 }
 

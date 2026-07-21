@@ -61,21 +61,29 @@ test('scaleCoreConfig: monotonic hiding/game duration + range with field size', 
   assert.ok(b.hitRangeM >= a.hitRangeM);
 });
 
-test('scaleCoreConfig: cooldowns shrink (never grow past the reference) as the field grows', () => {
+test('scaleCoreConfig: cooldowns track match duration (grow with a longer match, never past the old fixed reference)', () => {
   const ref = scaleCoreConfig(REF_AREA_M2);
-  const bigger = scaleCoreConfig(REF_AREA_M2 * 25); // 5x the reference length
-  assert.ok(bigger.radarCooldownMs <= ref.radarCooldownMs);
-  assert.ok(bigger.droneCooldownMs <= ref.droneCooldownMs);
-  assert.ok(bigger.cloakCooldownMs <= ref.cloakCooldownMs);
-  // Never below the 15s floor even for an enormous field.
+  const bigger = scaleCoreConfig(REF_AREA_M2 * 25); // 5x the reference length -> longer match
+  assert.ok(bigger.gameDurationMs >= ref.gameDurationMs);
+  assert.ok(bigger.radarCooldownMs >= ref.radarCooldownMs);
+  assert.ok(bigger.droneCooldownMs >= ref.droneCooldownMs);
+  assert.ok(bigger.cloakCooldownMs >= ref.cloakCooldownMs);
+  // Never below the 15s floor even for a tiny, short match.
+  const tiny = scaleCoreConfig(2_000);
+  assert.ok(tiny.radarCooldownMs >= 15_000);
+  assert.ok(tiny.aufscheuchenCooldownMs >= 15_000);
+  // Never past the old fixed reference ceiling even for a huge field/long match.
   const huge = scaleCoreConfig(1_000_000_000);
-  assert.ok(huge.radarCooldownMs >= 15_000);
-  assert.ok(huge.aufscheuchenCooldownMs >= 15_000);
+  assert.ok(huge.radarCooldownMs <= 15 * 60_000);
+  assert.ok(huge.cloakCooldownMs <= 90_000);
+  assert.ok(huge.revealTrapCooldownMs <= 60_000);
 });
 
-test('scaleCoreConfig: a smaller-than-reference field never exceeds the reference cooldown', () => {
-  const tiny = scaleCoreConfig(2_000);
-  assert.ok(tiny.droneCooldownMs <= 60_000);
+test('scaleCoreConfig: a short match never gets a cooldown longer than the match itself', () => {
+  const tiny = scaleCoreConfig(2_000); // lower-clamped short match (gameDurationMs=300_000)
+  assert.ok(tiny.radarCooldownMs < tiny.gameDurationMs);
+  assert.ok(tiny.droneCooldownMs < tiny.gameDurationMs);
+  assert.ok(tiny.revealTrapCooldownMs < tiny.gameDurationMs);
 });
 
 test('scaleCoreConfig: hitHalfWidthM matches the "Normal" manual preset at the reference field size', () => {

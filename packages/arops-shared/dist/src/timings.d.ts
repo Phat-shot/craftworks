@@ -51,6 +51,9 @@ export interface CoreScaledConfig {
     cloakCooldownMs: number;
     fakeMarkerCooldownMs: number;
     aufscheuchenCooldownMs: number;
+    /** Scout class perk (any mode) — previously not auto-scaled at all (stuck
+     *  at the fixed DEFAULTS value regardless of field/match size). */
+    revealTrapCooldownMs: number;
 }
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns

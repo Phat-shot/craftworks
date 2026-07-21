@@ -1096,6 +1096,10 @@ function createAropsGame(sessionId, players, workshopConfig) {
     cfg.cloakCooldownMs = auto.cloakCooldownMs;
     cfg.fakeMarkerCooldownMs = auto.fakeMarkerCooldownMs;
     cfg.aufscheuchenCooldownMs = auto.aufscheuchenCooldownMs;
+    // Scout's class perk — previously missing here entirely, so it stayed
+    // stuck at the fixed DEFAULTS value regardless of field/match size
+    // while every other perk cooldown did scale.
+    cfg.revealTrapCooldownMs = auto.revealTrapCooldownMs;
   }
   for (const k of Object.keys(DEFAULTS)) {
     if (typeof ar[k] === 'number') cfg[k] = ar[k];
