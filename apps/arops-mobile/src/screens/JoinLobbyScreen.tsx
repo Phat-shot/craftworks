@@ -1,10 +1,13 @@
-import React, { useState, useRef } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { joinLobbyByCode, getUser, parseLobbyCode } from '../api';
 import Icon from '../components/Icon';
+import { useTheme, ThemeTokens } from '../theme';
 
 export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: string) => void }) {
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -66,13 +69,13 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
     <View style={st.wrap}>
       <View style={st.hiRow}>
         <Text style={st.hi}>Hallo {getUser()?.username}</Text>
-        <Icon name="wave" size={13} color="#807050" />
+        <Icon name="wave" size={13} color={theme.text3} />
       </View>
       <Text style={st.title}>Lobby beitreten</Text>
       <TextInput
         style={st.input}
         placeholder="8-STELLIGER CODE"
-        placeholderTextColor="#807050"
+        placeholderTextColor={theme.text3}
         value={code}
         onChangeText={(t) => setCode(t.toUpperCase())}
         autoCapitalize="characters"
@@ -87,7 +90,7 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
       </TouchableOpacity>
       <TouchableOpacity style={st.scanBtn} onPress={openScanner}>
         <View style={st.btnRow}>
-          <Icon name="qrcode" size={15} color="#c0a0f0" />
+          <Icon name="qrcode" size={15} color={theme.text2} />
           <Text style={st.scanBtnTxt}>QR-Code scannen</Text>
         </View>
       </TouchableOpacity>
@@ -95,33 +98,40 @@ export default function JoinLobbyScreen({ onJoined }: { onJoined: (lobbyId: stri
   );
 }
 
-const st = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0a0810', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  hiRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 24 },
-  hi: { color: '#807050', fontSize: 13 },
-  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  title: { fontSize: 24, fontWeight: '900', color: '#f0c840', marginBottom: 16 },
-  input: {
-    width: 320, backgroundColor: '#141020', borderWidth: 1, borderColor: '#2a2040', borderRadius: 10,
-    padding: 14, color: '#e0c080', fontSize: 21, textAlign: 'center', letterSpacing: 3, marginBottom: 12,
-    fontFamily: 'monospace' as any,
-  },
-  err: { color: '#ff6040', marginBottom: 8, fontSize: 12 },
-  btn: {
-    width: 320, backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: '#803aa0',
-    borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10,
-  },
-  btnTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },
-  scanBtn: {
-    width: 320, backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#4a3a70',
-    borderRadius: 10, padding: 12, alignItems: 'center',
-  },
-  scanBtnTxt: { color: '#c0a0f0', fontSize: 14, fontWeight: '700' },
-  scanWrap: { flex: 1, backgroundColor: '#000' },
-  scanFrame: {
-    position: 'absolute', top: '30%', left: '15%', width: '70%', aspectRatio: 1,
-    borderWidth: 3, borderColor: '#f0c840', borderRadius: 16,
-  },
-  scanHint: { position: 'absolute', bottom: 90, alignSelf: 'center', color: '#fff', fontSize: 14, fontWeight: '700' },
-  scanClose: { position: 'absolute', top: 52, right: 20, padding: 10 },
-});
+function makeStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    wrap: { flex: 1, backgroundColor: theme.bg, alignItems: 'center', justifyContent: 'center', padding: 24 },
+    hiRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 24 },
+    hi: { color: theme.text3, fontSize: 13 },
+    btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    title: { fontSize: 24, fontWeight: '900', color: theme.accent, marginBottom: 16 },
+    input: {
+      width: 320, backgroundColor: theme.bg2, borderWidth: 1, borderColor: theme.border, borderRadius: 10,
+      padding: 14, color: theme.text, fontSize: 21, textAlign: 'center', letterSpacing: 3, marginBottom: 12,
+      fontFamily: 'monospace' as any,
+    },
+    err: { color: theme.danger, marginBottom: 8, fontSize: 12 },
+    // Keeps the same literal magenta brand accent as the start menu's own
+    // "Lobby beitreten" button (App.tsx) — same action, same identity.
+    btn: {
+      width: 320, backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: '#803aa0',
+      borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10,
+    },
+    btnTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },
+    scanBtn: {
+      width: 320, backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
+      borderRadius: 10, padding: 12, alignItems: 'center',
+    },
+    scanBtnTxt: { color: theme.text2, fontSize: 14, fontWeight: '700' },
+    // Camera-preview chrome sits over a live (always-dark) video feed, not
+    // the app's own background — stays literal black/white/gold regardless
+    // of theme, same reasoning as GameScreen's camera-mode overlays.
+    scanWrap: { flex: 1, backgroundColor: '#000' },
+    scanFrame: {
+      position: 'absolute', top: '30%', left: '15%', width: '70%', aspectRatio: 1,
+      borderWidth: 3, borderColor: '#f0c840', borderRadius: 16,
+    },
+    scanHint: { position: 'absolute', bottom: 90, alignSelf: 'center', color: '#fff', fontSize: 14, fontWeight: '700' },
+    scanClose: { position: 'absolute', top: 52, right: 20, padding: 10 },
+  });
+}

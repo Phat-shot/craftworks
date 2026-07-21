@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { loginGuest, loginAccount, registerAccount } from '../api';
 import Icon from '../components/Icon';
+import { useTheme, ThemeTokens } from '../theme';
 
 type Mode = 'guest' | 'login' | 'register';
 
 export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
   const [mode, setMode] = useState<Mode>('guest');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -66,7 +69,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
 
   return (
     <View style={st.wrap}>
-      <Icon name="satellite" size={64} color="#f0c840" style={{ marginBottom: 8 }} />
+      <Icon name="satellite" size={64} color={theme.accent} style={{ marginBottom: 8 }} />
       <Text style={st.title}>AR Ops</Text>
       <Text style={st.sub}>Hide & Seek im echten Gelände</Text>
 
@@ -89,7 +92,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
         <TextInput
           style={st.input}
           placeholder="Dein Name"
-          placeholderTextColor="#807050"
+          placeholderTextColor={theme.text3}
           value={name}
           onChangeText={setName}
           autoCapitalize="none"
@@ -101,7 +104,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
         <TextInput
           style={st.input}
           placeholder="E-Mail"
-          placeholderTextColor="#807050"
+          placeholderTextColor={theme.text3}
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
@@ -111,7 +114,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
           <TextInput
             style={st.input}
             placeholder="Nutzername (3-32, a-z 0-9 _ -)"
-            placeholderTextColor="#807050"
+            placeholderTextColor={theme.text3}
             value={username}
             onChangeText={setUsername}
             autoCapitalize="none"
@@ -121,7 +124,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
         <TextInput
           style={st.input}
           placeholder={mode === 'register' ? 'Passwort (min. 8 Zeichen)' : 'Passwort'}
-          placeholderTextColor="#807050"
+          placeholderTextColor={theme.text3}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
@@ -151,28 +154,32 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
   );
 }
 
-const st = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0a0810', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  title: { fontSize: 32, fontWeight: '900', color: '#f0c840' },
-  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sub: { fontSize: 13, color: '#807050', marginBottom: 20 },
-  tabRow: { flexDirection: 'row', width: '100%', maxWidth: 320, marginBottom: 16, gap: 6 },
-  tab: {
-    flex: 1, borderWidth: 1, borderColor: '#2a2040', borderRadius: 8,
-    paddingVertical: 8, alignItems: 'center', backgroundColor: '#141020',
-  },
-  tabActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.12)' },
-  tabTxt: { color: '#807050', fontSize: 12, fontWeight: '700' },
-  tabTxtActive: { color: '#f0c840' },
-  input: {
-    width: '100%', maxWidth: 320, backgroundColor: '#141020', borderWidth: 1, borderColor: '#2a2040',
-    borderRadius: 10, padding: 14, color: '#e0c080', fontSize: 16, marginBottom: 12,
-  },
-  hint: { color: '#80ff80', marginBottom: 8, fontSize: 12 },
-  err: { color: '#ff6040', marginBottom: 8, fontSize: 12 },
-  btn: {
-    width: '100%', maxWidth: 320, backgroundColor: 'rgba(60,160,20,.3)', borderWidth: 2, borderColor: '#3a8020',
-    borderRadius: 10, padding: 14, alignItems: 'center',
-  },
-  btnTxt: { color: '#80ff40', fontSize: 16, fontWeight: '800' },
-});
+function makeStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    wrap: { flex: 1, backgroundColor: theme.bg, alignItems: 'center', justifyContent: 'center', padding: 24 },
+    title: { fontSize: 32, fontWeight: '900', color: theme.accent },
+    btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    sub: { fontSize: 13, color: theme.text3, marginBottom: 20 },
+    tabRow: { flexDirection: 'row', width: '100%', maxWidth: 320, marginBottom: 16, gap: 6 },
+    tab: {
+      flex: 1, borderWidth: 1, borderColor: theme.border, borderRadius: 8,
+      paddingVertical: 8, alignItems: 'center', backgroundColor: theme.bg2,
+    },
+    tabActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg3 },
+    tabTxt: { color: theme.text3, fontSize: 12, fontWeight: '700' },
+    tabTxtActive: { color: theme.accent },
+    input: {
+      width: '100%', maxWidth: 320, backgroundColor: theme.bg2, borderWidth: 1, borderColor: theme.border,
+      borderRadius: 10, padding: 14, color: theme.text, fontSize: 16, marginBottom: 12,
+    },
+    hint: { color: theme.success, marginBottom: 8, fontSize: 12 },
+    err: { color: theme.danger, marginBottom: 8, fontSize: 12 },
+    // Primary CTA keeps its literal green brand accent across every theme,
+    // same as the start menu's "Spiel hosten" button — see App.tsx.
+    btn: {
+      width: '100%', maxWidth: 320, backgroundColor: 'rgba(60,160,20,.3)', borderWidth: 2, borderColor: '#3a8020',
+      borderRadius: 10, padding: 14, alignItems: 'center',
+    },
+    btnTxt: { color: '#80ff40', fontSize: 16, fontWeight: '800' },
+  });
+}
