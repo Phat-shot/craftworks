@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { SERVER_URL } from './config';
 import { withTimeout } from './utils/withTimeout';
@@ -258,18 +259,48 @@ export function parseLobbyCode(raw: string): string | null {
 /** Shared authenticated socket (created lazily after login). */
 export function getSocket(): Socket {
   if (!socket) {
-    socket = io(SERVER_URL, { auth: { token: accessToken }, reconnectionAttempts: 10 });
+    // Reported: "lobby not found" mid-session (e.g. right after tapping
+    // something in the lobby, not tied to a server redeploy), recoverable
+    // only by force-quitting the app. Root cause: `reconnectionAttempts: 10`
+    // (a previous explicit override of socket.io's own default, which is
+    // Infinity) means a sufficiently long connectivity gap — a field test
+    // is exactly the kind of place with spotty signal, and the OS also
+    // freely suspends both JS timers (startProactiveRefresh's setInterval)
+    // and the socket's own transport while the app is backgrounded — can
+    // burn through all 10 attempts. Once that happens, socket.io stops
+    // retrying *permanently* until something explicitly calls `.connect()`
+    // again; nothing in this app ever did, so the socket just stayed dead
+    // for the rest of the process's life. lobby:ar_update/lobby:start then
+    // never reach the server at all — but from the CLIENT's perspective
+    // that's indistinguishable from a real error, and `lobby_not_found` is
+    // exactly what a stale in-flight/never-sent request against an old
+    // session can surface. Only killing and relaunching the app "fixed" it
+    // because that's the only thing that created a fresh socket instance
+    // with its attempt counter reset. Dropping the cap (back to socket.io's
+    // own Infinity default) means it now keeps retrying with backoff no
+    // matter how long the gap is, instead of ever giving up for good.
+    socket = io(SERVER_URL, { auth: { token: accessToken } });
     // A stale (expired) access token gets rejected outright by the server's
     // auth middleware on any (re)connect attempt — most likely after sitting
     // in a lobby a long time (no HTTP call around to reactively trigger a
     // refresh, see startProactiveRefresh above) combined with a reconnect
-    // (backgrounding, a network drop). Without this, socket.io just keeps
-    // retrying with the SAME stale token until its 10 attempts run out and
-    // gives up for good. Refresh once and nudge a reconnect immediately
-    // instead of waiting for the next scheduled proactive refresh.
+    // (backgrounding, a network drop). Refresh once and nudge a reconnect
+    // immediately instead of waiting for socket.io's own backoff schedule.
     socket.on('connect_error', async () => {
       const r = await tryRefresh();
       if (r === 'ok') socket?.connect();
+    });
+    // Backgrounded JS timers (startProactiveRefresh) can be paused/throttled
+    // by the OS for far longer than 10 minutes, and the transport itself is
+    // often suspended too — returning to the foreground is exactly when a
+    // stale token / dead socket is most likely, and also exactly when the
+    // player is about to tap something. Proactively refresh + reconnect
+    // right away instead of waiting for the player's tap to surface it as a
+    // confusing "lobby not found".
+    AppState.addEventListener('change', async (state) => {
+      if (state !== 'active') return;
+      await tryRefresh();
+      if (socket && !socket.connected) socket.connect();
     });
   }
   return socket;

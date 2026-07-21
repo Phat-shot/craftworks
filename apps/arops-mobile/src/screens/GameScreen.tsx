@@ -190,7 +190,12 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   }, [pulse]);
   const p = Math.max(0, Math.min(1, progress));
   if (p <= 0) return null;
-  const frac = (i: number): `${number}%` => `${Math.max(0, Math.min(1, p * 4 - i)) * 100}%`;
+  // Unfurls from TOP-CENTER outward in two mirrored halves (top-arm → side
+  // → bottom-arm), instead of starting at a corner — both halves share the
+  // same `p`, so the lit border is always symmetric and always recedes back
+  // to the top-middle point as the perk approaches ready, rather than to
+  // one arbitrary corner.
+  const halfFrac = (i: number): `${number}%` => `${Math.max(0, Math.min(1, p * 3 - i)) * 100}%`;
   const glow = {
     backgroundColor: color, borderRadius: 2, opacity: pulse,
     shadowColor: color, shadowOpacity: 0.9, shadowRadius: 5,
@@ -198,10 +203,14 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   };
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Animated.View style={[{ position: 'absolute', top: -2, left: 0, height: 3, width: frac(0) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, right: -2, width: 3, height: frac(1) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: -2, right: 0, height: 3, width: frac(2) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: 0, left: -2, width: 3, height: frac(3) }, glow]} />
+      {/* Right half: top-center → top-right corner → down → bottom-center. */}
+      <Animated.View style={[{ position: 'absolute', top: -2, left: '50%', height: 3, width: halfFrac(0) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: -2, width: 3, height: halfFrac(1) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', bottom: -2, right: 0, height: 3, width: halfFrac(2) }, glow]} />
+      {/* Left half, mirrored. */}
+      <Animated.View style={[{ position: 'absolute', top: -2, right: '50%', height: 3, width: halfFrac(0) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, left: -2, width: 3, height: halfFrac(1) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', bottom: -2, left: 0, height: 3, width: halfFrac(2) }, glow]} />
     </View>
   );
 }
@@ -225,10 +234,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // in an effect — this only ever reads the latest snapshot tick, never
   // triggers a render itself.
   const radarCdTotalRef = useRef(0);
-  const droneCdTotalRef = useRef(0);
   const cloakCdTotalRef = useRef(0);
   const fakeCdTotalRef = useRef(0);
-  const aufscheuchenCdTotalRef = useRef(0);
   const trapCdTotalRef = useRef(0);
   const cloakActiveTotalRef = useRef(0);
   const fakeActiveTotalRef = useRef(0);
@@ -242,6 +249,24 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
+  // Compass smoothing controls (see useTelemetry's setHeadingInterpolation/
+  // setHeadingSampleIntervalMs doc for the full performance investigation) —
+  // exposed here so a weaker device can be dialed back live during a match
+  // instead of needing a rebuild.
+  const [headingInterp, setHeadingInterp] = useState(true);
+  const HEADING_RATE_STEPS_MS = [100, 150, 250, 400, 600, 1000];
+  const [headingRateMs, setHeadingRateMs] = useState(250);
+  const toggleHeadingInterp = () => {
+    const next = !headingInterp;
+    setHeadingInterp(next);
+    telemetry.setHeadingInterpolation(next);
+  };
+  const cycleHeadingRate = () => {
+    const idx = HEADING_RATE_STEPS_MS.indexOf(headingRateMs);
+    const next = HEADING_RATE_STEPS_MS[(idx + 1) % HEADING_RATE_STEPS_MS.length]!;
+    setHeadingRateMs(next);
+    telemetry.setHeadingSampleIntervalMs(next);
+  };
   // Continuously decodes the AR Ops IR-ID beacon (see hardware/esp32-ir)
   // from the camera feed while a camera-showing view is mounted — "beim
   // Schuss und davor" means this has to be running before the shot too, not
@@ -387,14 +412,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   };
   const useRadar = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'radar' } });
-  const useDrone = () =>
-    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'drone' } });
   const useCloak = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'cloak' } });
   const useFakeMarker = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'fake_marker' } });
-  const useAufscheuchen = () =>
-    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'aufscheuchen' } });
   const useRevealTrap = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'reveal_trap' } });
   // Team ping (map tap, see onMapPress) — silently no-op for teamless modes
@@ -574,15 +595,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // effective (class-aware) values are in snap.me instead — reading those
   // now, with the match-wide ones only as a last-resort fallback (e.g. no
   // `me` at all, spectator-ish states).
-  const REF_DIST_M = 10;
   const myClass = snap?.me?.class;
   const myHitShape = snap?.me?.hitShape ?? 'cone';
   const effectiveMaxRangeM = snap?.me?.hitRangeM ?? snap?.hitRangeM ?? DEFAULT_HIT_CONFIG.maxRangeM;
-  const effectiveLaneWidthM = myHitShape === 'lateral'
-    ? 2 * (snap?.me?.lateralToleranceM ?? 2)
-    : (snap?.me?.hitConeHalfAngleDeg ?? snap?.hitConeHalfAngleDeg) !== undefined
-      ? 2 * REF_DIST_M * Math.tan((snap!.me!.hitConeHalfAngleDeg ?? snap!.hitConeHalfAngleDeg!) * Math.PI / 180)
-      : 2;
+  // Sniper (lateral) only — a fixed-meters-wide corridor, unrelated to any
+  // angle. Scout/default (cone) doesn't convert its angle to a meters-width
+  // lane anymore (see coneGeoJSON/coneCameraOverlay below) — reported: that
+  // conversion drew Scout's actual widening angular cone as a constant-width
+  // corridor that visually looked identical to Sniper's, and even narrowed
+  // (in screen terms) toward the crosshair the way a real angular cone never
+  // would when viewed from its own apex.
+  const effectiveLaneWidthM = 2 * (snap?.me?.lateralToleranceM ?? 2);
+  const effectiveConeHalfAngleDeg = snap?.me?.hitConeHalfAngleDeg ?? snap?.hitConeHalfAngleDeg
+    ?? DEFAULT_HIT_CONFIG.baseConeHalfAngleDeg;
   // Reported: the aim overlay (cone/lane on the map, funnel in camera modes)
   // looked identical regardless of class — same generic orange everywhere,
   // no label — so it always read as "still showing Sniper" (or whichever
@@ -606,6 +631,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const classIcon = CLASS_ICON[classKey];
   const classStatText = myHitShape === 'omni'
     ? `Radius ${Math.round(effectiveMaxRangeM)}m`
+    : myHitShape === 'cone'
+    ? `${Math.round(effectiveMaxRangeM)}m Reichweite · ${Math.round(effectiveConeHalfAngleDeg * 2)}° Sichtfeld`
     : `${Math.round(effectiveMaxRangeM)}m Reichweite · ${effectiveLaneWidthM.toFixed(1)}m breit`;
   const hexToRgba = (hex: string, alpha: number) => {
     const n = parseInt(hex.slice(1), 16);
@@ -644,11 +671,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     };
   }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, effectiveMaxRangeM]);
 
-  // HIT LANE: a corridor straight ahead, host-configured width (see above) —
-  // not the wider GPS-tolerance cone the server actually validates with
-  // (hitToleranceDeg still widens at close range for the real inCone check
-  // above; this is deliberately the simpler, honest-about-the-target-size
-  // preview, and previews the fixed-width IR lane too).
+  // Cone (Scout/default) gets a true widening angular fan — the honest shape
+  // for an angle-based hit-test viewed from the shooter's own apex; it was
+  // previously converted to a constant-METERS lane (same rectangle Sniper's
+  // fixed-tolerance shape uses), which silently misrepresented it as
+  // constant-width instead of widening with distance. Lateral (Sniper) still
+  // gets that rectangle — a fixed-meters lane, unrelated to any angle, is the
+  // honest shape for ITS shot. Not the wider GPS-tolerance cone the server
+  // actually validates with (hitToleranceDeg still widens at close range for
+  // the real inCone check above; this is deliberately the simpler, honest-
+  // about-the-target-size preview, and previews the fixed-width IR lane too).
   const coneGeoJSON = useMemo(() => {
     // Must rotate around the SAME heading basis as the map itself
     // (activeHeadingDeg — camera-forward while a cam view is showing,
@@ -658,6 +690,20 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     if (!showRange || !telemetry.sample || activeHeadingDeg === null) return null;
     const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
     const h = activeHeadingDeg;
+    if (myHitShape === 'cone') {
+      const steps = 20;
+      const ring: [number, number][] = [[origin.lon, origin.lat]];
+      for (let i = 0; i <= steps; i++) {
+        const brg = h - effectiveConeHalfAngleDeg + (2 * effectiveConeHalfAngleDeg) * (i / steps);
+        const p = destinationPoint(origin, brg, effectiveMaxRangeM);
+        ring.push([p.lon, p.lat]);
+      }
+      ring.push([origin.lon, origin.lat]);
+      return {
+        type: 'Feature' as const, properties: {},
+        geometry: { type: 'Polygon' as const, coordinates: [ring] },
+      };
+    }
     const halfW = effectiveLaneWidthM / 2;
     const nearLeft = destinationPoint(origin, h - 90, halfW);
     const nearRight = destinationPoint(origin, h + 90, halfW);
@@ -672,7 +718,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       type: 'Feature' as const, properties: {},
       geometry: { type: 'Polygon' as const, coordinates: [ring] },
     };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, activeHeadingDeg, effectiveLaneWidthM, effectiveMaxRangeM]);
+  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, activeHeadingDeg, myHitShape,
+      effectiveConeHalfAngleDeg, effectiveLaneWidthM, effectiveMaxRangeM]);
 
   // Zones (domination), targets (Zerstören), bases (CTF/Deathmatch) as
   // circles — real-world-meter-accurate polygons (not CircleLayer's
@@ -893,15 +940,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     && (isTeamCapableMode || isSeeker);
   const radarCd = snap?.me?.radarCooldownRemainingMs ?? 0;
   const hitCd = snap?.me?.hitCooldownRemainingMs ?? 0;
-  const isHider = snap?.me?.role === 'hider';
-  const droneCd = snap?.me?.droneCooldownRemainingMs ?? 0;
   const cloakCd = snap?.me?.cloakCooldownRemainingMs ?? 0;
   const cloakActive = !!snap?.me?.cloakActive;
   const cloakRemainingS = Math.ceil((snap?.me?.cloakRemainingMs ?? 0) / 1000);
   const fakeMarkerCd = snap?.me?.fakeMarkerCooldownRemainingMs ?? 0;
   const fakeMarkerActive = !!snap?.me?.fakeMarkerActive;
   const fakeMarkerRemainingS = Math.ceil((snap?.me?.fakeMarkerRemainingMs ?? 0) / 1000);
-  const aufscheuchenCd = snap?.me?.aufscheuchenCooldownRemainingMs ?? 0;
   const trapCd = snap?.me?.revealTrapCooldownRemainingMs ?? 0;
   const trapArmed = !!snap?.me?.trapArmed;
   const trapAlert = snap?.me?.trapAlert ?? null;
@@ -1151,7 +1195,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const LANE_NEAR_M = 6;
   const LANE_BANDS = 40;
   const laneBands = useMemo(() => {
-    if (!showRange || telemetry.heading === null) return [];
+    // Lateral (Sniper) only now — Cone (Scout/default) renders as a
+    // constant-angular-width band instead (coneCameraOverlay below), it
+    // doesn't taper the way a fixed-meters lane does.
+    if (!showRange || telemetry.heading === null || myHitShape !== 'lateral') return [];
     const yTopPct = 42, yBotPct = 99;
     const out: { topPct: number; heightPct: number; wPx: number }[] = [];
     for (let i = 0; i < LANE_BANDS; i++) {
@@ -1169,12 +1216,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       out.push({ topPct: pct1, heightPct: pct0 - pct1 + 0.3, wPx });
     }
     return out;
-  }, [showRange, telemetry.heading, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
+  }, [showRange, telemetry.heading, myHitShape, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
 
-  // Class-tinted (classAccentColor) instead of a flat generic gold — Scout
-  // and Sniper both used to render this identical funnel in the same color,
-  // so it always read as "the same shape" (reported as "still showing
-  // Sniper") with nothing on screen to tell them apart.
+  // Sniper only — tapering funnel for a fixed-METERS lane (perspective
+  // genuinely narrows a constant-meters width as distance grows, so the
+  // converging "gun-sight" look is physically honest here).
   const laneOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       {laneBands.map((b, i) => (
@@ -1183,6 +1229,25 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           width: b.wPx, height: `${b.heightPct}%`, backgroundColor: hexToRgba(classAccentColor, 0.35 * OVERLAY_OPACITY * 2),
         }} />
       ))}
+    </View>
+  );
+
+  // Scout/default (cone) — a constant ANGULAR width, unlike Sniper's fixed-
+  // meters lane above. Screen-space horizontal position already IS angular
+  // offset from the aim direction (see cameraTargets' own x calculation
+  // below), so a true angle-based cone viewed from the shooter's own apex
+  // doesn't taper with distance at all — it's the same width at the near
+  // edge as right at the crosshair. Previously reused the same tapering
+  // funnel as Sniper, which visually (and incorrectly) implied the shot got
+  // narrower/more precise at range, the opposite of what actually widens.
+  const coneCameraWidthPx = Math.max(3, (2 * effectiveConeHalfAngleDeg / CAMERA_FOV_DEG) * screenW);
+  const coneCameraOverlay = (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={{
+        position: 'absolute', top: '42%', left: '50%', marginLeft: -coneCameraWidthPx / 2,
+        width: coneCameraWidthPx, height: '57%',
+        backgroundColor: hexToRgba(classAccentColor, 0.35 * OVERLAY_OPACITY * 2),
+      }} />
     </View>
   );
 
@@ -1207,12 +1272,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     </View>
   );
 
-  // Swap the funnel for the radius marker whenever the shooter's actual
-  // (class-aware, see myHitShape above) shape is 'omni' — Sniper's
-  // 'lateral' still uses the funnel, it's a fixed-meters-wide directional
-  // corridor just like Scout's cone, only the width source differs
-  // (already handled via effectiveLaneWidthM above).
-  const aimOverlay = myHitShape === 'omni' ? radiusArcOverlay : laneOverlay;
+  // omni (Bomber) → radius marker, no direction. lateral (Sniper) → tapering
+  // meters-wide funnel. cone (Scout/default) → constant-width angular band.
+  const aimOverlay = myHitShape === 'omni' ? radiusArcOverlay
+    : myHitShape === 'lateral' ? laneOverlay
+    : coneCameraOverlay;
 
   // Persistent "which hitbox is loaded" badge — shown across every view mode
   // (comic2d/3d, split, overlay, camera) whenever the Schussbereich/showRange
@@ -1260,100 +1324,61 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     </TouchableOpacity>
   );
 
-  // Bottom bar layout: exactly Perk1 | Schuss | Perk2, symmetric around the
-  // shutter — role-specific perks are split evenly across the two side
-  // columns (stacked vertically if more than one lands on a side) instead of
-  // all crowding onto the left like before. Base-setup has its own row above
-  // the bar since it's a rare phase-gated action, not a regular perk.
-  // Server gates ALL perk actions on the same phases shooting is allowed in
-  // (mode.shootPhases) — 'seeking' for Hide & Seek, but 'live' for every
-  // team-capable mode (see shootPhase above). These buttons used to hardcode
-  // the H&S-only 'seeking' check, which left radar (and every other perk)
-  // permanently disabled outside Hide & Seek — reported as "Radar geht
-  // nicht", but that only ever got a chance to matter in H&S, since
-  // everywhere else the button was already dead from this.
+  // Bottom bar layout: exactly Radar | Schuss | Klassen-Perk — every player
+  // gets precisely 2 actions (plus the shutter), never more. Used to fan out
+  // up to 4 extra buttons (Drohne, Cloak, Fake-Marker, Aufscheuchen) across
+  // H&S roles/classes; simplified down to the single perk tied to the
+  // player's own class (scout → Falle, sniper → Fake-Marker, bomber →
+  // Cloak) — Drohne/Aufscheuchen (H&S-role-only, not class-tied) dropped
+  // from the bar entirely. Server-side gating for all of these is
+  // unchanged (role-bypass paths like "H&S hider also gets Fake-Marker"
+  // still work if ever triggered another way), this only simplifies which
+  // buttons the client exposes.
   // Glow-border colors: muted purple while recharging (cooldown), cyan while
   // an effect is actively running (cloak/fake-marker) — visually distinct so
   // "still recharging" never reads as "buffed right now".
   const CD_RING_COLOR = '#8a6ad0';
   const ACTIVE_RING_COLOR = '#40e0ff';
-  const perkEls: React.ReactNode[] = [
+  const radarBtn = (
     <TouchableOpacity key="radar" style={[st.radarBtn, st.btnRow]} onPress={useRadar}
       disabled={radarCd > 0 || !shootPhase}>
       {radarCd > 0 && <GlowBorder progress={cdFraction(radarCd, radarCdTotalRef)} color={CD_RING_COLOR} />}
       <Icon name="radar" size={15} color="#c0a0f0" />
       <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
-    </TouchableOpacity>,
-  ];
-  if (snap?.subMode === 'hide_and_seek' && isHider) {
-    perkEls.push(
-      <TouchableOpacity key="drone" style={[st.radarBtn, st.btnRow]} onPress={useDrone}
-        disabled={droneCd > 0 || !shootPhase}>
-        {droneCd > 0 && <GlowBorder progress={cdFraction(droneCd, droneCdTotalRef)} color={CD_RING_COLOR} />}
-        <Icon name="drone" size={15} color="#c0a0f0" />
-        <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
-      </TouchableOpacity>,
-    );
-  }
-  // Cloak/Fake-Marker: Hide & Seek hiders keep their usual access, but the
-  // Bomber/Sniper classes also reuse them cross-mode (server's
-  // classOverridesModeGate) — union both paths into one condition instead of
-  // two separate push sites, or a hider-with-that-class in H&S would get
-  // the button twice.
-  if ((snap?.subMode === 'hide_and_seek' && isHider) || myClass === 'bomber') {
-    perkEls.push(
-      <TouchableOpacity key="cloak" style={[st.radarBtn, st.btnRow]} onPress={useCloak}
-        disabled={cloakCd > 0 || cloakActive || !shootPhase}>
-        {cloakActive
-          ? <GlowBorder progress={cdFraction(snap?.me?.cloakRemainingMs ?? 0, cloakActiveTotalRef)} color={ACTIVE_RING_COLOR} />
-          : cloakCd > 0 && <GlowBorder progress={cdFraction(cloakCd, cloakCdTotalRef)} color={CD_RING_COLOR} />}
-        <Icon name="ghost" size={15} color="#c0a0f0" />
-        <Text style={st.actTxt}>
-          {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
-        </Text>
-      </TouchableOpacity>,
-    );
-  }
-  if ((snap?.subMode === 'hide_and_seek' && isHider) || myClass === 'sniper') {
-    perkEls.push(
-      <TouchableOpacity key="fake" style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
-        disabled={fakeMarkerCd > 0 || !shootPhase}>
-        {fakeMarkerActive
-          ? <GlowBorder progress={cdFraction(snap?.me?.fakeMarkerRemainingMs ?? 0, fakeActiveTotalRef)} color={ACTIVE_RING_COLOR} />
-          : fakeMarkerCd > 0 && <GlowBorder progress={cdFraction(fakeMarkerCd, fakeCdTotalRef)} color={CD_RING_COLOR} />}
-        <Icon name="mask" size={15} color="#c0a0f0" />
-        <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
-      </TouchableOpacity>,
-    );
-  }
-  // Reveal-Trap: Scout class, any mode, any role (no H&S/hider gate at all
-  // server-side) — was entirely missing client-side (no button, no action
-  // emitter), so Scouts could never actually use their class perk.
-  if (myClass === 'scout') {
-    perkEls.push(
-      <TouchableOpacity key="trap" style={[st.radarBtn, st.btnRow]} onPress={useRevealTrap}
-        disabled={trapCd > 0 || trapArmed || !shootPhase}>
-        {trapCd > 0 && <GlowBorder progress={cdFraction(trapCd, trapCdTotalRef)} color={CD_RING_COLOR} />}
-        <Icon name="trap" size={15} color="#c0a0f0" />
-        <Text style={st.actTxt}>
-          {trapArmed ? 'Aktiv' : trapCd > 0 ? Math.ceil(trapCd / 1000) + 's' : 'Falle'}
-        </Text>
-      </TouchableOpacity>,
-    );
-  }
-  if (snap?.subMode === 'hide_and_seek' && isSeeker) {
-    perkEls.push(
-      <TouchableOpacity key="scare" style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
-        disabled={aufscheuchenCd > 0 || !shootPhase}>
-        {aufscheuchenCd > 0 && <GlowBorder progress={cdFraction(aufscheuchenCd, aufscheuchenCdTotalRef)} color={CD_RING_COLOR} />}
-        <Icon name="scare" size={15} color="#c0a0f0" />
-        <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Scheuchen'}</Text>
-      </TouchableOpacity>,
-    );
-  }
-  const perkHalf = Math.ceil(perkEls.length / 2);
-  const perkLeft = perkEls.slice(0, perkHalf);
-  const perkRight = perkEls.slice(perkHalf);
+    </TouchableOpacity>
+  );
+  const classPerkBtn = classKey === 'bomber' ? (
+    <TouchableOpacity key="cloak" style={[st.radarBtn, st.btnRow]} onPress={useCloak}
+      disabled={cloakCd > 0 || cloakActive || !shootPhase}>
+      {cloakActive
+        ? <GlowBorder progress={cdFraction(snap?.me?.cloakRemainingMs ?? 0, cloakActiveTotalRef)} color={ACTIVE_RING_COLOR} />
+        : cloakCd > 0 && <GlowBorder progress={cdFraction(cloakCd, cloakCdTotalRef)} color={CD_RING_COLOR} />}
+      <Icon name="ghost" size={15} color="#c0a0f0" />
+      <Text style={st.actTxt}>
+        {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
+      </Text>
+    </TouchableOpacity>
+  ) : classKey === 'sniper' ? (
+    <TouchableOpacity key="fake" style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
+      disabled={fakeMarkerCd > 0 || !shootPhase}>
+      {fakeMarkerActive
+        ? <GlowBorder progress={cdFraction(snap?.me?.fakeMarkerRemainingMs ?? 0, fakeActiveTotalRef)} color={ACTIVE_RING_COLOR} />
+        : fakeMarkerCd > 0 && <GlowBorder progress={cdFraction(fakeMarkerCd, fakeCdTotalRef)} color={CD_RING_COLOR} />}
+      <Icon name="mask" size={15} color="#c0a0f0" />
+      <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
+    </TouchableOpacity>
+  ) : (
+    <TouchableOpacity key="trap" style={[st.radarBtn, st.btnRow]} onPress={useRevealTrap}
+      disabled={trapCd > 0 || trapArmed || !shootPhase}>
+      {trapCd > 0 && <GlowBorder progress={cdFraction(trapCd, trapCdTotalRef)} color={CD_RING_COLOR} />}
+      <Icon name="trap" size={15} color="#c0a0f0" />
+      <Text style={st.actTxt}>
+        {trapArmed ? 'Aktiv' : trapCd > 0 ? Math.ceil(trapCd / 1000) + 's' : 'Falle'}
+      </Text>
+    </TouchableOpacity>
+  );
+  const perkLeft = [radarBtn];
+  const perkRight = [classPerkBtn];
 
   return (
     <View style={st.wrap}>
@@ -1599,6 +1624,20 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               </TouchableOpacity>
             )}
           </View>
+          {/* Kompass-Glättung: Interpolation an/aus + Abtastrate (100ms–1s) —
+              siehe useTelemetry's setHeadingInterpolation/
+              setHeadingSampleIntervalMs. Live umschaltbar für den Feldtest,
+              falls ein Gerät trotz Interpolation noch ruckelt. */}
+          <View style={st.modeRow}>
+            <TouchableOpacity
+              style={[st.modeBtn, headingInterp && st.modeBtnActive]}
+              onPress={toggleHeadingInterp}>
+              <Icon name="loop" size={18} color={headingInterp ? '#f0c840' : '#c0a0f0'} />
+            </TouchableOpacity>
+            <TouchableOpacity style={st.rateBtn} onPress={cycleHeadingRate}>
+              <Text style={st.rateBtnTxt}>{headingRateMs}ms</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -1773,6 +1812,12 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
   },
   modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
+  rateBtn: {
+    height: 40, borderRadius: 8, backgroundColor: 'rgba(40,32,64,.6)',
+    borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  rateBtnTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '800' },
   bottomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
   bottomSide: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   bottomCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },

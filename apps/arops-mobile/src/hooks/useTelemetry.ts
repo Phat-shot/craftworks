@@ -12,6 +12,14 @@ import {
 } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
 
+// Shortest-path angle interpolation (handles the 0°/360° wrap) — plain lerp
+// on raw degrees would spin the long way round whenever a heading crosses
+// that boundary (e.g. 350° → 10°).
+function lerpAngleDeg(a: number, b: number, t: number): number {
+  const diff = ((b - a + 540) % 360) - 180; // shortest signed diff in (-180,180]
+  return (a + diff * t + 360) % 360;
+}
+
 export interface TelemetryState {
   granted: boolean | null;
   sample: TelemetrySample | null;
@@ -50,6 +58,28 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   retryHeading: () => void;
   /** Manually tear down + recreate the GPS subscription (retry button). */
   retryPosition: () => void;
+  /**
+   * Reported: 3D-mode map rotation "performance schlecht". Diagnosis: the
+   * magnetometer/accelerometer themselves aren't the bottleneck — they
+   * already fire at a fixed 10 Hz each and `heading`/`topEdgeHeadingDeg`
+   * were already throttled to ~4 Hz (every 250ms) before this ever reaches
+   * React state, so the expensive part (GameScreen's GeoJSON recompute +
+   * the native MapLibre ShapeSource/Camera updates it drives) was never
+   * running any faster than that. The actual regression came from pairing
+   * that low real update rate with an un-eased Camera (animationDuration=0,
+   * needed to stop the map lagging behind the cone/hitbox overlay) — 4
+   * instant jumps/sec reads as choppy strobing, not "60fps-but-slow".
+   * `setHeadingInterpolation`/`setHeadingSampleIntervalMs` below fix that at
+   * the source: keep consuming real sensor samples at the same modest,
+   * capped rate (default 250ms = 4/sec, adjustable 100ms–1s), but
+   * INTERPOLATE between them on a fixed ~12Hz ticker before writing to
+   * `heading`/`topEdgeHeadingDeg` — so what GameScreen actually reads sweeps
+   * smoothly instead of snapping, while still updating far below a full
+   * 60fps GeoJSON-recompute rate, so the render cost this was chasing away
+   * in the first place doesn't come back.
+   */
+  setHeadingInterpolation: (enabled: boolean) => void;
+  setHeadingSampleIntervalMs: (ms: number) => void;
 } {
   const [granted, setGranted] = useState<boolean | null>(null);
   const [sample, setSample] = useState<TelemetrySample | null>(null);
@@ -57,6 +87,17 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   const [topEdgeHeadingDeg, setTopEdgeHeadingDeg] = useState<number | null>(null);
   const lastHeadingEmit = useRef(0);
   const [geofence, setGeofence] = useState<TelemetryState['geofence']>(null);
+
+  // Real-sample throttle (adjustable 100ms–1s, default 250ms = "max 4/sec")
+  // and the interpolation on/off switch — both settable at runtime from
+  // GameScreen's view popup without tearing down/restarting the sensors.
+  const sampleIntervalMsRef = useRef(250);
+  const interpolationEnabledRef = useRef(true);
+  // Latest ACCEPTED real sample (post-throttle) — the interpolation ticker
+  // eases the displayed heading toward this every tick; when interpolation
+  // is off, this doubles as the direct display value (same as before).
+  const targetHeadingRef = useRef<{ cam: number | null; top: number | null } | null>(null);
+  const displayedHeadingRef = useRef<{ cam: number | null; top: number | null } | null>(null);
 
   const posRef = useRef<Location.LocationObject | null>(null);
   const headingRef = useRef<number | null>(null);
@@ -104,10 +145,18 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
       // direction, since a hit attempt only ever happens through the camera.
       headingRef.current = camDeg;
       const t = Date.now();
-      if (t - lastHeadingEmit.current > 250) {
+      if (t - lastHeadingEmit.current > sampleIntervalMsRef.current) {
         lastHeadingEmit.current = t;
-        setHeading(camDeg);
-        setTopEdgeHeadingDeg(topDeg);
+        targetHeadingRef.current = { cam: camDeg, top: topDeg };
+        // Interpolation OFF: same behavior as before this change — the raw
+        // (throttled) sample goes straight to state. Interpolation ON: the
+        // ticker effect below eases toward targetHeadingRef instead, so
+        // setting state here too would just fight it (visible flicker).
+        if (!interpolationEnabledRef.current) {
+          displayedHeadingRef.current = { cam: camDeg, top: topDeg };
+          setHeading(camDeg);
+          setTopEdgeHeadingDeg(topDeg);
+        }
       }
     };
 
@@ -238,6 +287,47 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     };
   }, [enabled]);
 
+  // Interpolation ticker — eases `heading`/`topEdgeHeadingDeg` toward the
+  // latest real (throttled) sample every ~80ms (~12Hz) instead of snapping
+  // directly whenever a new sample arrives. Deliberately its own fixed,
+  // moderate rate rather than a full display refresh rate (60fps+): what's
+  // actually expensive here isn't this loop itself (a couple of lerps) but
+  // everything downstream in GameScreen that keys off `heading` — the cone/
+  // hitbox GeoJSON recompute and the native MapLibre layer updates it
+  // triggers — so this only buys back visual smoothness up to a rate that
+  // stays cheap for that, not all the way to native frame rate.
+  useEffect(() => {
+    if (!enabled) return;
+    let raf: number;
+    let cancelled = false;
+    let lastTick = 0;
+    const TICK_MS = 80;
+    const SMOOTH = 0.35; // fraction of the remaining gap closed per tick
+    const loop = () => {
+      if (cancelled) return;
+      raf = requestAnimationFrame(loop);
+      if (!interpolationEnabledRef.current) return;
+      const target = targetHeadingRef.current;
+      if (!target) return;
+      const now = Date.now();
+      if (now - lastTick < TICK_MS) return;
+      lastTick = now;
+      const from = displayedHeadingRef.current ?? target;
+      // Null (phone held in the orientation where this particular heading
+      // isn't meaningful — see the type's own doc) skips straight to the
+      // target instead of lerping through a meaningless number.
+      const next = {
+        cam: from.cam === null || target.cam === null ? target.cam : lerpAngleDeg(from.cam, target.cam, SMOOTH),
+        top: from.top === null || target.top === null ? target.top : lerpAngleDeg(from.top, target.top, SMOOTH),
+      };
+      displayedHeadingRef.current = next;
+      setHeading(next.cam);
+      setTopEdgeHeadingDeg(next.top);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
+  }, [enabled]);
+
   // 1 Hz send loop
   useEffect(() => {
     if (!socket || !sessionId) return;
@@ -261,5 +351,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     snapshot: () => sampleRef.current ?? buildSample(),
     retryHeading: () => { startHeadingRef.current(); },
     retryPosition: () => { startPositionRef.current(); },
+    setHeadingInterpolation: (v: boolean) => { interpolationEnabledRef.current = v; },
+    setHeadingSampleIntervalMs: (ms: number) => { sampleIntervalMsRef.current = Math.max(100, Math.min(1000, ms)); },
   };
 }
