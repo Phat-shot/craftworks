@@ -1100,6 +1100,15 @@ function createAropsGame(sessionId, players, workshopConfig) {
     // stuck at the fixed DEFAULTS value regardless of field/match size
     // while every other perk cooldown did scale.
     cfg.revealTrapCooldownMs = auto.revealTrapCooldownMs;
+    // Passive "opponent nearby" sensor (tickCore, sets me.proximityAlert
+    // every tick for every player) — same "opponent within range" concept
+    // the Drone perk's own alert already uses (see actionArUsePerk's
+    // 'drone' branch, shared.scaleDroneRangeM), reused here for the exact
+    // same reason: DEFAULTS' flat 40m stayed fixed regardless of field size,
+    // so on anything bigger than a small field this basically never fired —
+    // reported as "the passive alert never shows, only the Drone perk's
+    // does" (the perk's own range happened to scale, this one didn't).
+    cfg.proximityRangeM = shared.scaleDroneRangeM(areaM2);
   }
   for (const k of Object.keys(DEFAULTS)) {
     if (typeof ar[k] === 'number') cfg[k] = ar[k];

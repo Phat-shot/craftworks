@@ -190,32 +190,42 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   }, [pulse]);
   const p = Math.max(0, Math.min(1, progress));
   if (p <= 0) return null;
-  // Unfurls from TOP-CENTER outward in two mirrored halves (top-arm → side
-  // → bottom-arm), instead of starting at a corner — both halves share the
-  // same `p`, so the lit border is always symmetric and always recedes back
-  // to the top-middle point as the perk approaches ready, rather than to
-  // one arbitrary corner.
-  const halfFrac = (i: number): `${number}%` => `${Math.max(0, Math.min(1, p * 3 - i)) * 100}%`;
-  // Plain backgroundColor + the pulsing opacity above IS the "glow" — no
-  // shadow/elevation here anymore. RN shadows are never clipped to the
-  // View's own box, so a thin 3px bar with shadowRadius/elevation painted a
-  // soft halo well past its actual rectangle — harmless on the short side
-  // segments, but the top segments are lit for 2/3 of the whole cooldown
-  // (unfurl from center reaches full width at p=1/3, stays full until
-  // p=0), so that halo read as a long, permanently-visible line bursting
-  // past the button's own static border. Segments now sit flush with (not
-  // outside) the button's edge (0 instead of a −2 outward offset) too.
-  const glow = { backgroundColor: color, borderRadius: 2, opacity: pulse };
+  // Reported TWICE now: the top edge reads as "just a static line", not a
+  // glow. Root cause of both reports: this used to fill 3 segments per half
+  // SEQUENTIALLY (top-arm, then side, then bottom-arm) so the border would
+  // "end" exactly at top-center — but sequential fill means only ONE
+  // segment is ever actually changing at a given moment while the other two
+  // sit static (fully lit or fully empty); the top-arm segment in
+  // particular stayed 100% lit and completely unchanging for the first 2/3
+  // of the ENTIRE cooldown, reading exactly as "a fixed line", not
+  // something animating. Every segment now scales with the SAME plain
+  // fraction of `p` simultaneously instead — the whole frame visibly
+  // breathes/shrinks together at every instant, nothing ever sits static.
+  const frac: `${number}%` = `${p * 100}%`;
+  // Two layers per edge instead of one flat bar — a soft, low-opacity halo
+  // (thicker) behind a crisp, bright core (thin, pulsing) — to actually read
+  // as "glowing" rather than a hard-edged stroke. Both anchored flush INSIDE
+  // the button's own edge (no negative offsets, no shadow/elevation, which
+  // RN never clips to the View's own box) so nothing can bleed past the
+  // button's border the way the old shadow-based version did.
+  const haloStyle = { backgroundColor: color, opacity: 0.22, borderRadius: 3 };
+  const coreStyle = { backgroundColor: color, opacity: pulse as any, borderRadius: 1 };
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {/* Right half: top-center → top-right corner → down → bottom-center. */}
-      <Animated.View style={[{ position: 'absolute', top: 0, left: '50%', height: 3, width: halfFrac(0) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, right: 0, width: 3, height: halfFrac(1) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, height: 3, width: halfFrac(2) }, glow]} />
+      {/* Right half. */}
+      <View style={[{ position: 'absolute', top: 0, left: '50%', height: 7, width: frac }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, left: '50%', height: 2, width: frac }, coreStyle]} />
+      <View style={[{ position: 'absolute', top: 0, right: 0, width: 7, height: frac }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: 0, width: 2, height: frac }, coreStyle]} />
+      <View style={[{ position: 'absolute', bottom: 0, right: 0, height: 7, width: frac }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, height: 2, width: frac }, coreStyle]} />
       {/* Left half, mirrored. */}
-      <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 3, width: halfFrac(0) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 3, height: halfFrac(1) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 3, width: halfFrac(2) }, glow]} />
+      <View style={[{ position: 'absolute', top: 0, right: '50%', height: 7, width: frac }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 2, width: frac }, coreStyle]} />
+      <View style={[{ position: 'absolute', top: 0, left: 0, width: 7, height: frac }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 2, height: frac }, coreStyle]} />
+      <View style={[{ position: 'absolute', bottom: 0, left: 0, height: 7, width: frac }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 2, width: frac }, coreStyle]} />
     </View>
   );
 }
@@ -1600,6 +1610,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             <View style={st.iconTextRow}>
               <Icon name="bug" size={12} color="#40ff80" />
               <Text style={st.debugBarTxt}>Ping {pingMs ?? '–'}ms · {ticksPerSec}/s</Text>
+            </View>
+            {/* proximityAlert is a passive per-tick server sensor (any
+                alive opponent within range, see arops.js's tick loop) —
+                separate from the Drone perk's own one-shot alert toast, but
+                easy to mistake for "only ever works via the perk" since
+                nothing else surfaced its live state. */}
+            <View style={st.iconTextRow}>
+              <Icon name="warning" size={11} color={snap?.me?.proximityAlert ? '#ff4040' : '#80e0a0'} />
+              <Text style={[st.debugBarTxt, snap?.me?.proximityAlert && st.debugBarTxtHot]}>
+                proximityAlert: {snap?.me?.proximityAlert ? 'true' : 'false'}
+              </Text>
             </View>
             {visibleEnemies.map(e => (
               <View key={e.userId} style={st.iconTextRow}>
