@@ -401,19 +401,23 @@ export default function LobbyScreen({
     const next = ((irIdOf(uid) ?? -1) + 1) % 256;
     emitUpdate({ irIds: { ...(ar.irIds || {}), [uid]: next } });
   };
-  // Player classes (scout/sniper/bomber) — additive to role/team, every
-  // mode, no host obligation to assign one. Tap-to-cycle: none -> scout ->
-  // sniper -> bomber -> none, same pattern as the IR-ID cycle above.
+  // Player classes (scout/sniper/bomber) — additive to role/team. Scout is
+  // now the server-side default for anyone unset (see effectiveArSettings/
+  // createAropsGame in arops.js) — "none" is no longer a real, reachable
+  // state, so this is a true wrap-around cycle now: scout -> sniper ->
+  // bomber -> scout -> … The old none -> scout -> sniper -> bomber -> none
+  // cycle had a real bug once that changed: tapping the row while it
+  // already (correctly) showed the default "Scout" moved AWAY from it to
+  // Sniper, since idx=0 -> next=CLASS_CYCLE[1]='sniper' — reported as
+  // "started as Scout, overlay was still Sniper" is consistent with
+  // exactly that trap.
   const CLASS_CYCLE = ['scout', 'sniper', 'bomber'] as const;
-  const classOf = (uid: string) => ar.classes?.[uid];
+  const classOf = (uid: string) => ar.classes?.[uid] ?? 'scout';
   const cycleClass = (uid: string) => {
     if (!isHost) return;
-    const cur = classOf(uid);
-    const idx = cur ? CLASS_CYCLE.indexOf(cur) : -1;
-    const next = idx === CLASS_CYCLE.length - 1 ? undefined : CLASS_CYCLE[idx + 1];
-    const classes = { ...(ar.classes || {}) };
-    if (next) classes[uid] = next; else delete classes[uid];
-    emitUpdate({ classes });
+    const idx = CLASS_CYCLE.indexOf(classOf(uid));
+    const next = CLASS_CYCLE[(idx + 1) % CLASS_CYCLE.length];
+    emitUpdate({ classes: { ...(ar.classes || {}), [uid]: next } });
   };
 
   const onMapPress = (feature: any) => {

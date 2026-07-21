@@ -72,11 +72,17 @@ interface Snap {
     cloakCooldownRemainingMs?: number; cloakActive?: boolean; cloakRemainingMs?: number;
     fakeMarkerCooldownRemainingMs?: number; fakeMarkerActive?: boolean; fakeMarkerRemainingMs?: number;
     aufscheuchenCooldownRemainingMs?: number;
+    // Scout's Reveal-Trap (any mode, any role) — armed at the Scout's
+    // current position, one-shot: reveals the first opponent who walks
+    // within range, then consumes itself. trapAlert only ever populated for
+    // the trap's own owner (server never leaks who triggered someone else's).
+    revealTrapCooldownRemainingMs?: number; trapArmed?: boolean;
+    trapAlert?: { lat: number; lon: number; triggeredAt: number; expiresAt: number } | null;
     // Team ping (map tap) — only ever the viewer's own team's pings, never
     // the opponents' (see server's getAropsSnapshot, me.teamPings).
     teamPings?: { lat: number; lon: number; byUserId: string; ts: number; expiresAt: number }[];
   } | null;
-  players: { userId: string; username: string; avatar_color?: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; accuracyM?: number; status: string }[];
+  players: { userId: string; username: string; avatar_color?: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; accuracyM?: number; status: string; score: number }[];
   // Mode extras
   teamScore?: { a: number; b: number };
   // Domination ffa: per-player score instead of teamScore (userId -> score).
@@ -118,6 +124,29 @@ const ERR_DE: Record<string, Toast> = {
   perk_wrong_role: { icon: 'close', text: 'Für deine Rolle nicht verfügbar' },
 };
 
+// Per-submode phase naming — the raw phase ids ('base_setup', 'live') are
+// shared plumbing across all 4 team-capable modes (see server's MODES),
+// but reused verbatim they read as generic/unclear ("Live" tells a player
+// nothing about what they're supposed to be doing). Only submodes with a
+// name here override the fallback further down (hide_and_seek's own
+// hiding/seeking phases already had good names and aren't touched).
+const PHASE_LABELS: Record<string, Partial<Record<string, Toast>>> = {
+  domination: {
+    live: { icon: 'target', text: 'Kontrolle' },
+  },
+  ctf: {
+    base_setup: { icon: 'flag', text: 'Base wählen' },
+    live: { icon: 'flag', text: 'Flaggenjagd' },
+  },
+  seek_destroy: {
+    live: { icon: 'bomb', text: 'Zerstören' },
+  },
+  deathmatch: {
+    base_setup: { icon: 'flag', text: 'Base wählen' },
+    live: { icon: 'skull', text: 'Jagd' },
+  },
+};
+
 // View modes: free 2D comic map (manual pan/rotate/zoom) → compass-oriented
 // 3D comic map → split cam/comic → transparent comic-over-camera → pure
 // camera (no map at all). Shooting itself doesn't need the camera preview —
@@ -137,6 +166,44 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
+// Radial cooldown/duration ring for the action-bar buttons below — no SVG
+// dependency (deliberately: this project got burned earlier this session
+// pulling in a native module that turned out unnecessary, see the reverted
+// native-location experiment; a pure-View pie is enough for a progress
+// wheel and needs no native rebuild to verify). Classic 2-half-circle pie
+// technique: the right half is either solid or empty depending on whether
+// we're past the 50% mark, and the left half is a semicircle that rotates
+// in from vertical — together they sweep a full circle. A same-color-as-
+// background disc on top turns the filled pie into a ring/donut.
+function ProgressRing({ size = 30, strokeWidth = 3, progress, color, bgColor }: {
+  size?: number; strokeWidth?: number; progress: number; color: string; bgColor: string;
+}) {
+  const p = Math.max(0, Math.min(1, progress));
+  const angle = p * 360;
+  const holeSize = size - strokeWidth * 2;
+  return (
+    <View style={{ width: size, height: size, position: 'absolute' }} pointerEvents="none">
+      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: 'rgba(255,255,255,.12)', overflow: 'hidden' }}>
+        <View style={{
+          position: 'absolute', top: 0, right: 0, width: size / 2, height: size,
+          backgroundColor: angle > 180 ? color : 'transparent',
+        }} />
+        <View style={{ position: 'absolute', top: 0, left: 0, width: size / 2, height: size, overflow: 'hidden' }}>
+          <View style={{
+            width: size / 2, height: size, backgroundColor: color,
+            transform: [{ rotate: `${Math.min(angle, 180)}deg` }],
+            transformOrigin: 'right center' as any,
+          }} />
+        </View>
+      </View>
+      <View style={{
+        position: 'absolute', top: strokeWidth, left: strokeWidth,
+        width: holeSize, height: holeSize, borderRadius: holeSize / 2, backgroundColor: bgColor,
+      }} />
+    </View>
+  );
+}
+
 export default function GameScreen({ sessionId, onExit, watchSync }: {
   sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
 }) {
@@ -146,6 +213,28 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [snap, setSnap] = useState<Snap | null>(null);
   const telemetry = useTelemetry(socket, sessionId);
   const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
+  // Action-bar cooldown/duration rings (ProgressRing above): the server only
+  // ever sends *RemainingMs, never each perk's total duration (which varies
+  // by field-size auto-scaling and host overrides anyway) — so the ring's
+  // "total" is self-calibrated by remembering the highest remaining value
+  // seen since it last hit 0 (i.e. the instant a perk is used, its
+  // remainingMs IS the total). Written directly during render (same
+  // established pattern as activeHeadingDegRef elsewhere in this file), not
+  // in an effect — this only ever reads the latest snapshot tick, never
+  // triggers a render itself.
+  const radarCdTotalRef = useRef(0);
+  const droneCdTotalRef = useRef(0);
+  const cloakCdTotalRef = useRef(0);
+  const fakeCdTotalRef = useRef(0);
+  const aufscheuchenCdTotalRef = useRef(0);
+  const trapCdTotalRef = useRef(0);
+  const cloakActiveTotalRef = useRef(0);
+  const fakeActiveTotalRef = useRef(0);
+  const cdFraction = (remainingMs: number, totalRef: { current: number }) => {
+    if (remainingMs > totalRef.current) totalRef.current = remainingMs;
+    if (remainingMs <= 0) { totalRef.current = 0; return 0; }
+    return totalRef.current > 0 ? remainingMs / totalRef.current : 0;
+  };
   const [lastResult, setLastResult] = useState<Toast | null>(null);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
@@ -212,6 +301,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // ── Debug overlay: live stats + enemy distance/hitbox, overlaid on the
   // existing view — not a separate full-screen panel.
   const [debugOpen, setDebugOpen] = useState(false);
+  const [rosterOpen, setRosterOpen] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [ticksPerSec, setTicksPerSec] = useState(0);
   const tickCounterRef = useRef(0);
@@ -303,6 +393,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'fake_marker' } });
   const useAufscheuchen = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'aufscheuchen' } });
+  const useRevealTrap = () =>
+    socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'reveal_trap' } });
   // Team ping (map tap, see onMapPress) — silently no-op for teamless modes
   // (no me.team means no teammates to ping; the server would reject it with
   // 'no_team' anyway, but checking client-side avoids a pointless round-trip).
@@ -443,8 +535,14 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       features.push({ type: 'Feature', properties: { color: '#ff8000', op },
         geometry: { type: 'Point', coordinates: [c.lon, c.lat] } });
     }
+    // Reveal-Trap trigger — only ever populated for the trap's own owner
+    // (privacy: never leaks which opponent triggered it, just where).
+    if (snap?.me?.trapAlert) {
+      features.push({ type: 'Feature', properties: { color: '#ffcc00', op: 0.9 },
+        geometry: { type: 'Point', coordinates: [snap.me.trapAlert.lon, snap.me.trapAlert.lat] } });
+    }
     return { type: 'FeatureCollection' as const, features };
-  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies]);
+  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies, snap?.me?.trapAlert]);
 
   // Team ping markers (map tap) — fade out as they approach expiry, same
   // convention as the age-based fades above. snap.me.teamPings is already
@@ -483,6 +581,23 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       ? 2 * REF_DIST_M * Math.tan((snap!.me!.hitConeHalfAngleDeg ?? snap!.hitConeHalfAngleDeg!) * Math.PI / 180)
       : 2;
 
+  const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
+  const isFree2D = viewMode === 'comic2d';
+  // Whichever heading is actually meaningful for how the phone is currently
+  // expected to be held: flat/screen-up in pure map mode (top-edge heading),
+  // upright/screen-towards-you once the camera is showing (camera-forward
+  // heading — the same one used for aiming/hit-validation). Computed here
+  // (not just once near the map-rendering code below) because coneGeoJSON
+  // needs it too — it used to always read telemetry.heading regardless of
+  // mode, which is the camera-forward sensor even while the phone is held
+  // flat for a pure map view. That mismatch against the map's own rotation
+  // (which already correctly switched on hasCam) is exactly what produced
+  // the reported "hybrid" cone in comic3d: map rotates by top-edge heading,
+  // cone polygon rotates by camera-forward heading, so they disagree the
+  // moment the two sensor readings diverge (any non-flat, non-upright hold).
+  const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
+  activeHeadingDegRef.current = activeHeadingDeg;
+
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
     if (!showRange || !telemetry.sample) return null;
@@ -504,9 +619,14 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // above; this is deliberately the simpler, honest-about-the-target-size
   // preview, and previews the fixed-width IR lane too).
   const coneGeoJSON = useMemo(() => {
-    if (!showRange || !telemetry.sample || telemetry.heading === null) return null;
+    // Must rotate around the SAME heading basis as the map itself
+    // (activeHeadingDeg — camera-forward while a cam view is showing,
+    // top-edge while it's a pure flat map), not always the camera-forward
+    // sensor — see activeHeadingDeg's comment above for why that mismatch
+    // was the "hybrid" bug in comic3d.
+    if (!showRange || !telemetry.sample || activeHeadingDeg === null) return null;
     const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
-    const h = telemetry.heading;
+    const h = activeHeadingDeg;
     const halfW = effectiveLaneWidthM / 2;
     const nearLeft = destinationPoint(origin, h - 90, halfW);
     const nearRight = destinationPoint(origin, h + 90, halfW);
@@ -521,7 +641,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       type: 'Feature' as const, properties: {},
       geometry: { type: 'Polygon' as const, coordinates: [ring] },
     };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, telemetry.heading, effectiveLaneWidthM, effectiveMaxRangeM]);
+  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, activeHeadingDeg, effectiveLaneWidthM, effectiveMaxRangeM]);
 
   // Zones (domination), targets (Zerstören), bases (CTF/Deathmatch) as
   // circles — real-world-meter-accurate polygons (not CircleLayer's
@@ -751,11 +871,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const fakeMarkerActive = !!snap?.me?.fakeMarkerActive;
   const fakeMarkerRemainingS = Math.ceil((snap?.me?.fakeMarkerRemainingMs ?? 0) / 1000);
   const aufscheuchenCd = snap?.me?.aufscheuchenCooldownRemainingMs ?? 0;
+  const myClass = snap?.me?.class;
+  const trapCd = snap?.me?.revealTrapCooldownRemainingMs ?? 0;
+  const trapArmed = !!snap?.me?.trapArmed;
+  const trapAlert = snap?.me?.trapAlert ?? null;
   const phaseLabel: Toast = snap?.phase === 'hiding' ? { icon: 'ghost', text: 'Versteckphase' }
     : snap?.phase === 'seeking' ? { icon: 'flashlight', text: 'Suchphase' }
-    : snap?.phase === 'base_setup' ? { icon: 'flag', text: 'Base setzen' }
-    : snap?.phase === 'live' ? { icon: 'circle', text: 'Live' }
-    : snap?.phase === 'ended' ? { icon: 'flagCheckered', text: 'Beendet' } : { icon: 'hourglass', text: '' };
+    : snap?.phase === 'ended' ? { icon: 'flagCheckered', text: 'Beendet' }
+    : (snap?.subMode && snap?.phase && PHASE_LABELS[snap.subMode]?.[snap.phase])
+    || (snap?.phase === 'base_setup' ? { icon: 'flag', text: 'Base setzen' }
+      : snap?.phase === 'live' ? { icon: 'circle', text: 'Live' } : { icon: 'hourglass', text: '' });
   const frozenMs = snap?.me?.frozenRemainingMs ?? 0;
   const isCaptainSetup = snap?.phase === 'base_setup' && snap?.me?.isCaptain;
   // Remaining time (not raw %) from a progress percentage + its known total
@@ -793,19 +918,27 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     ? zerstorenLine()
     : null;
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
-  const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
-  const isFree2D = viewMode === 'comic2d';
+  // Top-right status-bar indicator — used to always show H&S's "Hider: N",
+  // which reads as meaningless noise in the other 4 modes (that counter
+  // isn't even tracked for them). Swap in whatever's actually the relevant
+  // at-a-glance number per mode; tapping it opens the full ranked roster
+  // (rosterOpen below) for anyone who wants more than the one headline stat.
+  const statusIndicator: Toast = snap?.subMode === 'ctf'
+    ? { icon: 'flag', text: `Flaggen: ${(snap?.flags || []).filter(f => f.state === 'home').length}/${(snap?.flags || []).length} sicher` }
+    : snap?.subMode === 'domination'
+    ? { icon: 'target', text: `Zonen: ${(snap?.zones || []).filter(z => z.owner).length}/${(snap?.zones || []).length} aktiv` }
+    : snap?.subMode === 'seek_destroy'
+    ? { icon: 'bomb', text: `Ziele: ${(snap?.targets || []).filter(t => t.destroyed).length}/${(snap?.targets || []).length} zerstört` }
+    : snap?.subMode === 'deathmatch'
+    ? { icon: 'skull', text: `Gegner: ${(snap?.players || []).filter(p =>
+        p.userId !== me?.id && p.status === 'alive' && (ffaVariant || p.team !== snap?.me?.team)
+      ).length}` }
+    : { icon: isSeeker ? 'flashlight' : 'ghost', text: `Hider: ${snap?.hidersRemaining ?? '–'}` };
   // Only scan for the IR beacon when the host actually picked IR mode — in
   // compass mode (the default) there's nothing to gain from running the
   // frame processor at all, just camera/native overhead and unnecessary
   // exposure to a still-experimental native code path for no benefit.
   const irEnabled = snap?.hitTrackingMode === 'ir';
-  // Whichever heading is actually meaningful for how the phone is currently
-  // expected to be held: flat/screen-up in pure map mode (top-edge heading),
-  // upright/screen-towards-you once the camera is showing (camera-forward
-  // heading — the same one used for aiming/hit-validation).
-  const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
-  activeHeadingDegRef.current = activeHeadingDeg;
   // 2D free mode is manually rotated by the user (MapLibre's rotate gesture)
   // — never fight that with a compass-driven heading. Every other map-showing
   // mode is compass-oriented (heading-up).
@@ -1073,39 +1206,101 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // columns (stacked vertically if more than one lands on a side) instead of
   // all crowding onto the left like before. Base-setup has its own row above
   // the bar since it's a rare phase-gated action, not a regular perk.
+  // Server gates ALL perk actions on the same phases shooting is allowed in
+  // (mode.shootPhases) — 'seeking' for Hide & Seek, but 'live' for every
+  // team-capable mode (see shootPhase above). These buttons used to hardcode
+  // the H&S-only 'seeking' check, which left radar (and every other perk)
+  // permanently disabled outside Hide & Seek — reported as "Radar geht
+  // nicht", but that only ever got a chance to matter in H&S, since
+  // everywhere else the button was already dead from this.
+  // Ring colors: muted purple while recharging (cooldown), cyan while an
+  // effect is actively running (cloak/fake-marker) — visually distinct so
+  // "still recharging" never reads as "buffed right now".
+  const CD_RING_COLOR = '#8a6ad0';
+  const ACTIVE_RING_COLOR = '#40e0ff';
+  const RADAR_BTN_BG = 'rgba(40,32,64,.9)';
   const perkEls: React.ReactNode[] = [
     <TouchableOpacity key="radar" style={[st.radarBtn, st.btnRow]} onPress={useRadar}
-      disabled={radarCd > 0 || snap?.phase !== 'seeking'}>
-      <Icon name="radar" size={15} color="#c0a0f0" />
+      disabled={radarCd > 0 || !shootPhase}>
+      <View style={st.perkIconWrap}>
+        {radarCd > 0 && <ProgressRing progress={cdFraction(radarCd, radarCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
+        <Icon name="radar" size={15} color="#c0a0f0" />
+      </View>
       <Text style={st.actTxt}>{radarCd > 0 ? Math.ceil(radarCd / 60_000) + 'min' : 'Radar'}</Text>
     </TouchableOpacity>,
   ];
   if (snap?.subMode === 'hide_and_seek' && isHider) {
     perkEls.push(
       <TouchableOpacity key="drone" style={[st.radarBtn, st.btnRow]} onPress={useDrone}
-        disabled={droneCd > 0 || snap?.phase !== 'seeking'}>
-        <Icon name="drone" size={15} color="#c0a0f0" />
+        disabled={droneCd > 0 || !shootPhase}>
+        <View style={st.perkIconWrap}>
+          {droneCd > 0 && <ProgressRing progress={cdFraction(droneCd, droneCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
+          <Icon name="drone" size={15} color="#c0a0f0" />
+        </View>
         <Text style={st.actTxt}>{droneCd > 0 ? Math.ceil(droneCd / 1000) + 's' : 'Drohne'}</Text>
       </TouchableOpacity>,
+    );
+  }
+  // Cloak/Fake-Marker: Hide & Seek hiders keep their usual access, but the
+  // Bomber/Sniper classes also reuse them cross-mode (server's
+  // classOverridesModeGate) — union both paths into one condition instead of
+  // two separate push sites, or a hider-with-that-class in H&S would get
+  // the button twice.
+  if ((snap?.subMode === 'hide_and_seek' && isHider) || myClass === 'bomber') {
+    perkEls.push(
       <TouchableOpacity key="cloak" style={[st.radarBtn, st.btnRow]} onPress={useCloak}
-        disabled={cloakCd > 0 || cloakActive || snap?.phase !== 'seeking'}>
-        <Icon name="ghost" size={15} color="#c0a0f0" />
+        disabled={cloakCd > 0 || cloakActive || !shootPhase}>
+        <View style={st.perkIconWrap}>
+          {cloakActive
+            ? <ProgressRing progress={cdFraction(snap?.me?.cloakRemainingMs ?? 0, cloakActiveTotalRef)} color={ACTIVE_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />
+            : cloakCd > 0 && <ProgressRing progress={cdFraction(cloakCd, cloakCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
+          <Icon name="ghost" size={15} color="#c0a0f0" />
+        </View>
         <Text style={st.actTxt}>
           {cloakActive ? cloakRemainingS + 's' : cloakCd > 0 ? Math.ceil(cloakCd / 1000) + 's' : 'Cloak'}
         </Text>
       </TouchableOpacity>,
+    );
+  }
+  if ((snap?.subMode === 'hide_and_seek' && isHider) || myClass === 'sniper') {
+    perkEls.push(
       <TouchableOpacity key="fake" style={[st.radarBtn, st.btnRow]} onPress={useFakeMarker}
-        disabled={fakeMarkerCd > 0 || snap?.phase !== 'seeking'}>
-        <Icon name="mask" size={15} color="#c0a0f0" />
+        disabled={fakeMarkerCd > 0 || !shootPhase}>
+        <View style={st.perkIconWrap}>
+          {fakeMarkerActive
+            ? <ProgressRing progress={cdFraction(snap?.me?.fakeMarkerRemainingMs ?? 0, fakeActiveTotalRef)} color={ACTIVE_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />
+            : fakeMarkerCd > 0 && <ProgressRing progress={cdFraction(fakeMarkerCd, fakeCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
+          <Icon name="mask" size={15} color="#c0a0f0" />
+        </View>
         <Text style={st.actTxt}>{fakeMarkerCd > 0 ? Math.ceil(fakeMarkerCd / 1000) + 's' : 'Fake'}</Text>
+      </TouchableOpacity>,
+    );
+  }
+  // Reveal-Trap: Scout class, any mode, any role (no H&S/hider gate at all
+  // server-side) — was entirely missing client-side (no button, no action
+  // emitter), so Scouts could never actually use their class perk.
+  if (myClass === 'scout') {
+    perkEls.push(
+      <TouchableOpacity key="trap" style={[st.radarBtn, st.btnRow]} onPress={useRevealTrap}
+        disabled={trapCd > 0 || trapArmed || !shootPhase}>
+        <View style={st.perkIconWrap}>
+          {trapCd > 0 && <ProgressRing progress={cdFraction(trapCd, trapCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
+          <Icon name="trap" size={15} color="#c0a0f0" />
+        </View>
+        <Text style={st.actTxt}>
+          {trapArmed ? 'Aktiv' : trapCd > 0 ? Math.ceil(trapCd / 1000) + 's' : 'Falle'}
+        </Text>
       </TouchableOpacity>,
     );
   }
   if (snap?.subMode === 'hide_and_seek' && isSeeker) {
     perkEls.push(
       <TouchableOpacity key="scare" style={[st.radarBtn, st.btnRow]} onPress={useAufscheuchen}
-        disabled={aufscheuchenCd > 0 || snap?.phase !== 'seeking'}>
-        <Icon name="scare" size={15} color="#c0a0f0" />
+        disabled={aufscheuchenCd > 0 || !shootPhase}>
+        <View style={st.perkIconWrap}>
+          {aufscheuchenCd > 0 && <ProgressRing progress={cdFraction(aufscheuchenCd, aufscheuchenCdTotalRef)} color={CD_RING_COLOR} bgColor={RADAR_BTN_BG} size={22} strokeWidth={2.5} />}
+          <Icon name="scare" size={15} color="#c0a0f0" />
+        </View>
         <Text style={st.actTxt}>{aufscheuchenCd > 0 ? Math.ceil(aufscheuchenCd / 1000) + 's' : 'Scheuchen'}</Text>
       </TouchableOpacity>,
     );
@@ -1131,10 +1326,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             <Icon name="clock" size={13} color="#80ff80" />
             <Text style={st.timer}>{Math.floor(remainingS / 60)}:{String(remainingS % 60).padStart(2, '0')}</Text>
           </View>
-          <View style={[st.iconTextRow, { marginLeft: 'auto' }]}>
-            <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color="#a090c0" />
-            <Text style={st.info}>Hider: {snap?.hidersRemaining ?? '–'}</Text>
-          </View>
+          <TouchableOpacity style={[st.iconTextRow, { marginLeft: 'auto' }]} onPress={() => setRosterOpen(o => !o)}>
+            <Icon name={statusIndicator.icon} size={13} color="#a090c0" />
+            <Text style={st.info}>{statusIndicator.text}</Text>
+          </TouchableOpacity>
         </View>
         {!!scoreLine && (
           <View style={st.statusScoreRow}>
@@ -1166,6 +1361,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         <View style={st.cloakBanner}>
           <Icon name="mask" size={13} color="#fff" />
           <Text style={st.cloakTxt}>FAKE-MARKER AKTIV — {fakeMarkerRemainingS}s</Text>
+        </View>
+      )}
+      {trapAlert && (
+        <View style={st.cloakBanner}>
+          <Icon name="trap" size={13} color="#fff" />
+          <Text style={st.cloakTxt}>
+            FALLE AUSGELÖST — Gegner {Math.round(haversineMeters(
+              { lat: telemetry.sample?.lat ?? trapAlert.lat, lon: telemetry.sample?.lon ?? trapAlert.lon },
+              trapAlert
+            ))}m entfernt
+          </Text>
         </View>
       )}
       {snap?.me?.geofence === 'warning' && (
@@ -1250,6 +1456,33 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               </View>
             ))}
           </View>
+        )}
+
+        {/* Ranked roster — opened by tapping the status bar's mode-specific
+            indicator (top right). Uses p.score, already sent for every
+            player regardless of role/team fog-of-war (see server's
+            getAropsSnapshot roster entry) — same number the endgame overlay
+            already shows for "Deine Punkte", just for everyone at once. */}
+        {rosterOpen && (
+          <TouchableOpacity style={st.rosterOverlay} activeOpacity={1} onPress={() => setRosterOpen(false)}>
+            <View style={st.rosterCard}>
+              <View style={st.rosterHeader}>
+                <Icon name="trophy" size={16} color="#f0c840" />
+                <Text style={st.rosterTitle}>Rangliste</Text>
+              </View>
+              {[...(snap?.players || [])].sort((a, b) => b.score - a.score).map((p, i) => (
+                <View key={p.userId} style={st.rosterRow}>
+                  <Text style={st.rosterRank}>{i + 1}.</Text>
+                  <View style={[st.rosterDot, { backgroundColor: p.team ? TEAM_COLOR[p.team] : (p.avatar_color || '#c0a0f0') }]} />
+                  <Text style={[st.rosterName, p.userId === me?.id && st.rosterNameMe]} numberOfLines={1}>
+                    {p.username}
+                  </Text>
+                  {p.status !== 'alive' && <Icon name="skull" size={12} color="#807050" />}
+                  <Text style={st.rosterScore}>{p.score}</Text>
+                </View>
+              ))}
+            </View>
+          </TouchableOpacity>
         )}
       </View>
 
@@ -1472,6 +1705,22 @@ const st = StyleSheet.create({
   },
   debugBarTxt: { color: '#a0e0a0', fontSize: 11, fontWeight: '700' },
   debugBarTxtHot: { color: '#ff4040', fontWeight: '900' },
+  rosterOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(5,4,10,.7)', alignItems: 'center', justifyContent: 'center', zIndex: 60,
+  },
+  rosterCard: {
+    width: '82%', maxHeight: '70%', backgroundColor: 'rgba(20,16,32,.97)',
+    borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 16,
+  },
+  rosterHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10, justifyContent: 'center' },
+  rosterTitle: { color: '#f0c840', fontSize: 16, fontWeight: '900' },
+  rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  rosterRank: { color: '#807050', fontSize: 12, width: 20 },
+  rosterDot: { width: 10, height: 10, borderRadius: 5 },
+  rosterName: { color: '#e0d8f0', fontSize: 14, flex: 1 },
+  rosterNameMe: { color: '#f0c840', fontWeight: '900' },
+  rosterScore: { color: '#80ff80', fontSize: 14, fontWeight: '800' },
   bottomBar: { backgroundColor: '#141020', paddingBottom: 24, paddingTop: 8 },
   modeRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 },
   modeBtn: {
@@ -1488,6 +1737,7 @@ const st = StyleSheet.create({
     borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
   },
   actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
+  perkIconWrap: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
   settingsFab: {
     // `bottom` here is just a fallback for the first render before bottomBarH
