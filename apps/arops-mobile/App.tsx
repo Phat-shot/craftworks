@@ -4,7 +4,10 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import { restoreSession, loadLastPosition, createArLobby, getUser, logout } from './src/api';
+import {
+  restoreSession, loadLastPosition, createArLobby, getUser, logout,
+  loadHeadingSettings, getHeadingSettings, saveHeadingSettings,
+} from './src/api';
 import { SERVER_URL, BUILD_TIME, COMMIT_SHA } from './src/config';
 import Icon from './src/components/Icon';
 import { useWatchSync } from './src/hooks/useWatchSync';
@@ -33,6 +36,29 @@ export default function App() {
   const [watchPairOpen, setWatchPairOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Compass-smoothing prefs (see api.ts's getHeadingSettings doc) — a
+  // device-level tradeoff, so it lives here instead of GameScreen's own
+  // in-match popup. Re-read from storage each time the modal opens (not
+  // just once at mount) so it reflects loadHeadingSettings() having
+  // finished by then, same reasoning as getUser() below just not reactive.
+  const [headingSettings, setHeadingSettingsState] = useState(getHeadingSettings());
+  const HEADING_RATE_STEPS_MS = [100, 150, 250, 400, 600, 1000];
+  const HEADING_RENDER_STEPS_HZ = [10, 15, 20, 30, 45, 60, 90, 120];
+  const updateHeadingSettings = (patch: Partial<ReturnType<typeof getHeadingSettings>>) => {
+    saveHeadingSettings(patch);
+    setHeadingSettingsState(getHeadingSettings());
+  };
+  const cycleHeadingRate = () => {
+    const idx = HEADING_RATE_STEPS_MS.indexOf(headingSettings.sampleMs);
+    updateHeadingSettings({ sampleMs: HEADING_RATE_STEPS_MS[(idx + 1) % HEADING_RATE_STEPS_MS.length]! });
+  };
+  const cycleHeadingRenderRate = () => {
+    const pollingHz = 1000 / headingSettings.sampleMs;
+    const steps = HEADING_RENDER_STEPS_HZ.filter(hz => hz >= pollingHz);
+    if (!steps.length) steps.push(120);
+    const idx = steps.indexOf(headingSettings.renderHz);
+    updateHeadingSettings({ renderHz: steps[(idx + 1) % steps.length]! });
+  };
 
   // A bare back-press used to close the whole app (Android's default
   // hardwareBackPress behavior with no handler on the root screen) from
@@ -82,8 +108,10 @@ export default function App() {
   useEffect(() => {
     // Loaded alongside the session (not gated by it — device-local, not
     // tied to login) so the lobby map already has a last-known position to
-    // seed its viewport with by the time any screen that needs it mounts.
-    Promise.all([restoreSession(), loadLastPosition()])
+    // seed its viewport with by the time any screen that needs it mounts,
+    // and GameScreen has the compass-smoothing prefs ready the instant it
+    // mounts too.
+    Promise.all([restoreSession(), loadLastPosition(), loadHeadingSettings()])
       .then(([u]) => setRoute(u ? { name: 'menu' } : { name: 'login' }))
       .catch(() => setRoute({ name: 'login' }));
   }, []);
@@ -156,7 +184,7 @@ export default function App() {
             <TouchableOpacity style={st.menuIconBtn} onPress={() => setInfoOpen(true)}>
               <Icon name="info" size={17} color="#c0a0f0" />
             </TouchableOpacity>
-            <TouchableOpacity style={st.menuIconBtn} onPress={() => setSettingsOpen(true)}>
+            <TouchableOpacity style={st.menuIconBtn} onPress={() => { setHeadingSettingsState(getHeadingSettings()); setSettingsOpen(true); }}>
               <Icon name="settings" size={17} color="#c0a0f0" />
             </TouchableOpacity>
           </View>
@@ -198,6 +226,29 @@ export default function App() {
             </View>
             <Text style={st.modalLine}>Angemeldet als {getUser()?.username}</Text>
             <Text style={st.modalHint}>Build: {BUILD_TIME} · {COMMIT_SHA}</Text>
+            {/* Kompass-Glättung — device-weites Performance/Glätte-Tradeoff,
+                deshalb hier statt im in-Match-Popup von GameScreen. Aus: nur
+                die Abtastrate zählt (1:1-Anzeige). An: zusätzlich eine
+                Render-Rate zwischen der Abtastrate und 120Hz wählbar. */}
+            <Text style={[st.modalLine, { marginTop: 8 }]}>Kompass-Glättung</Text>
+            <View style={st.settingsRow}>
+              <TouchableOpacity
+                style={[st.settingsBtn, headingSettings.interpolation && st.settingsBtnActive]}
+                onPress={() => updateHeadingSettings({ interpolation: !headingSettings.interpolation })}>
+                <Icon name="loop" size={16} color={headingSettings.interpolation ? '#f0c840' : '#c0a0f0'} />
+                <Text style={st.settingsBtnTxt}>Interpolation</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={st.settingsRow}>
+              <TouchableOpacity style={st.settingsBtn} onPress={cycleHeadingRate}>
+                <Text style={st.settingsBtnTxt}>Abtastrate: {headingSettings.sampleMs}ms</Text>
+              </TouchableOpacity>
+              {headingSettings.interpolation && (
+                <TouchableOpacity style={st.settingsBtn} onPress={cycleHeadingRenderRate}>
+                  <Text style={st.settingsBtnTxt}>Render: {headingSettings.renderHz}Hz</Text>
+                </TouchableOpacity>
+              )}
+            </View>
             <TouchableOpacity style={st.logoutBtn} onPress={async () => {
               await logout();
               setSettingsOpen(false);
@@ -249,6 +300,13 @@ const st = StyleSheet.create({
   modalTitle: { color: '#f0c840', fontSize: 16, fontWeight: '900', flex: 1 },
   modalLine: { color: '#c0a0f0', fontSize: 13, marginBottom: 8 },
   modalHint: { color: '#807050', fontSize: 12, marginTop: 4 },
+  settingsRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  settingsBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(40,32,64,.6)',
+    borderWidth: 1, borderColor: '#2a2040', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8,
+  },
+  settingsBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
+  settingsBtnTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '800' },
   logoutBtn: {
     marginTop: 12, backgroundColor: 'rgba(224,48,32,.2)', borderWidth: 2, borderColor: '#a03020',
     borderRadius: 10, paddingVertical: 12, alignItems: 'center',

@@ -45,6 +45,30 @@ export async function loadLastPosition(): Promise<void> {
   try { lastPosition = JSON.parse(raw); } catch {}
 }
 
+export interface HeadingSettings { interpolation: boolean; sampleMs: number; renderHz: number; }
+const DEFAULT_HEADING_SETTINGS: HeadingSettings = { interpolation: true, sampleMs: 250, renderHz: 12 };
+let headingSettings: HeadingSettings = { ...DEFAULT_HEADING_SETTINGS };
+
+/** Compass smoothing prefs (see useTelemetry's setHeadingInterpolation/
+ *  setHeadingSampleIntervalMs/setHeadingRenderRateHz) — a device-level
+ *  performance tradeoff, not a per-match setting, so it lives on the start
+ *  screen and persists across matches/restarts instead of GameScreen's own
+ *  in-match popup. */
+export function getHeadingSettings(): HeadingSettings { return headingSettings; }
+
+export async function saveHeadingSettings(patch: Partial<HeadingSettings>): Promise<void> {
+  headingSettings = { ...headingSettings, ...patch };
+  await AsyncStorage.setItem('heading_settings', JSON.stringify(headingSettings)).catch(() => {});
+}
+
+/** Independent of restoreSession, same as loadLastPosition — call once at
+ *  boot before GameScreen can mount. */
+export async function loadHeadingSettings(): Promise<void> {
+  const raw = await AsyncStorage.getItem('heading_settings').catch(() => null);
+  if (!raw) return;
+  try { headingSettings = { ...DEFAULT_HEADING_SETTINGS, ...JSON.parse(raw) }; } catch {}
+}
+
 // 'ok' — refreshed successfully. 'rejected' — the SERVER actually responded
 // and said the refresh token is dead (expired/invalid); the session really
 // is over. 'network_error' — never got a response at all (timeout, no
@@ -197,7 +221,25 @@ export async function loginAccount(email: string, password: string): Promise<Use
 
 /** Try restoring a previous session from storage. */
 export async function restoreSession(): Promise<User | null> {
-  const [[, tok], [, rtok], [, userJson]] = await AsyncStorage.multiGet(['access_token', 'refresh_token', 'user']);
+  // Reported: still occasionally getting bounced to the login screen with a
+  // perfectly good account. One further gap beyond the network_error-vs-
+  // rejected fix below: this whole function used to be able to THROW (a
+  // bad AsyncStorage read, or JSON.parse on a corrupted `user` blob — e.g.
+  // the app got killed mid-write) — App.tsx's caller only has a blanket
+  // `.catch(() => setRoute({ name: 'login' }))` around this, so ANY
+  // unexpected throw here forced a login screen exactly like a genuinely
+  // dead session would, even though the refresh_token itself (the only
+  // thing that actually matters) was never touched and may still be
+  // perfectly valid. Wrapped so a local read/parse hiccup can never look
+  // like proof of a dead session — only an explicit server-side rejection
+  // (below) may ever clear the stored tokens.
+  let tok: string | null, rtok: string | null, userJson: string | null;
+  try {
+    const got = await AsyncStorage.multiGet(['access_token', 'refresh_token', 'user']);
+    tok = got[0][1]; rtok = got[1][1]; userJson = got[2][1];
+  } catch {
+    return null;
+  }
   // Only refresh_token + user are actually load-bearing — access_token is
   // explicitly short-lived (15 min) and gets refreshed right below anyway.
   // Requiring it to be present here was wrong: reported symptom was "closed
@@ -209,10 +251,22 @@ export async function restoreSession(): Promise<User | null> {
   // refresh (startProactiveRefresh fires every 10 min regardless of
   // foreground state).
   if (!rtok || !userJson) return null;
+  let parsedUser: User;
+  try {
+    parsedUser = JSON.parse(userJson);
+  } catch {
+    // Corrupted local cache of the display-only user object — the
+    // refresh_token is a separate value and untouched by this, but without
+    // a /me-style endpoint to re-fetch the profile there's nothing to show
+    // until the next real login. Bail out WITHOUT clearing storage (unlike
+    // the 'rejected' branch below) — a real login will simply overwrite
+    // this same key with fresh, valid JSON next time.
+    return null;
+  }
   accessToken = tok || null;
   refreshToken = rtok;
-  currentUser = JSON.parse(userJson);
-  const r = await tryRefresh();
+  currentUser = parsedUser;
+  const r = await tryRefresh().catch((): RefreshResult => 'network_error');
   // The server explicitly rejected the refresh token — this session really
   // is dead, clear it now so the caller correctly shows the login screen.
   // A 'network_error' (cold-start connectivity not up yet, timeout) must

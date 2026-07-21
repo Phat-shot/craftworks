@@ -209,6 +209,24 @@ export default function LobbyScreen({
   // path for all platforms was the safer call. Revisit only with real
   // hardware in hand to actually iterate against.
   const WATCHDOG_MS = 30_000;
+  // Reported: GPS in the Lobby worked instantly the very first time
+  // (permission dialog just granted), then never again on later lobby
+  // visits. Root cause: the watchPositionAsync subscription this function
+  // starts was NEVER torn down if the component unmounted while a fix was
+  // still pending (leave the lobby, back out, create/join a different one
+  // before the up-to-24s window elapsed) — the old `useEffect(() => {
+  // loadMyPosition(); }, [])` had no cleanup at all. That leaked native
+  // location listener keeps running forever; a SECOND LobbyScreen mount
+  // then starts its OWN watchPositionAsync on top of it, and Android's
+  // FusedLocationProvider does not reliably serve every concurrent listener
+  // — the newer one can simply never fire. The very first visit is exactly
+  // the one case with no earlier leaked subscription to collide with,
+  // which is why only that one "just worked". posSubRef/mountedRef below
+  // are now reachable from the mount effect's cleanup so an in-flight
+  // subscription (and any pending state updates) actually get cancelled on
+  // unmount instead of leaking.
+  const posSubRef = useRef<Location.LocationSubscription | null>(null);
+  const mountedRef = useRef(true);
   const loadMyPosition = async () => {
     setMyPosLoading(true);
     setMyPosErr(false);
@@ -217,13 +235,14 @@ export default function LobbyScreen({
 
     const gen = ++loadGenRef.current;
     const watchdog = setTimeout(() => {
-      if (loadGenRef.current !== gen) return; // superseded by a newer attempt
+      if (loadGenRef.current !== gen || !mountedRef.current) return; // superseded, or unmounted
       setMyPosErr(true);
       setMyPosLoading(false);
     }, WATCHDOG_MS);
 
     try {
       const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
+      if (!mountedRef.current) return;
       if (!perm || perm.status !== 'granted') {
         // A perm object that came back but says !granted is a REAL denial
         // (as opposed to the request itself timing out/throwing) — that
@@ -238,40 +257,53 @@ export default function LobbyScreen({
       // we have is the (possibly much older) locally-persisted last fix —
       // a fresher OS-cached fix is worth preferring over that.
       Location.getLastKnownPositionAsync().then(cached => {
-        if (cached) setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
+        if (!mountedRef.current || !cached) return;
+        setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
       }).catch(() => {});
 
       let settled = false;
-      // Plain object holder (not a bare `let`) — TS otherwise over-narrows a
-      // closure-captured `let` reassigned only inside callbacks.
-      const subHolder: { current: Location.LocationSubscription | null } = { current: null };
+      posSubRef.current?.remove();
       Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 }, pos => {
         if (settled) return;
         settled = true;
+        posSubRef.current?.remove();
+        posSubRef.current = null;
+        if (!mountedRef.current) return;
         setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
         setMyPosStale(false);
         setMyPosLoading(false);
         saveLastPosition(pos.coords.latitude, pos.coords.longitude);
-        subHolder.current?.remove();
-      }).then(s => { subHolder.current = s; if (settled) s.remove(); }).catch(() => {});
+      }).then(s => {
+        if (settled || !mountedRef.current) { s.remove(); return; }
+        posSubRef.current = s;
+      }).catch(() => {});
 
       const WINDOW_MS = 8000;
       const WINDOWS = 3;
-      for (let i = 0; i < WINDOWS && !settled; i++) {
+      for (let i = 0; i < WINDOWS && !settled && mountedRef.current; i++) {
         setMyPosAttempt(i);
         await new Promise(r => setTimeout(r, WINDOW_MS));
       }
-      subHolder.current?.remove();
+      if (!mountedRef.current) return;
+      posSubRef.current?.remove();
+      posSubRef.current = null;
       if (!settled) { setMyPosErr(true); setMyPosLoading(false); }
     } catch {
-      setMyPosErr(true);
-      setMyPosLoading(false);
+      if (mountedRef.current) { setMyPosErr(true); setMyPosLoading(false); }
     } finally {
       clearTimeout(watchdog);
     }
   };
 
-  useEffect(() => { loadMyPosition(); }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    loadMyPosition();
+    return () => {
+      mountedRef.current = false;
+      posSubRef.current?.remove();
+      posSubRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     const socket = getSocket();

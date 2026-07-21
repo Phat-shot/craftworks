@@ -5,7 +5,7 @@ import {
   destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg, haversineMeters, bearingDeg, angleDeltaDeg,
 } from '@craftworks/arops-shared';
 import { useKeepAwake } from 'expo-keep-awake';
-import { getSocket, getUser } from '../api';
+import { getSocket, getUser, getHeadingSettings } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { useWatchSync } from '../hooks/useWatchSync';
 import CameraLayer from '../components/CameraLayer';
@@ -196,21 +196,26 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   // to the top-middle point as the perk approaches ready, rather than to
   // one arbitrary corner.
   const halfFrac = (i: number): `${number}%` => `${Math.max(0, Math.min(1, p * 3 - i)) * 100}%`;
-  const glow = {
-    backgroundColor: color, borderRadius: 2, opacity: pulse,
-    shadowColor: color, shadowOpacity: 0.9, shadowRadius: 5,
-    shadowOffset: { width: 0, height: 0 }, elevation: 6,
-  };
+  // Plain backgroundColor + the pulsing opacity above IS the "glow" — no
+  // shadow/elevation here anymore. RN shadows are never clipped to the
+  // View's own box, so a thin 3px bar with shadowRadius/elevation painted a
+  // soft halo well past its actual rectangle — harmless on the short side
+  // segments, but the top segments are lit for 2/3 of the whole cooldown
+  // (unfurl from center reaches full width at p=1/3, stays full until
+  // p=0), so that halo read as a long, permanently-visible line bursting
+  // past the button's own static border. Segments now sit flush with (not
+  // outside) the button's edge (0 instead of a −2 outward offset) too.
+  const glow = { backgroundColor: color, borderRadius: 2, opacity: pulse };
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       {/* Right half: top-center → top-right corner → down → bottom-center. */}
-      <Animated.View style={[{ position: 'absolute', top: -2, left: '50%', height: 3, width: halfFrac(0) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, right: -2, width: 3, height: halfFrac(1) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: -2, right: 0, height: 3, width: halfFrac(2) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, left: '50%', height: 3, width: halfFrac(0) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: 0, width: 3, height: halfFrac(1) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, height: 3, width: halfFrac(2) }, glow]} />
       {/* Left half, mirrored. */}
-      <Animated.View style={[{ position: 'absolute', top: -2, right: '50%', height: 3, width: halfFrac(0) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, left: -2, width: 3, height: halfFrac(1) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: -2, left: 0, height: 3, width: halfFrac(2) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 3, width: halfFrac(0) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 3, height: halfFrac(1) }, glow]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 3, width: halfFrac(2) }, glow]} />
     </View>
   );
 }
@@ -249,43 +254,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
-  // Compass smoothing controls (see useTelemetry's setHeadingInterpolation/
+  // Compass smoothing (see useTelemetry's setHeadingInterpolation/
   // setHeadingSampleIntervalMs/setHeadingRenderRateHz doc for the full
-  // performance investigation) — exposed here so a weaker device can be
-  // dialed back live during a match instead of needing a rebuild. Two
-  // distinct modes, not three independent knobs: interpolation OFF → only
-  // the polling rate matters (display = polling, 1:1). Interpolation ON →
-  // sensors get eased between polls, and the render rate becomes pickable
-  // anywhere from that same polling rate up to 120Hz.
-  const [headingInterp, setHeadingInterp] = useState(true);
-  const HEADING_RATE_STEPS_MS = [100, 150, 250, 400, 600, 1000];
-  const [headingRateMs, setHeadingRateMs] = useState(250);
-  const HEADING_RENDER_STEPS_HZ = [10, 15, 20, 30, 45, 60, 90, 120];
-  const [headingRenderHz, setHeadingRenderHz] = useState(12);
-  const toggleHeadingInterp = () => {
-    const next = !headingInterp;
-    setHeadingInterp(next);
-    telemetry.setHeadingInterpolation(next);
-  };
-  const cycleHeadingRate = () => {
-    const idx = HEADING_RATE_STEPS_MS.indexOf(headingRateMs);
-    const next = HEADING_RATE_STEPS_MS[(idx + 1) % HEADING_RATE_STEPS_MS.length]!;
-    setHeadingRateMs(next);
-    telemetry.setHeadingSampleIntervalMs(next);
-  };
-  // Only offer render-rate steps that are actually >= the current polling
-  // rate — picking a "render rate" slower than polling would just be polling
-  // again, and the hook clamps it there anyway, but this keeps the button's
-  // own displayed cycle honest about what's actually selectable right now.
-  const cycleHeadingRenderRate = () => {
-    const pollingHz = 1000 / headingRateMs;
-    const steps = HEADING_RENDER_STEPS_HZ.filter(hz => hz >= pollingHz);
-    if (!steps.length) steps.push(120);
-    const idx = steps.indexOf(headingRenderHz);
-    const next = steps[(idx + 1) % steps.length]!;
-    setHeadingRenderHz(next);
-    telemetry.setHeadingRenderRateHz(next);
-  };
+  // performance investigation) is a device-level tradeoff, not a per-match
+  // one — the controls for it now live on the start screen's Einstellungen
+  // (App.tsx, persisted via api.ts's get/saveHeadingSettings) instead of an
+  // in-match popup here. Applied once at mount from whatever was persisted.
+  useEffect(() => {
+    const s = getHeadingSettings();
+    telemetry.setHeadingInterpolation(s.interpolation);
+    telemetry.setHeadingSampleIntervalMs(s.sampleMs);
+    telemetry.setHeadingRenderRateHz(s.renderHz);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Continuously decodes the AR Ops IR-ID beacon (see hardware/esp32-ir)
   // from the camera feed while a camera-showing view is mounted — "beim
   // Schuss und davor" means this has to be running before the shot too, not
@@ -674,21 +655,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // moment the two sensor readings diverge (any non-flat, non-upright hold).
   const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
   activeHeadingDegRef.current = activeHeadingDeg;
-  // The cone/lane polygon's own bearing basis — deliberately NOT always
-  // activeHeadingDeg. Only free2D (comic2d, map never rotates) needs the
-  // shape itself to rotate with the live sensor, since nothing else on
-  // screen shows which way the player is facing there. Every compass-locked
-  // mode (comic3d, and the map portion of split/overlay) already rotates
-  // the WHOLE MAP by activeHeadingDeg — a shape drawn at a fixed, constant
-  // bearing will end up pointing exactly the same way on screen regardless
-  // of what the live heading currently is, since the map's own rotation
-  // does that work. Using a constant here (instead of re-deriving it from
-  // the sensor every tick) means the cone/lane's GeoJSON — and the native
-  // ShapeSource re-upload it triggers — no longer needs to recompute on
-  // every heading tick at all in those modes; it only changes when the
-  // player's own position moves. The map's rotation still tracks the live
-  // sensor exactly as before, so the on-screen result is identical.
-  const coneHeadingBasis = isFree2D ? activeHeadingDeg : 0;
+  // A previous version of this drew the cone at a CONSTANT bearing in every
+  // compass-locked mode, on the theory that the map's own rotation would
+  // carry it to the same on-screen spot regardless — backwards. A map with
+  // camera heading H shows an absolute-bearing-B feature at screen angle
+  // (B − H); that's only ever a constant (pointing "up") when B TRACKS H,
+  // i.e. B = activeHeadingDeg — a fixed B instead drifts by −H as H changes,
+  // which is exactly the "hybrid" cone reported again across comic3d/split/
+  // overlay. There's no way around the cone needing the same live sensor
+  // value as the map's own heading; both must move together — see
+  // coneGeoJSON below, which just uses activeHeadingDeg directly again.
 
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
@@ -716,13 +692,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // the real inCone check above; this is deliberately the simpler, honest-
   // about-the-target-size preview, and previews the fixed-width IR lane too).
   const coneGeoJSON = useMemo(() => {
-    // Uses coneHeadingBasis, not activeHeadingDeg directly — see its own
-    // comment above for why a constant bearing is correct (not stale) in
-    // every compass-locked mode, and only free2D still needs the live
-    // sensor value here.
-    if (!showRange || !telemetry.sample || coneHeadingBasis === null) return null;
+    // Must rotate around the SAME heading basis as the map itself
+    // (activeHeadingDeg — camera-forward while a cam view is showing,
+    // top-edge while it's a pure flat map) every tick, in every mode — see
+    // activeHeadingDeg's and this section's own comments above for why.
+    if (!showRange || !telemetry.sample || activeHeadingDeg === null) return null;
     const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
-    const h = coneHeadingBasis;
+    const h = activeHeadingDeg;
     if (myHitShape === 'cone') {
       const steps = 20;
       const ring: [number, number][] = [[origin.lon, origin.lat]];
@@ -751,7 +727,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       type: 'Feature' as const, properties: {},
       geometry: { type: 'Polygon' as const, coordinates: [ring] },
     };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, coneHeadingBasis, myHitShape,
+  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, activeHeadingDeg, myHitShape,
       effectiveConeHalfAngleDeg, effectiveLaneWidthM, effectiveMaxRangeM]);
 
   // Zones (domination), targets (Zerstören), bases (CTF/Deathmatch) as
@@ -1263,18 +1239,29 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   }, [showRange, telemetry.heading, myHitShape, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
 
   // Every camera-view shot area is a flat 50%-opacity filled region — no
-  // thin "Striche" (the old Bomber marker was literally just a 3px line).
+  // thin "Striche" (the old Bomber marker was literally just a 3px line) —
+  // plus a 75%-opacity frame for definition against the busy camera feed
+  // (the map versions of these shapes deliberately stay borderless, see
+  // coneFill/rangeFill above — this is camera-only).
   const AIM_AREA_OPACITY = 0.5;
+  const AIM_BORDER_OPACITY = 0.75;
 
   // Sniper only — tapering funnel for a fixed-METERS lane (perspective
   // genuinely narrows a constant-meters width as distance grows, so the
-  // converging "gun-sight" look is physically honest here).
+  // converging "gun-sight" look is physically honest here). Frame: only the
+  // LEFT/RIGHT edge of each band gets a border (not top/bottom) — bands sit
+  // flush against each other, so a full border per band would draw a seam
+  // line at every single one of the 40 band boundaries; left/right-only
+  // instead traces just the funnel's own tapering outline. First/last band
+  // additionally close off the near/far edge.
   const laneOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       {laneBands.map((b, i) => (
         <View key={i} style={{
           position: 'absolute', top: `${b.topPct}%`, left: '50%', marginLeft: -b.wPx / 2,
           width: b.wPx, height: `${b.heightPct}%`, backgroundColor: hexToRgba(classAccentColor, AIM_AREA_OPACITY),
+          borderLeftWidth: 1.5, borderRightWidth: 1.5, borderColor: hexToRgba(classAccentColor, AIM_BORDER_OPACITY),
+          borderBottomWidth: i === 0 ? 1.5 : 0, borderTopWidth: i === laneBands.length - 1 ? 1.5 : 0,
         }} />
       ))}
     </View>
@@ -1295,6 +1282,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         position: 'absolute', top: '42%', left: '50%', marginLeft: -coneCameraWidthPx / 2,
         width: coneCameraWidthPx, height: '57%',
         backgroundColor: hexToRgba(classAccentColor, AIM_AREA_OPACITY),
+        borderWidth: 1.5, borderColor: hexToRgba(classAccentColor, AIM_BORDER_OPACITY),
       }} />
     </View>
   );
@@ -1335,6 +1323,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           position: 'absolute', top: `${b.topPct}%`, left: `${b.leftPct}%`,
           width: `${b.widthPct}%`, height: `${b.heightPct}%`,
           backgroundColor: hexToRgba(classAccentColor, b.opacity),
+          borderLeftWidth: 1.5, borderRightWidth: 1.5, borderColor: hexToRgba(classAccentColor, AIM_BORDER_OPACITY),
+          borderBottomWidth: i === 0 ? 1.5 : 0, borderTopWidth: i === omniCameraBands.length - 1 ? 1.5 : 0,
         }} />
       ))}
       <Text style={{
@@ -1698,28 +1688,6 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               </TouchableOpacity>
             )}
           </View>
-          {/* Kompass-Glättung: Interpolation an/aus + Abtastrate (100ms–1s) —
-              siehe useTelemetry's setHeadingInterpolation/
-              setHeadingSampleIntervalMs/setHeadingRenderRateHz. Live
-              umschaltbar für den Feldtest, falls ein Gerät trotz
-              Interpolation noch ruckelt. Aus: nur die Abtastrate zählt
-              (1:1 Anzeige). An: zusätzlich eine Render-Rate zwischen der
-              Abtastrate und 120Hz wählbar. */}
-          <View style={st.modeRow}>
-            <TouchableOpacity
-              style={[st.modeBtn, headingInterp && st.modeBtnActive]}
-              onPress={toggleHeadingInterp}>
-              <Icon name="loop" size={18} color={headingInterp ? '#f0c840' : '#c0a0f0'} />
-            </TouchableOpacity>
-            <TouchableOpacity style={st.rateBtn} onPress={cycleHeadingRate}>
-              <Text style={st.rateBtnTxt}>{headingRateMs}ms</Text>
-            </TouchableOpacity>
-            {headingInterp && (
-              <TouchableOpacity style={st.rateBtn} onPress={cycleHeadingRenderRate}>
-                <Text style={st.rateBtnTxt}>{headingRenderHz}Hz</Text>
-              </TouchableOpacity>
-            )}
-          </View>
         </View>
       )}
 
@@ -1894,12 +1862,6 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
   },
   modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
-  rateBtn: {
-    height: 40, borderRadius: 8, backgroundColor: 'rgba(40,32,64,.6)',
-    borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 10,
-  },
-  rateBtnTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '800' },
   bottomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
   bottomSide: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   bottomCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
