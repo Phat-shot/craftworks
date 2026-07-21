@@ -1285,15 +1285,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // edge as right at the crosshair. Previously reused the same tapering
   // funnel as Sniper, which visually (and incorrectly) implied the shot got
   // narrower/more precise at range, the opposite of what actually widens.
-  // Reported: too wide on a large field — Scout's actual cone angle can grow
-  // past the camera's own FOV constant (CAMERA_FOV_DEG=65°, e.g. it caps at
-  // 90° total on a big enough field, see effectiveHitInfo's wideConeHalfAngleDeg
-  // in arops.js), which the raw angle→px projection below happily renders
-  // WIDER than the screen itself. Capped at 96% of screenW — "wider than the
-  // camera can even show" still reads correctly as "very wide", it just
-  // can't usefully draw past the screen's own edge.
-  const coneCameraWidthPx = Math.min(screenW * 0.96,
-    Math.max(3, (2 * effectiveConeHalfAngleDeg / CAMERA_FOV_DEG) * screenW));
+  // Reported: too wide on a large field, and separately still too wide even
+  // at a normal field size — a literal angle→px projection against the
+  // camera's own FOV (CAMERA_FOV_DEG=65°) is technically the "honest"
+  // width (that's really how much of a 65°-wide view a 34°-wide cone
+  // occupies), but it reads as visually dominating/overwhelming the whole
+  // screen rather than as a focused aim reference. VISUAL_SCALE pulls the
+  // band in regardless of field size — no longer a literal 1:1 FOV
+  // projection, a deliberately narrower stylized band — with a lower
+  // absolute cap (50% of screen width) for whatever's left of the earlier
+  // large-field case (cone angle exceeding the camera's own FOV entirely).
+  const CONE_CAMERA_VISUAL_SCALE = 0.4;
+  const coneCameraWidthPx = Math.min(screenW * 0.5,
+    Math.max(3, (2 * effectiveConeHalfAngleDeg / CAMERA_FOV_DEG) * screenW * CONE_CAMERA_VISUAL_SCALE));
   const coneCameraOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={{
