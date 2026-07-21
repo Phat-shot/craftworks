@@ -1,0 +1,60 @@
+name: Publish Releases README
+# Spiegelt nur die README + aktuellen Release-Infos (Version, Commit, Stand)
+# ins öffentliche Begleit-Repo github.com/Phat-shot/craftworks-releases —
+# die APK-/Docker-Assets selbst bleiben dort, wo sie ohnehin schon liegen
+# (feste Release-Tags apk-android-main/apk-wear-main hier im Hauptrepo,
+# ghcr.io/phat-shot/craftworks:latest), craftworks-releases verlinkt nur
+# darauf. Läuft bei jedem Merge auf main (= Release, siehe apk.yml/
+# docker.yml, die genau diesem Muster schon folgen).
+#
+# Braucht ein Secret RELEASES_REPO_TOKEN in DIESEM Repo (Settings → Secrets
+# and variables → Actions) — der eingebaute GITHUB_TOKEN ist strikt auf das
+# Repo beschränkt, in dem der Workflow läuft, und kann NICHT in ein anderes
+# Repo pushen, auch nicht in eins vom selben Account. Token erzeugen:
+# github.com/settings/personal-access-tokens/new (fine-grained, "Only select
+# repositories" → craftworks-releases, Permission "Contents: Read and
+# write"), dann `gh secret set RELEASES_REPO_TOKEN --repo Phat-shot/craftworks`.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version/Commit/Stand ermitteln
+        id: info
+        run: |
+          VERSION=$(node -p "require('./apps/arops-mobile/app.json').expo.version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "stand=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
+
+      - name: craftworks-releases auschecken
+        uses: actions/checkout@v4
+        with:
+          repository: Phat-shot/craftworks-releases
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          path: releases-repo
+
+      - name: README aktualisieren
+        run: |
+          FILE="releases-repo/README.md"
+          LINE="**Version:** ${{ steps.info.outputs.version }} · **Commit:** \`${{ steps.info.outputs.commit }}\` · **Stand:** ${{ steps.info.outputs.stand }}"
+          awk -v line="$LINE" '
+            /<!-- AUTO-GENERATED:START -->/ { print; print line; skip=1; next }
+            /<!-- AUTO-GENERATED:END -->/ { skip=0 }
+            !skip { print }
+          ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+
+      - name: Push, falls sich was geändert hat
+        working-directory: releases-repo
+        run: |
+          git config user.name "craftworks-bot"
+          git config user.email "actions@github.com"
+          git add README.md
+          git diff --cached --quiet && echo "Nichts geändert." && exit 0
+          git commit -m "Release ${{ steps.info.outputs.version }} (${{ steps.info.outputs.commit }})"
+          git push
