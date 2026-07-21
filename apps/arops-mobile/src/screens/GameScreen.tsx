@@ -1041,6 +1041,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         <Text style={{ color: '#ff6040', fontSize: 15, textAlign: 'center', padding: 24 }}>
           Ohne Standort-Berechtigung kann AR Ops nicht spielen.{'\n'}Bitte in den Einstellungen erlauben.
         </Text>
+        {/* Reported: this could be reached and then never leave, forcing a
+            full app restart, even with permission actually available — this
+            hook's own permission request is independent of whatever the
+            Lobby screen already triggered moments earlier, so a transient
+            hiccup on THIS particular call could land here without it being
+            a real denial. Retry re-asks instead of being a dead end. */}
+        <TouchableOpacity style={st.permRetryBtn} onPress={telemetry.retryPermission}>
+          <Icon name="crosshair" size={16} color="#f0c840" />
+          <Text style={st.permRetryTxt}>Erneut versuchen</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -1275,7 +1285,15 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // edge as right at the crosshair. Previously reused the same tapering
   // funnel as Sniper, which visually (and incorrectly) implied the shot got
   // narrower/more precise at range, the opposite of what actually widens.
-  const coneCameraWidthPx = Math.max(3, (2 * effectiveConeHalfAngleDeg / CAMERA_FOV_DEG) * screenW);
+  // Reported: too wide on a large field — Scout's actual cone angle can grow
+  // past the camera's own FOV constant (CAMERA_FOV_DEG=65°, e.g. it caps at
+  // 90° total on a big enough field, see effectiveHitInfo's wideConeHalfAngleDeg
+  // in arops.js), which the raw angle→px projection below happily renders
+  // WIDER than the screen itself. Capped at 96% of screenW — "wider than the
+  // camera can even show" still reads correctly as "very wide", it just
+  // can't usefully draw past the screen's own edge.
+  const coneCameraWidthPx = Math.min(screenW * 0.96,
+    Math.max(3, (2 * effectiveConeHalfAngleDeg / CAMERA_FOV_DEG) * screenW));
   const coneCameraOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={{
@@ -1769,6 +1787,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 
 const st = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#0a0810' },
+  permRetryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
+    backgroundColor: 'rgba(240,200,64,.15)', borderWidth: 2, borderColor: '#f0c840',
+    borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12,
+  },
+  permRetryTxt: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
   status: {
     paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
     backgroundColor: '#141020',

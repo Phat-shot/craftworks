@@ -33,6 +33,11 @@ export default function Nav() {
     { to: '/workshop',    icon: '🔧', label: 'Workshop'         },
     { to: '/workshop/content', icon: '🔨', label: 'Inhalte' },
     { to: '/brands',           icon: '🏢', label: 'Brands'  },
+    // Only shown for admin accounts — the route itself is reachable either
+    // way (see App.jsx), it just renders a 403 fallback for anyone else, so
+    // hiding the link isn't the actual access control, just declutters the
+    // nav for non-admins.
+    ...(user?.is_admin ? [{ to: '/admin', icon: '🛠️', label: 'Admin' }] : []),
   ];
 
   return (

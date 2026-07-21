@@ -287,6 +287,19 @@ export async function joinLobbyByCode(code: string): Promise<{ lobbyId: string }
   return { lobbyId: data.lobby.id };
 }
 
+export type ActiveGame =
+  | { type: 'none' }
+  | { type: 'game'; sessionId: string; lobbyId: string; gameMode: string }
+  | { type: 'lobby'; lobbyId: string; code: string; isHost: boolean; gameMode: string };
+
+/** Start-menu "Rejoin" support — does this user still have a live game or an
+ *  unstarted lobby worth going back to? See server's GET /lobbies/mine/active
+ *  for why this checks the actually-running worker, not just a DB flag. */
+export async function getActiveGame(): Promise<ActiveGame> {
+  try { return await req('/lobbies/mine/active', undefined, 'GET'); }
+  catch { return { type: 'none' }; }
+}
+
 /** Create an AR Ops lobby (caller becomes host). Returns id + join code. */
 export async function createArLobby(name: string): Promise<{ lobbyId: string; code: string }> {
   const data = await req('/lobbies', {

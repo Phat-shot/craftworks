@@ -7,6 +7,7 @@ import Constants from 'expo-constants';
 import {
   restoreSession, loadLastPosition, createArLobby, getUser, logout,
   loadHeadingSettings, getHeadingSettings, saveHeadingSettings,
+  getActiveGame, ActiveGame,
 } from './src/api';
 import { SERVER_URL, BUILD_TIME, COMMIT_SHA } from './src/config';
 import Icon from './src/components/Icon';
@@ -118,7 +119,32 @@ export default function App() {
 
   const onGameStart = useCallback((sessionId: string) => setRoute({ name: 'game', sessionId }), []);
 
+  // "Rejoin" — does this account still have a live game or an unstarted
+  // lobby to go back to (app restart, connection drop mid-match, etc.)?
+  // Re-checked every time the menu is shown, not just once at boot — the
+  // most common way to land back on the menu is finishing/leaving a match,
+  // which is exactly when this can change.
+  const [activeGame, setActiveGame] = useState<ActiveGame>({ type: 'none' });
+  useEffect(() => {
+    if (route.name !== 'menu') return;
+    getActiveGame().then(setActiveGame);
+  }, [route.name]);
+  const rejoin = () => {
+    if (activeGame.type === 'game') setRoute({ name: 'game', sessionId: activeGame.sessionId });
+    else if (activeGame.type === 'lobby') setRoute({ name: 'lobby', lobbyId: activeGame.lobbyId, isHost: activeGame.isHost, lobbyCode: activeGame.code });
+  };
+
+  // Guards against a double-tap firing two overlapping createArLobby calls
+  // (no loading/disabled state existed on this button before) — each one
+  // creates its own real lobby server-side, and whichever response happens
+  // to resolve LAST silently wins `route`, leaving the other one an orphaned
+  // lobby nobody's looking at — exactly the kind of "which lobby is this
+  // actually" confusion reported. "Hosten" must always yield exactly one
+  // fresh lobby per tap.
+  const [hosting, setHosting] = useState(false);
   const host = async () => {
+    if (hosting) return;
+    setHosting(true);
     setHostErr('');
     try {
       const { lobbyId, code } = await createArLobby(`AR Ops · ${getUser()?.username || 'Host'}`);
@@ -133,6 +159,8 @@ export default function App() {
       }
       setHostErr(e.message === 'network_error' ? 'Server nicht erreichbar — kurz erneut versuchen'
         : (e.message || 'Fehler beim Erstellen'));
+    } finally {
+      setHosting(false);
     }
   };
 
@@ -161,9 +189,22 @@ export default function App() {
             <Text style={st.sub}>Hallo {getUser()?.username}</Text>
             <Icon name="wave" size={14} color="#807050" />
           </View>
-          <TouchableOpacity style={st.hostBtn} onPress={host}>
+          {/* Rejoin — a live game/lobby this account already has, e.g. after
+              an app restart or a connection drop mid-match. Only ever an
+              AR-Ops one (this app doesn't play the other game modes) — the
+              server's own /lobbies/mine/active can technically return any
+              mode. */}
+          {(activeGame.type === 'game' || activeGame.type === 'lobby') && activeGame.gameMode === 'ar_ops' && (
+            <TouchableOpacity style={st.rejoinBtn} onPress={rejoin}>
+              <Icon name="loop" size={16} color="#40e0ff" />
+              <Text style={st.rejoinTxt}>
+                {activeGame.type === 'game' ? 'Zurück ins laufende Spiel' : 'Zurück zur Lobby'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[st.hostBtn, hosting && st.btnDisabled]} onPress={host} disabled={hosting}>
             <Icon name="target" size={16} color="#80ff40" />
-            <Text style={st.hostTxt}>Spiel hosten</Text>
+            <Text style={st.hostTxt}>{hosting ? 'Erstelle Lobby…' : 'Spiel hosten'}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={st.joinBtn} onPress={() => setRoute({ name: 'join' })}>
             <Icon name="link" size={16} color="#e060ff" />
@@ -269,6 +310,13 @@ const st = StyleSheet.create({
   version: { fontSize: 10, color: '#605850', marginBottom: 4 },
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 32 },
   sub: { fontSize: 13, color: '#807050' },
+  rejoinBtn: {
+    width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: 'rgba(40,160,200,.2)', borderWidth: 2, borderColor: '#2088a0',
+    borderRadius: 12, padding: 14, marginBottom: 16,
+  },
+  rejoinTxt: { color: '#40e0ff', fontSize: 15, fontWeight: '800' },
+  btnDisabled: { opacity: 0.5 },
   hostBtn: {
     width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: '#3a8020',

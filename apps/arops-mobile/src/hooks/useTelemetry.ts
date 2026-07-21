@@ -58,6 +58,13 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   retryHeading: () => void;
   /** Manually tear down + recreate the GPS subscription (retry button). */
   retryPosition: () => void;
+  /** Re-requests location permission and (if newly granted) starts GPS +
+   *  compass from scratch — the only way out of `granted === false` besides
+   *  restarting the app, see this effect's own acquirePermissionAndStart
+   *  comment for why that dead-end could be reached even with permission
+   *  actually available (a transient hiccup on THIS hook's own independent
+   *  permission request, not necessarily a real denial). */
+  retryPermission: () => void;
   /**
    * Reported: 3D-mode map rotation "performance schlecht". Diagnosis: the
    * magnetometer/accelerometer themselves aren't the bottleneck — they
@@ -132,6 +139,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   const lastPosAt = useRef(0);
   const posRetries = useRef(0);
   const startPositionRef = useRef<() => Promise<void>>(async () => {});
+  const retryPermissionRef = useRef<() => Promise<void>>(async () => {});
 
   // Permissions + watchers
   useEffect(() => {
@@ -229,18 +237,32 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
       await startPosition();
     };
 
-    (async () => {
+    // Reported: "GPS fixiert im Spiel gar nicht mehr" with no way to recover
+    // short of restarting the app. This whole permission→sensors bootstrap
+    // used to be a bare unnamed IIFE, run exactly once per mount — if
+    // requestForegroundPermissionsAsync ever settled on a non-'granted'
+    // status (a real denial, but also plausibly a transient hiccup: this
+    // runs its OWN independent permission request, redundant with whatever
+    // the Lobby screen already triggered moments earlier, and Android
+    // permission-dialog timing has already caused enough grief elsewhere in
+    // this file to not rule it out here too), `granted` latched to `false`
+    // FOREVER — GameScreen's dead-end screen for that state had no retry
+    // button at all. Pulled out into a named, re-callable function
+    // (acquirePermissionAndStart, exposed as retryPermission) instead of an
+    // anonymous one-shot IIFE so that dead-end screen can now offer an
+    // actual "try again" instead of forcing a full app restart.
+    const acquirePermissionAndStart = async () => {
       // requestForegroundPermissionsAsync has no built-in timeout and can
       // hang indefinitely on some devices (same class of bug fixed in the
       // lobby's own GPS flow, see LobbyScreen.tsx loadMyPosition) — left
       // unguarded, `granted` would stay null forever and this whole effect
       // (including the watchdog below) would never even get set up, with no
       // recovery path at all. A bare timeout->false would be worse: `granted
-      // === false` renders GameScreen's permanent "no permission" dead-end
-      // below with no retry, which would be wrong for a merely slow OS call.
-      // So: keep retrying the request itself (bounded per attempt, unbounded
-      // overall) until it actually settles one way or the other — mirrors
-      // this hook's existing "never permanently give up automatically"
+      // === false` renders GameScreen's "no permission" screen with no
+      // retry, which would be wrong for a merely slow OS call. So: keep
+      // retrying the request itself (bounded per attempt, unbounded overall)
+      // until it actually settles one way or the other — mirrors this
+      // hook's existing "never permanently give up automatically"
       // philosophy for position/heading retries below.
       let status: Location.PermissionStatus | null = null;
       while (!cancelled && status === null) {
@@ -275,6 +297,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
       // manually tap retryPosition/retryHeading; this way the status
       // banners in the UI are purely informational, not something the
       // player has to act on to keep the recovery going).
+      if (watchdog) clearInterval(watchdog); // guard against a double-start if retryPermission is called after already succeeding once
       watchdog = setInterval(() => {
         if (cancelled) return;
         if (Date.now() - lastHeadingAt.current > 4000) {
@@ -286,7 +309,9 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
           startPosition();
         }
       }, 4000);
-    })();
+    };
+    retryPermissionRef.current = acquirePermissionAndStart;
+    acquirePermissionAndStart();
 
     return () => {
       cancelled = true;
@@ -362,6 +387,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     snapshot: () => sampleRef.current ?? buildSample(),
     retryHeading: () => { startHeadingRef.current(); },
     retryPosition: () => { startPositionRef.current(); },
+    retryPermission: () => { retryPermissionRef.current(); },
     setHeadingInterpolation: (v: boolean) => { interpolationEnabledRef.current = v; },
     setHeadingSampleIntervalMs: (ms: number) => { sampleIntervalMsRef.current = Math.max(100, Math.min(1000, ms)); },
     setHeadingRenderRateHz: (hz: number) => { renderTickMsRef.current = 1000 / Math.max(1, hz); },

@@ -3,6 +3,7 @@ const QRCode  = require('qrcode');
 const { nanoid } = require('nanoid');
 const { requireAuth, requireVerified } = require('../middleware/auth');
 const db      = require('../db/pool');
+const gameManager = require('../game/game_manager');
 
 // ══ GROUPS ═══════════════════════════════
 
@@ -152,6 +153,44 @@ lobbiesRouter.post('/join/:code', requireAuth, async (req, res) => {
     [l.id, req.user.id]
   );
   res.json({ ok: true, lobby: l });
+});
+
+// "Rejoin" support (start-menu button): does this user have a game/lobby
+// still worth going back to? Checked in priority order — a genuinely live
+// game session first (gameManager.has(), NOT just the DB's `ended_at IS
+// NULL`, which can drift from what's actually still running — see
+// admin.js's own drift check for why that distinction matters), then a
+// lobby they're still sitting in that hasn't started yet. Deliberately NOT
+// based on lobbies.status alone: that field only ever moves to
+// 'in_progress' on start and is never reset afterward (see lobby:start /
+// finalizeGameFromWorker in socket/game.js), so a truly-finished match's
+// lobby would otherwise look identical to still-active one.
+lobbiesRouter.get('/mine/active', requireAuth, async (req, res) => {
+  const { rows: sessions } = await db.query(
+    `SELECT gs.id, gs.lobby_id, gs.game_mode
+     FROM game_sessions gs JOIN game_players gp ON gp.session_id = gs.id
+     WHERE gp.user_id=$1 AND gs.ended_at IS NULL
+     ORDER BY gs.started_at DESC LIMIT 5`,
+    [req.user.id]
+  );
+  const live = sessions.find(s => gameManager.has(s.id));
+  if (live) {
+    return res.json({ type: 'game', sessionId: live.id, lobbyId: live.lobby_id, gameMode: live.game_mode });
+  }
+  const { rows: lobbies } = await db.query(
+    `SELECT l.id, l.code, l.host_id, l.game_mode
+     FROM lobbies l JOIN lobby_members lm ON lm.lobby_id = l.id
+     WHERE lm.user_id=$1 AND l.status='waiting'
+     ORDER BY l.created_at DESC LIMIT 1`,
+    [req.user.id]
+  );
+  if (lobbies[0]) {
+    return res.json({
+      type: 'lobby', lobbyId: lobbies[0].id, code: lobbies[0].code,
+      isHost: lobbies[0].host_id === req.user.id, gameMode: lobbies[0].game_mode,
+    });
+  }
+  res.json({ type: 'none' });
 });
 
 // QR for lobby

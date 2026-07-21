@@ -102,6 +102,7 @@ const lobbiesRouter   = require('./routes/lobbies-router');
 const gamesRouter     = require('./routes/games');
 const legalRouter     = require('./routes/legal');
 const brandsRouter    = require('./routes/brands');
+const adminRouter     = require('./routes/admin');
 const workshopRouter  = require('./routes/workshop');
 const workshopContentRouter = require('./routes/workshop_content');
 const injectDb = (req, res, next) => { req.db = db; next(); };
@@ -115,6 +116,7 @@ for (const prefix of ['/api', '/api/v1']) {
   app.use(`${prefix}/games`,   gamesRouter);
   app.use(`${prefix}/legal`,   legalRouter);
   app.use(`${prefix}/brands`, injectDb, brandsRouter);
+  app.use(`${prefix}/admin`, adminRouter);
   app.use(`${prefix}/workshop`, injectDb, workshopRouter);
   app.use(`${prefix}/workshop`, injectDb, workshopContentRouter);
   app.get(`${prefix}/health`, (_, res) => {

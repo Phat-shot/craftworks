@@ -14,6 +14,7 @@ import Leaderboard from './pages/Leaderboard';
 import JoinRedirect from './pages/JoinRedirect';
 import Legal    from './pages/Legal';
 import Brands         from './pages/Brands';
+import Admin          from './pages/Admin';
 import MapSelect      from './pages/MapSelect';
 import ChallengePage  from './pages/ChallengePage';
 import ErrorBoundary    from './components/ErrorBoundary';
@@ -120,6 +121,7 @@ export default function App() {
             <Route path="workshop"           element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><Workshop /></Suspense></ErrorBoundary>} />
             <Route path="workshop/content"   element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><WorkshopContent /></Suspense></ErrorBoundary>} />
             <Route path="brands"              element={<Brands />} />
+            <Route path="admin"               element={<Admin />} />
             <Route path="play"                element={<MapSelect />} />
             <Route path="workshop/editor/:id"   element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><MapEditor /></Suspense></ErrorBoundary>} />
             <Route path="workshop/editor"        element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><MapEditor /></Suspense></ErrorBoundary>} />
