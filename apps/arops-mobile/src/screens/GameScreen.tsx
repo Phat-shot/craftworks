@@ -250,12 +250,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const cameraRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
   // Compass smoothing controls (see useTelemetry's setHeadingInterpolation/
-  // setHeadingSampleIntervalMs doc for the full performance investigation) —
-  // exposed here so a weaker device can be dialed back live during a match
-  // instead of needing a rebuild.
+  // setHeadingSampleIntervalMs/setHeadingRenderRateHz doc for the full
+  // performance investigation) — exposed here so a weaker device can be
+  // dialed back live during a match instead of needing a rebuild. Two
+  // distinct modes, not three independent knobs: interpolation OFF → only
+  // the polling rate matters (display = polling, 1:1). Interpolation ON →
+  // sensors get eased between polls, and the render rate becomes pickable
+  // anywhere from that same polling rate up to 120Hz.
   const [headingInterp, setHeadingInterp] = useState(true);
   const HEADING_RATE_STEPS_MS = [100, 150, 250, 400, 600, 1000];
   const [headingRateMs, setHeadingRateMs] = useState(250);
+  const HEADING_RENDER_STEPS_HZ = [10, 15, 20, 30, 45, 60, 90, 120];
+  const [headingRenderHz, setHeadingRenderHz] = useState(12);
   const toggleHeadingInterp = () => {
     const next = !headingInterp;
     setHeadingInterp(next);
@@ -266,6 +272,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     const next = HEADING_RATE_STEPS_MS[(idx + 1) % HEADING_RATE_STEPS_MS.length]!;
     setHeadingRateMs(next);
     telemetry.setHeadingSampleIntervalMs(next);
+  };
+  // Only offer render-rate steps that are actually >= the current polling
+  // rate — picking a "render rate" slower than polling would just be polling
+  // again, and the hook clamps it there anyway, but this keeps the button's
+  // own displayed cycle honest about what's actually selectable right now.
+  const cycleHeadingRenderRate = () => {
+    const pollingHz = 1000 / headingRateMs;
+    const steps = HEADING_RENDER_STEPS_HZ.filter(hz => hz >= pollingHz);
+    if (!steps.length) steps.push(120);
+    const idx = steps.indexOf(headingRenderHz);
+    const next = steps[(idx + 1) % steps.length]!;
+    setHeadingRenderHz(next);
+    telemetry.setHeadingRenderRateHz(next);
   };
   // Continuously decodes the AR Ops IR-ID beacon (see hardware/esp32-ir)
   // from the camera feed while a camera-showing view is mounted — "beim
@@ -655,6 +674,21 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // moment the two sensor readings diverge (any non-flat, non-upright hold).
   const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
   activeHeadingDegRef.current = activeHeadingDeg;
+  // The cone/lane polygon's own bearing basis — deliberately NOT always
+  // activeHeadingDeg. Only free2D (comic2d, map never rotates) needs the
+  // shape itself to rotate with the live sensor, since nothing else on
+  // screen shows which way the player is facing there. Every compass-locked
+  // mode (comic3d, and the map portion of split/overlay) already rotates
+  // the WHOLE MAP by activeHeadingDeg — a shape drawn at a fixed, constant
+  // bearing will end up pointing exactly the same way on screen regardless
+  // of what the live heading currently is, since the map's own rotation
+  // does that work. Using a constant here (instead of re-deriving it from
+  // the sensor every tick) means the cone/lane's GeoJSON — and the native
+  // ShapeSource re-upload it triggers — no longer needs to recompute on
+  // every heading tick at all in those modes; it only changes when the
+  // player's own position moves. The map's rotation still tracks the live
+  // sensor exactly as before, so the on-screen result is identical.
+  const coneHeadingBasis = isFree2D ? activeHeadingDeg : 0;
 
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
@@ -682,14 +716,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // the real inCone check above; this is deliberately the simpler, honest-
   // about-the-target-size preview, and previews the fixed-width IR lane too).
   const coneGeoJSON = useMemo(() => {
-    // Must rotate around the SAME heading basis as the map itself
-    // (activeHeadingDeg — camera-forward while a cam view is showing,
-    // top-edge while it's a pure flat map), not always the camera-forward
-    // sensor — see activeHeadingDeg's comment above for why that mismatch
-    // was the "hybrid" bug in comic3d.
-    if (!showRange || !telemetry.sample || activeHeadingDeg === null) return null;
+    // Uses coneHeadingBasis, not activeHeadingDeg directly — see its own
+    // comment above for why a constant bearing is correct (not stale) in
+    // every compass-locked mode, and only free2D still needs the live
+    // sensor value here.
+    if (!showRange || !telemetry.sample || coneHeadingBasis === null) return null;
     const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
-    const h = activeHeadingDeg;
+    const h = coneHeadingBasis;
     if (myHitShape === 'cone') {
       const steps = 20;
       const ring: [number, number][] = [[origin.lon, origin.lat]];
@@ -718,7 +751,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       type: 'Feature' as const, properties: {},
       geometry: { type: 'Polygon' as const, coordinates: [ring] },
     };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, activeHeadingDeg, myHitShape,
+  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, coneHeadingBasis, myHitShape,
       effectiveConeHalfAngleDeg, effectiveLaneWidthM, effectiveMaxRangeM]);
 
   // Zones (domination), targets (Zerstören), bases (CTF/Deathmatch) as
@@ -1085,17 +1118,28 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           shape for "hit anything within range, any direction". Everyone
           else (cone: Scout/default, lateral: Sniper) gets the directional
           corridor instead — showing both at once (the old, class-blind
-          behavior) was misleading for whichever shape didn't actually apply. */}
+          behavior) was misleading for whichever shape didn't actually apply.
+          Soft 50%-opacity fill, no hard edge (dropped the LineLayer border
+          every shape used to carry) — reads as a translucent zone instead of
+          a harshly outlined shape. The range ring below still marks the
+          overall boundary for every class, this is just the shot AREA. */}
       {myHitShape === 'omni' && rangeGeoJSON && (
         <ShapeSource id="range" shape={rangeGeoJSON}>
-          <FillLayer id="rangeFill" style={{ fillColor: classAccentColor, fillOpacity: 0.05 }} />
-          <LineLayer id="rangeLine" style={{ lineColor: classAccentColor, lineWidth: 1.5, lineDasharray: [2, 2] as any }} />
+          <FillLayer id="rangeFill" style={{ fillColor: classAccentColor, fillOpacity: 0.5 }} />
         </ShapeSource>
       )}
       {myHitShape !== 'omni' && coneGeoJSON && (
         <ShapeSource id="hitcone" shape={coneGeoJSON}>
-          <FillLayer id="coneFill" style={{ fillColor: classAccentColor, fillOpacity: 0.16 }} />
-          <LineLayer id="coneLine" style={{ lineColor: classAccentColor, lineWidth: 1.5 }} />
+          <FillLayer id="coneFill" style={{ fillColor: classAccentColor, fillOpacity: 0.5 }} />
+        </ShapeSource>
+      )}
+      {/* Range ring — every class, not just Bomber: a thin dashed outline at
+          the full max-range circle, regardless of the class's actual
+          directional shape. Gives a quick "how far could I possibly reach in
+          any direction" reference even for Scout/Sniper's narrower cone/lane. */}
+      {rangeGeoJSON && (
+        <ShapeSource id="rangeRing" shape={rangeGeoJSON}>
+          <LineLayer id="rangeRingLine" style={{ lineColor: classAccentColor, lineWidth: 1.5, lineOpacity: 0.6, lineDasharray: [2, 2] as any }} />
         </ShapeSource>
       )}
       {hitboxGeoJSON.features.length > 0 && (
@@ -1218,6 +1262,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     return out;
   }, [showRange, telemetry.heading, myHitShape, screenW, effectiveMaxRangeM, effectiveLaneWidthM]);
 
+  // Every camera-view shot area is a flat 50%-opacity filled region — no
+  // thin "Striche" (the old Bomber marker was literally just a 3px line).
+  const AIM_AREA_OPACITY = 0.5;
+
   // Sniper only — tapering funnel for a fixed-METERS lane (perspective
   // genuinely narrows a constant-meters width as distance grows, so the
   // converging "gun-sight" look is physically honest here).
@@ -1226,7 +1274,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       {laneBands.map((b, i) => (
         <View key={i} style={{
           position: 'absolute', top: `${b.topPct}%`, left: '50%', marginLeft: -b.wPx / 2,
-          width: b.wPx, height: `${b.heightPct}%`, backgroundColor: hexToRgba(classAccentColor, 0.35 * OVERLAY_OPACITY * 2),
+          width: b.wPx, height: `${b.heightPct}%`, backgroundColor: hexToRgba(classAccentColor, AIM_AREA_OPACITY),
         }} />
       ))}
     </View>
@@ -1246,25 +1294,51 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       <View style={{
         position: 'absolute', top: '42%', left: '50%', marginLeft: -coneCameraWidthPx / 2,
         width: coneCameraWidthPx, height: '57%',
-        backgroundColor: hexToRgba(classAccentColor, 0.35 * OVERLAY_OPACITY * 2),
+        backgroundColor: hexToRgba(classAccentColor, AIM_AREA_OPACITY),
       }} />
     </View>
   );
 
   // Bomber (omni) — no aim direction at all, so the converging "gun-sight"
-  // funnel above (laneOverlay) is actively misleading for this class: it
-  // implies you need to point at something. A horizontal marker through the
-  // middle instead — "anything within this radius, any direction" — doesn't
+  // funnel above is actively misleading for this class: it implies you need
+  // to point at something. Used to be a single flat 3px line ("keine
+  // Zielrichtung nötig"); replaced with an actual filled AREA shaped like a
+  // shallow dome/curve (widest and brightest in the center, tapering toward
+  // the screen edges — evokes the horizon of an all-around radius rather
+  // than a straight bar) with an extra brighter band layered along its near
+  // (bottom/foreground) edge — the "highlighted foreground" strip. Doesn't
   // depend on telemetry.heading at all, matching that Bomber doesn't need a
   // compass fix to shoot (see canShoot's class exception server-side).
+  const OMNI_BANDS = 28;
+  const omniCameraBands = useMemo(() => {
+    const yTopPct = 40, yBotPct = 92;
+    const out: { topPct: number; heightPct: number; leftPct: number; widthPct: number; opacity: number }[] = [];
+    for (let i = 0; i < OMNI_BANDS; i++) {
+      const t0 = i / OMNI_BANDS, t1 = (i + 1) / OMNI_BANDS, tMid = (t0 + t1) / 2;
+      const curve = Math.sin(tMid * Math.PI); // 0 at the edges, 1 dead center — the dome silhouette
+      const nearness = 1 - tMid; // 1 at the near/bottom (foreground) edge, 0 at the top
+      const widthPct = 8 + curve * 84;
+      const pct0 = yBotPct - t0 * (yBotPct - yTopPct);
+      const pct1 = yBotPct - t1 * (yBotPct - yTopPct);
+      out.push({
+        topPct: pct1, heightPct: pct0 - pct1 + 0.3,
+        leftPct: (100 - widthPct) / 2, widthPct,
+        opacity: AIM_AREA_OPACITY * (0.35 + curve * 0.25 + nearness * 0.4),
+      });
+    }
+    return out;
+  }, []); // pure static geometry — color/opacity tinting happens at render time below
   const radiusArcOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <View style={{
-        position: 'absolute', top: '55%', left: '6%', right: '6%', height: 3, borderRadius: 2,
-        backgroundColor: hexToRgba(classAccentColor, 0.6 * OVERLAY_OPACITY),
-      }} />
+      {omniCameraBands.map((b, i) => (
+        <View key={i} style={{
+          position: 'absolute', top: `${b.topPct}%`, left: `${b.leftPct}%`,
+          width: `${b.widthPct}%`, height: `${b.heightPct}%`,
+          backgroundColor: hexToRgba(classAccentColor, b.opacity),
+        }} />
+      ))}
       <Text style={{
-        position: 'absolute', top: '57%', left: 0, right: 0, textAlign: 'center',
+        position: 'absolute', top: '32%', left: 0, right: 0, textAlign: 'center',
         color: '#fff', fontSize: 11, fontWeight: '800',
       }}>
         Radius {Math.round(effectiveMaxRangeM)}m — keine Zielrichtung nötig
@@ -1626,8 +1700,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           </View>
           {/* Kompass-Glättung: Interpolation an/aus + Abtastrate (100ms–1s) —
               siehe useTelemetry's setHeadingInterpolation/
-              setHeadingSampleIntervalMs. Live umschaltbar für den Feldtest,
-              falls ein Gerät trotz Interpolation noch ruckelt. */}
+              setHeadingSampleIntervalMs/setHeadingRenderRateHz. Live
+              umschaltbar für den Feldtest, falls ein Gerät trotz
+              Interpolation noch ruckelt. Aus: nur die Abtastrate zählt
+              (1:1 Anzeige). An: zusätzlich eine Render-Rate zwischen der
+              Abtastrate und 120Hz wählbar. */}
           <View style={st.modeRow}>
             <TouchableOpacity
               style={[st.modeBtn, headingInterp && st.modeBtnActive]}
@@ -1637,6 +1714,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             <TouchableOpacity style={st.rateBtn} onPress={cycleHeadingRate}>
               <Text style={st.rateBtnTxt}>{headingRateMs}ms</Text>
             </TouchableOpacity>
+            {headingInterp && (
+              <TouchableOpacity style={st.rateBtn} onPress={cycleHeadingRenderRate}>
+                <Text style={st.rateBtnTxt}>{headingRenderHz}Hz</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       )}

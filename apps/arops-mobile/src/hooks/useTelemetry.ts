@@ -80,6 +80,9 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
    */
   setHeadingInterpolation: (enabled: boolean) => void;
   setHeadingSampleIntervalMs: (ms: number) => void;
+  /** Only meaningful while interpolation is on — see the ticker effect's own
+   *  comment for how this gets clamped against the polling rate/120Hz. */
+  setHeadingRenderRateHz: (hz: number) => void;
 } {
   const [granted, setGranted] = useState<boolean | null>(null);
   const [sample, setSample] = useState<TelemetrySample | null>(null);
@@ -88,11 +91,18 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   const lastHeadingEmit = useRef(0);
   const [geofence, setGeofence] = useState<TelemetryState['geofence']>(null);
 
-  // Real-sample throttle (adjustable 100ms–1s, default 250ms = "max 4/sec")
-  // and the interpolation on/off switch — both settable at runtime from
-  // GameScreen's view popup without tearing down/restarting the sensors.
+  // Real-sample throttle (adjustable 100ms–1s, default 250ms = "max 4/sec"),
+  // the interpolation on/off switch, and (only meaningful while interpolating)
+  // how often the eased value actually gets re-rendered — all 3 settable at
+  // runtime from GameScreen's view popup without tearing down/restarting the
+  // sensors. Interpolation OFF: display = polling rate, 1:1, nothing else to
+  // pick. Interpolation ON: polling rate still caps how often REAL sensor
+  // data is consumed, but the render rate can run anywhere from that same
+  // rate up to 120Hz — the ticker below clamps to that range itself, so
+  // GameScreen never has to reconcile the two by hand.
   const sampleIntervalMsRef = useRef(250);
   const interpolationEnabledRef = useRef(true);
+  const renderTickMsRef = useRef(80); // ~12Hz default
   // Latest ACCEPTED real sample (post-throttle) — the interpolation ticker
   // eases the displayed heading toward this every tick; when interpolation
   // is off, this doubles as the direct display value (same as before).
@@ -288,20 +298,20 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   }, [enabled]);
 
   // Interpolation ticker — eases `heading`/`topEdgeHeadingDeg` toward the
-  // latest real (throttled) sample every ~80ms (~12Hz) instead of snapping
-  // directly whenever a new sample arrives. Deliberately its own fixed,
-  // moderate rate rather than a full display refresh rate (60fps+): what's
-  // actually expensive here isn't this loop itself (a couple of lerps) but
-  // everything downstream in GameScreen that keys off `heading` — the cone/
-  // hitbox GeoJSON recompute and the native MapLibre layer updates it
-  // triggers — so this only buys back visual smoothness up to a rate that
-  // stays cheap for that, not all the way to native frame rate.
+  // latest real (throttled) sample instead of snapping directly whenever a
+  // new sample arrives. Render rate is adjustable (renderTickMsRef, set via
+  // setHeadingRenderRateHz) but always clamped between the current polling
+  // interval (rendering FASTER than that just re-displays the same target
+  // repeatedly — no benefit) and ~8.3ms (120Hz, matching a high-refresh-rate
+  // display) — GameScreen only ever picks a target Hz, this is what
+  // actually turns it into a safe interval every tick, in case the polling
+  // rate changes later and would otherwise leave a stale, now-too-fast
+  // render rate in place.
   useEffect(() => {
     if (!enabled) return;
     let raf: number;
     let cancelled = false;
     let lastTick = 0;
-    const TICK_MS = 80;
     const SMOOTH = 0.35; // fraction of the remaining gap closed per tick
     const loop = () => {
       if (cancelled) return;
@@ -310,7 +320,8 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
       const target = targetHeadingRef.current;
       if (!target) return;
       const now = Date.now();
-      if (now - lastTick < TICK_MS) return;
+      const tickMs = Math.min(sampleIntervalMsRef.current, Math.max(1000 / 120, renderTickMsRef.current));
+      if (now - lastTick < tickMs) return;
       lastTick = now;
       const from = displayedHeadingRef.current ?? target;
       // Null (phone held in the orientation where this particular heading
@@ -353,5 +364,6 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     retryPosition: () => { startPositionRef.current(); },
     setHeadingInterpolation: (v: boolean) => { interpolationEnabledRef.current = v; },
     setHeadingSampleIntervalMs: (ms: number) => { sampleIntervalMsRef.current = Math.max(100, Math.min(1000, ms)); },
+    setHeadingRenderRateHz: (hz: number) => { renderTickMsRef.current = 1000 / Math.max(1, hz); },
   };
 }
