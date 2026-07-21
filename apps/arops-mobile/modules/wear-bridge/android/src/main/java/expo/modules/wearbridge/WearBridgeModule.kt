@@ -34,6 +34,28 @@ class WearBridgeModule : Module() {
       }
     }
 
+    // putClaim's DataItem write below "succeeds" purely locally even with
+    // zero connected nodes (Play Services just buffers it for whenever a
+    // node eventually connects, which may be never) — that alone is not
+    // proof the watch is actually reachable. Exposed separately so the JS
+    // side (useWatchSync.claim) can tell "wrote locally" apart from
+    // "there's an actual watch on the other end", instead of reporting a
+    // pairing success that silently never reaches the watch.
+    //
+    // Explicitly-typed local (see EspBridgeModule.kt's connectBody/
+    // disconnectBody for the same pattern): a bare zero-arg `{ ... }` lambda
+    // passed straight to the Coroutine infix is a genuine overload-
+    // resolution-ambiguity compile error (AsyncFunctionBuilder.Coroutine has
+    // 9 overloads, 0 through 8 params, and a parameter-less lambda matches
+    // all of them at once).
+    val hasConnectedNodeBody: suspend () -> Boolean = {
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      withContext(Dispatchers.IO) {
+        Tasks.await(Wearable.getNodeClient(context).connectedNodes).isNotEmpty()
+      }
+    }
+    AsyncFunction("hasConnectedNode") Coroutine hasConnectedNodeBody
+
     // Pairing confirmation as a persistent DataItem, not just a one-off
     // MessageClient push — the watch can be in a short-lived, Activity-less
     // process exactly when the message arrives (Wear OS kills backgrounded

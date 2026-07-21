@@ -81,12 +81,29 @@ cd apps/arops-mobile && npm run sync-shared
   langsamer): fester Tag pro Branch, `apk-android-test`/`apk-android-main`
   unter github.com/phat-shot/craftworks/releases, wird bei jedem Build
   überschrieben statt neue Releases anzuhäufen. Wear-OS-Companion analog über
-  "Wear OS APK Build" (`apps/arops-wear/`) unter `apk-wear-test`/`apk-wear-main`
-- **Versionsschema**: `apps/arops-mobile/app.json` `"version"` ist die Quelle für den
-  APK-Dateinamen (`ar-ops-android-beta-v<Version>.apk`, Wear-Pendant
-  `ar-ops-wear-beta-v<Version>.apk` aus `apps/arops-wear/app/build.gradle.kts`
-  `versionName`). Jedes Release (Merge auf main) **+1**, jeder Bugfix auf test
-  **+0.1** — von Hand vor dem Build hochzählen, beide Apps zusammen
+  "Wear OS APK Build" (`apps/arops-wear/`) unter `apk-wear-test`/`apk-wear-main`.
+  **APK-Dateiname ist bewusst FEST, nicht versioniert**: `ar-ops-android.apk`/
+  `ar-ops-android-beta.apk`, Wear-Pendant `ar-ops-wear.apk`/
+  `ar-ops-wear-beta.apk` — ein Name im Dateinamen enthaltener Versions-Bump
+  hätte `gh release upload --clobber` sonst nur exakt denselben alten
+  Dateinamen ersetzen lassen, jeder neue Versionsstand wäre als
+  zusätzliches Asset auf derselben Release liegengeblieben statt sie zu
+  ersetzen — mit fixem Namen ersetzt jeder Build zuverlässig genau die eine
+  Datei pro Branch, es gibt immer nur den neuesten Stand
+- **Versionsschema**: `apps/arops-mobile/app.json` `"version"` (Wear-Pendant
+  `apps/arops-wear/app/build.gradle.kts` `versionName`, muss identisch
+  mitgezogen werden) ist reine In-App-Anzeige (Startmenü/Einstellungen bzw.
+  Pairing-/Debug-Screen der Uhr) — **nicht** mehr Teil des APK-Dateinamens
+  (s.o.). Jedes Release (Merge auf main) **+1**, jeder Bugfix auf test
+  **+0.1** — von Hand vor dem Build hochzählen, beide Apps zusammen.
+  Zusätzlich wird bei jedem Build automatisch die Kurz-Commit-SHA
+  eingebettet (`COMMIT_SHA` in beiden APK-Workflows, Plattform analog aus
+  `server/src/VERSION`) und ebenfalls in der App angezeigt — die
+  verlässlichere Angabe, da sie nie von Hand gepflegt werden muss und nicht
+  drifted. Beide Apps bekommen auf test zusätzlich App-Channel-
+  Differenzierung (applicationId + Label mit "Beta"-Suffix, bei der
+  Handy-App zusätzlich Icon-Badge), damit main- und test-Build gleichzeitig
+  auf demselben Gerät installiert sein können
 
 ## Architektur-Invarianten (nicht brechen)
 

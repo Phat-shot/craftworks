@@ -5,17 +5,24 @@ const { nanoid }= require('nanoid');
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const nodemailer= require('nodemailer');
-const { db }    = require('../index');
+const db        = require('../db/pool');
 const crypto    = require('crypto');
 
 const authLimiter = rateLimit({ windowMs: 15*60_000, max: 20 });
 
-// Mail transport
+// Mail transport. Short explicit timeouts (nodemailer's own defaults are ~2
+// minutes) — SMTP isn't working yet in this deployment, and without these
+// a misconfigured/unreachable host would hang the register request for that
+// long before falling through to the auto-verify path below, making
+// registration look broken instead of just skipping email as intended.
 const mailer = nodemailer.createTransport({
   host:   process.env.SMTP_HOST,
   port:   +process.env.SMTP_PORT || 587,
   secure: process.env.SMTP_SECURE === 'true',
   auth:   { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  connectionTimeout: 5_000,
+  greetingTimeout: 5_000,
+  socketTimeout: 5_000,
 });
 
 // Guest accounts are created fresh on every guest login (never reused), so

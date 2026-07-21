@@ -5,7 +5,7 @@ const path     = require('path');
 const fs       = require('fs');
 const crypto   = require('crypto');
 const QRCode   = require('qrcode');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -60,8 +60,8 @@ router.get('/', requireAuth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: 'db_error' }); }
 });
 
-// POST /api/brands (admin-only for now: hardcode or check is_admin flag)
-router.post('/', requireAuth, async (req, res) => {
+// POST /api/brands — platform-admin only (users.is_admin)
+router.post('/', requireAuth, requireAdmin, async (req, res) => {
   const { name, slug, primary_color='#3060c0', secondary_color='#e0a020',
     website_url, contact_email } = req.body;
   if (!name?.trim() || !slug?.trim()) return res.status(400).json({ error: 'missing_fields' });

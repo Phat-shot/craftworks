@@ -32,7 +32,7 @@ export interface HitAttempt {
     /** Best matching target sample (server picks nearest-in-time from its buffer). */
     target: TelemetrySample;
 }
-export type HitFailReason = 'no_heading' | 'time_skew' | 'out_of_range' | 'outside_cone' | 'low_confidence';
+export type HitFailReason = 'no_heading' | 'time_skew' | 'out_of_range' | 'outside_cone' | 'outside_lateral' | 'low_confidence';
 export interface HitVerdict {
     hit: boolean;
     reason: HitFailReason | null;

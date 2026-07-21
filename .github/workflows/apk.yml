@@ -7,6 +7,24 @@ name: APK Build
 # (main = arops.srz.one, test = dev.srz.one). Baut lokal in der CI per
 # Gradle statt in der EAS-Cloud — kein EAS-Kontingent, kein EXPO_TOKEN-Secret.
 #
+# Branch bestimmt außerdem APP_CHANNEL (main/test, siehe app.config.js):
+# Name ("AR Ops" / "AR Ops Beta"), Android-Package (one.srz.arops /
+# one.srz.arops.beta) und Icon (mit/ohne BETA-Ribbon, auch im App-Drawer)
+# unterscheiden sich, damit beide gleichzeitig auf demselben Gerät
+# installiert sein können, statt sich beim Sideload gegenseitig zu
+# überschreiben. APK-Dateiname ist bewusst FEST (main: ar-ops-android.apk,
+# test: ar-ops-android-beta.apk) statt versioniert — eine Versionsnummer im
+# Dateinamen bedeutet, dass `gh release upload --clobber` unten nur exakt
+# denselben Dateinamen ersetzt; jeder Versions-Bump hätte einen NEUEN
+# Dateinamen erzeugt und wäre dem alten Asset auf derselben Release einfach
+# hinzugefügt worden statt es zu ersetzen — mit der Zeit sammeln sich so
+# mehrere veraltete APKs auf ein und derselben Release an, und es ist nicht
+# mehr eindeutig, welche davon die aktuelle ist. Mit festem Namen ersetzt
+# jeder Build zuverlässig genau die eine Datei, die schon da ist — immer nur
+# der neueste Stand pro Branch. BUILD_TIME + COMMIT_SHA werden weiterhin
+# gesetzt und in der App unter Einstellungen angezeigt (App.tsx), um trotzdem
+# eindeutig zu identifizieren, welcher Commit gerade läuft.
+#
 # assembleRelease, nicht assembleDebug: ein Debug-Build erwartet einen
 # laufenden Metro-Dev-Server und fragt beim Start nach dessen URL ("Unable
 # to load script", wenn man dort z.B. eine normale Webseiten-URL einträgt —
@@ -18,7 +36,8 @@ name: APK Build
 #
 # Versionsschema (siehe CLAUDE.md): jedes Release (Merge auf main) +1, jeder
 # Bugfix auf test +0.1 — app.json "version" ist die einzige Quelle dafür,
-# vor jedem Push von Hand hochzählen.
+# vor jedem Push von Hand hochzählen. Rein informativ (In-App-Anzeige), seit
+# COMMIT_SHA oben nicht mehr Grundlage für den APK-Dateinamen.
 on:
   push:
     branches: [main, test]
@@ -70,13 +89,17 @@ jobs:
         working-directory: apps/arops-mobile
         run: npm install --no-audit --no-fund
 
-      - name: Backend-Endpoint für den Branch setzen
+      - name: Backend-Endpoint + App-Channel für den Branch setzen
         run: |
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             echo "SERVER_URL=https://arops.srz.one" >> "$GITHUB_ENV"
+            echo "APP_CHANNEL=main" >> "$GITHUB_ENV"
           else
             echo "SERVER_URL=https://dev.srz.one" >> "$GITHUB_ENV"
+            echo "APP_CHANNEL=test" >> "$GITHUB_ENV"
           fi
+          echo "BUILD_TIME=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "$GITHUB_ENV"
+          echo "COMMIT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Expo prebuild (generiert das native android/-Projekt)
         working-directory: apps/arops-mobile
@@ -92,11 +115,14 @@ jobs:
         working-directory: apps/arops-mobile/android
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: APK umbenennen (ar-ops-android-beta-v<Version>.apk)
+      - name: "APK umbenennen (main: ar-ops-android.apk, test: ar-ops-android-beta.apk)"
         working-directory: apps/arops-mobile
         run: |
-          VERSION=$(node -p "require('./app.json').expo.version")
-          FILENAME="ar-ops-android-beta-v${VERSION}.apk"
+          if [ "$APP_CHANNEL" = "main" ]; then
+            FILENAME="ar-ops-android.apk"
+          else
+            FILENAME="ar-ops-android-beta.apk"
+          fi
           mv android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/$FILENAME"
           echo "APK_FILENAME=$FILENAME" >> "$GITHUB_ENV"
 

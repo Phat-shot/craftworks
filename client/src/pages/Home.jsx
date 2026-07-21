@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../App';
 import { api } from '../api';
 import Avatar from '../components/Avatar';
+import { useServerVersion } from '../hooks/useServerVersion';
 
 const BUILTIN_FALLBACK = [
   { id:'builtin_td_default', title:'Grünes Tal',   icon:'🌿', game_mode:'td',          difficulty:'normal', description:'Klassische TD-Karte' },
@@ -34,6 +35,7 @@ export function Home() {
   const { user } = useAuth();
   const { t }    = useTranslation();
   const navigate = useNavigate();
+  const version  = useServerVersion();
   const [maps, setMaps]       = useState(BUILTIN_FALLBACK);
   const [lobbies, setLobbies] = useState([]);
   const [search, setSearch]   = useState('');
@@ -191,7 +193,7 @@ export function Home() {
           <button className="btn btn-ghost btn-sm" onClick={()=>navigate('/friends')}>👥</button>
           <button className="btn btn-ghost btn-sm" onClick={()=>navigate('/leaderboard')}>🏆</button>
         </div>
-        <div style={{ textAlign:'right', color:'var(--text3)', fontSize:9, marginBottom:16 }}>v{__APP_VERSION__}</div>
+        {version && <div style={{ textAlign:'right', color:'var(--text3)', fontSize:9, marginBottom:16 }}>v{version}</div>}
 
         {error && <div className="alert alert-error" style={{ marginBottom:12 }}>{error}</div>}
 

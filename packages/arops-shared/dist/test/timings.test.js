@@ -56,20 +56,28 @@ const REF_AREA_M2 = 224 * 224; // matches scaleCoreConfig's internal REF_L_M
     strict_1.default.ok(b.gameDurationMs >= a.gameDurationMs);
     strict_1.default.ok(b.hitRangeM >= a.hitRangeM);
 });
-(0, node_test_1.test)('scaleCoreConfig: cooldowns shrink (never grow past the reference) as the field grows', () => {
+(0, node_test_1.test)('scaleCoreConfig: cooldowns track match duration (grow with a longer match, never past the old fixed reference)', () => {
     const ref = (0, timings_1.scaleCoreConfig)(REF_AREA_M2);
-    const bigger = (0, timings_1.scaleCoreConfig)(REF_AREA_M2 * 25); // 5x the reference length
-    strict_1.default.ok(bigger.radarCooldownMs <= ref.radarCooldownMs);
-    strict_1.default.ok(bigger.droneCooldownMs <= ref.droneCooldownMs);
-    strict_1.default.ok(bigger.cloakCooldownMs <= ref.cloakCooldownMs);
-    // Never below the 15s floor even for an enormous field.
-    const huge = (0, timings_1.scaleCoreConfig)(1000000000);
-    strict_1.default.ok(huge.radarCooldownMs >= 15000);
-    strict_1.default.ok(huge.aufscheuchenCooldownMs >= 15000);
-});
-(0, node_test_1.test)('scaleCoreConfig: a smaller-than-reference field never exceeds the reference cooldown', () => {
+    const bigger = (0, timings_1.scaleCoreConfig)(REF_AREA_M2 * 25); // 5x the reference length -> longer match
+    strict_1.default.ok(bigger.gameDurationMs >= ref.gameDurationMs);
+    strict_1.default.ok(bigger.radarCooldownMs >= ref.radarCooldownMs);
+    strict_1.default.ok(bigger.droneCooldownMs >= ref.droneCooldownMs);
+    strict_1.default.ok(bigger.cloakCooldownMs >= ref.cloakCooldownMs);
+    // Never below the 15s floor even for a tiny, short match.
     const tiny = (0, timings_1.scaleCoreConfig)(2000);
-    strict_1.default.ok(tiny.droneCooldownMs <= 60000);
+    strict_1.default.ok(tiny.radarCooldownMs >= 15000);
+    strict_1.default.ok(tiny.aufscheuchenCooldownMs >= 15000);
+    // Never past the old fixed reference ceiling even for a huge field/long match.
+    const huge = (0, timings_1.scaleCoreConfig)(1000000000);
+    strict_1.default.ok(huge.radarCooldownMs <= 15 * 60000);
+    strict_1.default.ok(huge.cloakCooldownMs <= 90000);
+    strict_1.default.ok(huge.revealTrapCooldownMs <= 60000);
+});
+(0, node_test_1.test)('scaleCoreConfig: a short match never gets a cooldown longer than the match itself', () => {
+    const tiny = (0, timings_1.scaleCoreConfig)(2000); // lower-clamped short match (gameDurationMs=300_000)
+    strict_1.default.ok(tiny.radarCooldownMs < tiny.gameDurationMs);
+    strict_1.default.ok(tiny.droneCooldownMs < tiny.gameDurationMs);
+    strict_1.default.ok(tiny.revealTrapCooldownMs < tiny.gameDurationMs);
 });
 (0, node_test_1.test)('scaleCoreConfig: hitHalfWidthM matches the "Normal" manual preset at the reference field size', () => {
     const ref = (0, timings_1.scaleCoreConfig)(REF_AREA_M2);

@@ -26,3 +26,13 @@ export async function sendToWatch(path: string, payload: unknown): Promise<boole
 export async function putClaimOnWatch(token: string): Promise<boolean> {
   return NativeWearBridge.putClaim(token);
 }
+
+/**
+ * Whether Play Services currently sees ANY connected Wear node — distinct
+ * from putClaimOnWatch()'s success, which is a purely local DataItem write
+ * that "succeeds" even with no watch reachable at all. Used to tell a real
+ * pairing from one that only looks successful on the phone.
+ */
+export async function hasConnectedWatch(): Promise<boolean> {
+  return NativeWearBridge.hasConnectedNode();
+}

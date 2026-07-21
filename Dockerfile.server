@@ -1,30 +1,55 @@
 # ── Stage 1: Build React client (Vite) ───────
-FROM node:20-alpine AS client-build
-WORKDIR /client
+FROM node:22-alpine AS client-build
+WORKDIR /app
 
-COPY client/package.json ./
-RUN npm install --silent
+# Same workspace-resolution reasoning as stage 2 below: client now depends
+# on @craftworks/arops-shared (an npm workspace member, not a registry
+# package, see packages/arops-shared/package.json) — an npm install scoped
+# to just client/package.json in isolation would try to fetch it from the
+# public npm registry and fail (404, it's private/unpublished). Installing
+# from the repo root with --workspace=client instead resolves it as a local
+# workspace link. dist/ is committed (see CLAUDE.md), so no separate build
+# step for the shared package is needed here, just copying it in.
+COPY package.json package-lock.json ./
+COPY client/package.json client/package.json
+COPY server/package.json server/package.json
+COPY packages/arops-shared/package.json packages/arops-shared/package.json
+RUN npm install --workspace=client --silent
 
-COPY client/ ./
+COPY client/ client/
+COPY packages/arops-shared/ packages/arops-shared/
 
 ARG VITE_API_URL=""
 ARG VITE_GAME_URL="/td-game.html"
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_GAME_URL=$VITE_GAME_URL
 
+WORKDIR /app/client
 RUN npm run build
 
 # ── Stage 2: Server ───────────────────────────
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 
-COPY server/package.json ./
-RUN npm install --omit=dev --silent
+# packages/arops-shared is an npm workspace member now (root package.json),
+# not a registry package — a plain `npm install` scoped to just
+# server/package.json would try to fetch @craftworks/arops-shared from the
+# public npm registry and fail (404, it's private/unpublished). Installing
+# from the repo root with --workspace=server instead resolves it as a local
+# workspace link. npm needs every member's package.json present to resolve
+# the workspace topology, even though only server's own deps get installed
+# here (client's own dependencies are irrelevant to this stage/image).
+COPY package.json package-lock.json ./
+COPY server/package.json server/package.json
+COPY client/package.json client/package.json
+COPY packages/arops-shared/package.json packages/arops-shared/package.json
+RUN npm install --workspace=server --omit=dev --silent
 
-COPY server/ ./
-COPY packages/ /packages/
-COPY --from=client-build /client/build ./client/build
+COPY server/ server/
+COPY packages/arops-shared/ packages/arops-shared/
+COPY --from=client-build /app/client/build ./server/client/build
 
 ENV NODE_ENV=production
+WORKDIR /app/server
 EXPOSE 4000
 CMD ["node", "src/index.js"]

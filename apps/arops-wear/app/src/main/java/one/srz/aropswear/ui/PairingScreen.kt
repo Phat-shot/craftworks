@@ -1,7 +1,9 @@
 package one.srz.aropswear.ui
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.os.PowerManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -35,7 +38,7 @@ import one.srz.aropswear.model.PairingRepository
  * which swaps this out for RadarScreen once claimed).
  */
 @Composable
-fun PairingScreen() {
+fun PairingScreen(onTapCode: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val token by PairingRepository.token.collectAsState()
@@ -54,6 +57,32 @@ fun PairingScreen() {
         }
     }
 
+    // Confirmed via adb logcat on a real device: the claim genuinely
+    // reaches this watch's Play Services (both the MessageClient push AND
+    // the DataItem sync), but delivery to THIS app fails —
+    // "WearableService: Failed to deliver message... action=/arops/claim"
+    // alongside a binder transaction error (ActivityManager: "sent binder
+    // code 18 ... got error -74"). Root cause: Wear OS freezes this app's
+    // process (see this file's and GameStateListenerService's own
+    // longstanding comments on how aggressively it does this) — a frozen
+    // process can't receive that binder callback OR run the poll loop
+    // above, no matter how correctly either is implemented, since freezing
+    // suspends the entire process. A visibly-open screen does NOT guarantee
+    // the process isn't frozen (ambient/idle transitions can happen while
+    // the last frame is still on screen — very plausible exactly while
+    // aiming the phone's camera to scan, not touching the watch at all).
+    // A partial wake lock, held only for as long as this screen is
+    // actively waiting for a claim, keeps the process unfreezable so
+    // Play Services' already-successful OS-level delivery can actually
+    // reach the app. Time-bounded acquire() as a safety net against ever
+    // draining battery indefinitely if disposal is somehow skipped.
+    DisposableEffect(Unit) {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aropswear:pairing")
+        wakeLock.acquire(5 * 60_000L)
+        onDispose { if (wakeLock.isHeld) wakeLock.release() }
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -62,30 +91,35 @@ fun PairingScreen() {
         Image(
             bitmap = qrBitmap.asImageBitmap(),
             contentDescription = null,
-            // Tap: check RIGHT NOW whether the phone already wrote a claim
-            // for this token (don't just wait for the next 5s poll) — if
-            // one's there, PairingRepository.tryClaim flips `claimed` and
-            // MainActivity swaps to RadarScreen on its own. Only if nothing
-            // was found do we regenerate the token — regenerating
-            // unconditionally on every tap (the old behavior) would have
-            // thrown away a claim the phone already wrote but that this
-            // screen just hadn't picked up yet, making a slow/missed poll
-            // *worse* instead of giving the user a way to recover from it.
+            // Tap: still check RIGHT NOW whether the phone already wrote a
+            // claim for this token (don't just wait for the next 5s poll —
+            // if one's there, PairingRepository.tryClaim flips `claimed` and
+            // MainActivity's own claimed-effect swaps to the LIVE
+            // RadarScreen). But the tap's main, immediate job is now a debug
+            // preview: jump to RadarScreen right away regardless of whether
+            // a claim was found, showing either live data (if one was) or
+            // the screen's own empty/no-data fallback — lets you check the
+            // watch's own compass/radar rendering without needing a real
+            // phone pairing first. Long-press on RadarScreen still gets you
+            // back here (see ui/RadarScreen.kt).
             modifier = Modifier.size(170.dp).clickable {
-                scope.launch {
-                    val claimed = PairingRepository.checkClaimViaDataLayer(context)
-                    if (!claimed) PairingRepository.regenerateToken()
-                }
+                scope.launch { PairingRepository.checkClaimViaDataLayer(context) }
+                onTapCode()
             },
         )
         Text(
-            text = "Scannen · Tippen = prüfen/neu",
+            text = "Mit dem Handy scannen zum Koppeln",
             color = ComicPalette.gold,
             style = MaterialTheme.typography.caption2,
             modifier = Modifier.padding(top = 4.dp),
         )
         Text(
-            text = "v${BuildConfig.VERSION_NAME}",
+            text = "(Tippen hier = Vorschau ohne Kopplung)",
+            color = ComicPalette.gold.copy(alpha = 0.55f),
+            style = MaterialTheme.typography.caption3,
+        )
+        Text(
+            text = "v${BuildConfig.VERSION_NAME} · ${BuildConfig.COMMIT_SHA}",
             color = ComicPalette.gold.copy(alpha = 0.45f),
             style = MaterialTheme.typography.caption3,
         )

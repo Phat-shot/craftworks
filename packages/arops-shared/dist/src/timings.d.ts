@@ -23,6 +23,16 @@ export interface ModeTimings {
     defuseDwellMs: number;
     /** S&D: time from plant to detonation. */
     bombTimerMs: number;
+    /** Scout's Reveal-Trap perk: radius within which an opponent triggers the
+     *  trap and gets revealed to its owner. Field-size-scaled like every other
+     *  spatial value here — a hardcoded constant would silently misbehave on
+     *  field sizes other than whatever it was tuned against. */
+    revealTrapRadiusM: number;
+    /** Base/respawn checkpoint (any mode with team bases): continuous dwell
+     *  time inside one's own base needed to spawn in — either catching up
+     *  after missing the phase-1-end muster, or the phase-2-start revive
+     *  window. Same field-size-scaling rationale as every other dwell here. */
+    spawnCheckDwellMs: number;
 }
 /** Compute all mode timings from the playfield area. */
 export declare function scaleTimings(areaM2: number): ModeTimings;
@@ -41,6 +51,9 @@ export interface CoreScaledConfig {
     cloakCooldownMs: number;
     fakeMarkerCooldownMs: number;
     aufscheuchenCooldownMs: number;
+    /** Scout class perk (any mode) — previously not auto-scaled at all (stuck
+     *  at the fixed DEFAULTS value regardless of field/match size). */
+    revealTrapCooldownMs: number;
 }
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
@@ -71,3 +84,4 @@ export interface ZoneValidationResult {
  * ≥ 1.5x combined radii (no overlapping trivial multi-caps).
  */
 export declare function validateZones(zones: Zone[], polygon: LatLon[], maxZones?: number): ZoneValidationResult;
+export declare function generateRandomZones(polygon: LatLon[], count: number, minSeparationM: number, radiusM: number, maxAttemptsPerZone?: number): Zone[];

@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">AR Ops Radar</string>
+    <!-- app_name is generated per-channel via resValue in build.gradle.kts
+         (main: "AR Ops Radar", test: "AR Ops Radar Beta") — not defined
+         statically here, that would collide with the generated resource. -->
 </resources>

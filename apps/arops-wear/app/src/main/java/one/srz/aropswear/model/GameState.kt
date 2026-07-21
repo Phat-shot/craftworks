@@ -32,6 +32,10 @@ data class GameState(
     val contacts: List<RadarContact> = emptyList(),
     val comicFeatures: List<ComicFeature> = emptyList(),
     val hasComicMap: Boolean = false,
+    // Stamped by GameStateRepository.update, not by callers — 0L means "no
+    // push has ever been received" (used by ui/DebugScreen.kt's connection
+    // info to show "no data yet" vs. "last data Xs ago").
+    val updatedAtMs: Long = 0L,
 )
 
 /**
@@ -45,6 +49,6 @@ object GameStateRepository {
     val state = _state.asStateFlow()
 
     fun update(newState: GameState) {
-        _state.value = newState
+        _state.value = newState.copy(updatedAtMs = System.currentTimeMillis())
     }
 }

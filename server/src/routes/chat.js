@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { requireAuth } = require('../middleware/auth');
-const { db } = require('../index');
+const db = require('../db/pool');
 
 // ── DM HISTORY ───────────────────────────
 router.get('/dm/:userId', requireAuth, async (req, res) => {

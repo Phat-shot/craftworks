@@ -4,6 +4,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../App';
 import { api } from '../api';
+import { useServerVersion } from '../hooks/useServerVersion';
 
 export default function Login() {
   const { t, i18n } = useTranslation();
@@ -45,10 +46,7 @@ export default function Login() {
     } finally { setLoading(false); }
   };
 
-  const [version, setVersion] = React.useState('');
-  React.useEffect(() => {
-    fetch('/api/health').then(r=>r.json()).then(d=>setVersion(d.version||'')).catch(()=>{});
-  }, []);
+  const version = useServerVersion();
 
   return (
     <div className="auth-page">

@@ -45,6 +45,7 @@ export type HitFailReason =
   | 'time_skew'         // samples too far apart in time
   | 'out_of_range'      // target beyond max range
   | 'outside_cone'      // target not within the aiming cone
+  | 'outside_lateral'   // target beyond the fixed lateral tolerance (Sniper hitscan model, see hit.ts validateHitLateral)
   | 'low_confidence';   // passed geometry but combined score below threshold
 
 export interface HitVerdict {

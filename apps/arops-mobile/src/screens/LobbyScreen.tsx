@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
-import { getSocket, getUser, fetchLobbyQr } from '../api';
+import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
-import { polygonAreaM2, scaleCoreConfig } from '@craftworks/arops-shared';
+import { polygonAreaM2, scaleCoreConfig, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
@@ -35,12 +35,28 @@ interface ArSettings {
   cloakCooldownMs?: number;
   fakeMarkerCooldownMs?: number;
   aufscheuchenCooldownMs?: number;
-  foundMode?: 'spectator' | 'seeker';
+  foundMode?: 'spectator' | 'seeker' | 'freeze';
+  // Hide & Seek variant: 'classic' (default, seeker/hider), 'ffa' (Jeder
+  // gegen jeden — no roles/teams) or 'the_ship' (secret assassin-chain, no
+  // roles) — see server's MODES.hide_and_seek.
+  hsVariant?: 'classic' | 'ffa' | 'the_ship';
+  // Team/FFA variant for the 4 team-capable modes (domination, ctf,
+  // seek_destroy, deathmatch) — see server's cfg.teamVariant in arops.js.
+  teamVariant?: 'team' | 'ffa';
+  // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
+  destroyVariant?: 'instant' | 'defuse';
+  destroyReactivate?: boolean;
+  // Deathmatch: on-hit consequence + lives (respawn variant only).
+  deathmatchOnHit?: 'respawn' | 'freeze';
+  livesPerPlayer?: number;
   bots?: { id: string; username: string }[];
   debugMode?: boolean;
   comicMap?: ComicMap;
   hitTrackingMode?: 'compass' | 'ir';
   irIds?: Record<string, number>;
+  // Player classes (scout/sniper/bomber) — additive to role/team, every
+  // mode, optional (unset = classless, unchanged combat stats).
+  classes?: Record<string, 'scout' | 'sniper' | 'bomber'>;
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
   autoScale?: boolean;
 }
@@ -57,25 +73,42 @@ const WIDTH_PRESETS = [
 ];
 const RANGE_PRESETS = [30, 50, 75, 100];
 
+// Short labels — 5 modes need to fit on one line (host screen real estate).
 const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
-  { id: 'hide_and_seek', icon: 'ghost', label: 'Verstecken' },
-  { id: 'domination', icon: 'target', label: 'Herrschaft' },
-  { id: 'ctf', icon: 'flag', label: 'Flagge' },
-  { id: 'seek_destroy', icon: 'bomb', label: 'Sprengen' },
+  { id: 'hide_and_seek', icon: 'ghost', label: 'H&S' },
+  { id: 'domination', icon: 'target', label: 'DOM' },
+  { id: 'ctf', icon: 'flag', label: 'CtF' },
+  { id: 'seek_destroy', icon: 'bomb', label: 'Bomb' },
+  { id: 'deathmatch', icon: 'skull', label: 'DM' },
 ];
 const NEEDS_ZONES: Record<string, number> = { domination: 2, seek_destroy: 1 };
+// Modes with real team assignment — hide_and_seek (all 3 variants: classic,
+// ffa "Jeder gegen jeden", the_ship) has no teams at all (usesTeams: false
+// server-side, see arops.js's MODES table).
+const TEAM_MODES = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
 const POLY_ERR_DE: Record<string, string> = {
   too_few_points: 'Mind. 3 Wegpunkte setzen',
   self_intersecting: 'Fläche überschneidet sich — Punkte der Reihe nach im Kreis setzen',
   area_too_small: 'Fläche zu klein (min. 2.000 m²)',
   area_too_large: 'Fläche zu groß (max. 3 km²)',
 };
+// Was missing several codes the server actually emits on this same 'error'
+// channel (lobby_not_found, server_error, and the generic-lobby ones below)
+// — onError below only ever set startErr for a code present here, so any
+// unmapped code (e.g. an unexpected server_error from a DB hiccup) made
+// tapping "Start" look like it silently did nothing at all.
 const START_ERR: Record<string, string> = {
   ar_invalid_polygon: 'Spielfeld ungültig — siehe Karte',
   ar_need_two_players: 'Mindestens 2 Spieler nötig',
   ar_need_zones: 'Zonen fehlen — Tipp-Modus auf "Zonen" stellen',
   ar_zones_invalid: 'Zonen ungültig (außerhalb / zu nah beieinander)',
   not_host: 'Nur der Host kann starten',
+  lobby_not_found: 'Lobby nicht gefunden — evtl. abgelaufen',
+  server_error: 'Serverfehler — bitte erneut versuchen',
+  not_member: 'Nicht (mehr) Mitglied dieser Lobby',
+  not_in_lobby: 'Nicht in der Lobby',
+  wrong_mode: 'Falscher Modus',
+  ar_update_failed: 'Einstellung konnte nicht gespeichert werden',
 };
 // Applied once when Debug-Mode is switched on — host can still retune via the
 // normal pickers afterward, nothing here is locked in.
@@ -100,9 +133,36 @@ export default function LobbyScreen({
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
-  const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(null);
+  // Seeded from the last real fix persisted locally (see api.ts
+  // saveLastPosition) so the map already centers on roughly the right area
+  // on first render, instead of the world-view fallback, while a fresh fix
+  // is still pending — myPosStale marks it as "last known", not live.
+  const lastKnownPos = getLastPosition();
+  const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(
+    lastKnownPos ? { lat: lastKnownPos.lat, lon: lastKnownPos.lon } : null
+  );
+  const [myPosStale, setMyPosStale] = useState(!!lastKnownPos);
+  const myPosStaleRef = useRef(myPosStale);
+  myPosStaleRef.current = myPosStale;
   const [myPosLoading, setMyPosLoading] = useState(false);
   const [myPosErr, setMyPosErr] = useState(false);
+  // Distinct from myPosErr — "permission denied" needs a Settings change
+  // (retrying can never succeed on its own, no matter which OS API is
+  // behind loadMyPosition), whereas a plain myPosErr (fix timed out) might
+  // resolve on the very next retry. Both used to collapse into the same
+  // generic warning icon with no way to tell them apart, which could read
+  // as "GPS is broken" indefinitely when the actual, fixable cause was a
+  // denied permission the whole time.
+  const [myPosPermDenied, setMyPosPermDenied] = useState(false);
+  // Surfaced in the UI while loading — a GPS cold fix can legitimately take
+  // up to ~24s (3 attempts × 8s timeout) outdoors; with nothing but a small
+  // spinner icon to show for it, that reads as "the app is stuck" instead of
+  // "still searching". Attempt count included so long waits stay legible.
+  const [myPosAttempt, setMyPosAttempt] = useState(0);
+  // Generation token for the watchdog below — a stale watchdog from an
+  // earlier loadMyPosition() call (e.g. superseded by a manual retry tap)
+  // must not clear the loading state of a newer, still-in-flight one.
+  const loadGenRef = useRef(0);
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
@@ -110,39 +170,140 @@ export default function LobbyScreen({
 
   // One-shot fetch (not a live watch) — this is just a reference point for
   // drawing the field, not gameplay telemetry, so no need to keep polling.
-  // GPS can be unreliable on first try (cold fix, permission dialog timing) —
-  // getCurrentPositionAsync has no built-in timeout and can hang indefinitely
-  // on some devices/cold fixes, previously leaving myPosLoading stuck true
-  // forever with no way out except tapping retry (which just repeated the
-  // same possibly-hung call). Now: an instant cached fix first if one
-  // exists (so the map has *something* right away), a hard 8s timeout on
-  // the fresh fix, and up to 2 automatic retries before finally falling
-  // back to the manual retry button.
-  const loadMyPosition = async (attempt = 0) => {
+  // GPS can be unreliable on first try (cold fix, permission dialog timing).
+  // Earlier version: recursive getCurrentPositionAsync attempts each wrapped
+  // in withTimeout. Reported symptom: stuck showing "1/3" forever, spinner
+  // never stopping — getCurrentPositionAsync has known hangs on some Android/
+  // expo-location versions where the underlying NATIVE call itself never
+  // settles, and (unconfirmed but plausible) requestForegroundPermissionsAsync
+  // itself was never time-boxed at all, so a hang there before even reaching
+  // the timeout-wrapped call would freeze progress with no way out — not even
+  // the manual retry button, since it's disabled by myPosLoading which would
+  // then never flip back to false.
+  //
+  // Rebuilt so the retry loop's progress depends ONLY on a plain JS timer,
+  // never on any expo-location promise actually settling — it is therefore
+  // structurally impossible for this to hang indefinitely again, regardless
+  // of which native call turns out to be the culprit. watchPositionAsync is
+  // also generally more reliable for acquiring a first fix than one-shot
+  // getCurrentPositionAsync (keeps trying continuously instead of one single
+  // snapshot attempt) — take its first update, then unsubscribe immediately.
+  //
+  // Watchdog on top of that (WATCHDOG_MS, well past the 24s of the internal
+  // loop below): reported "hangs again" after the fix above means some path
+  // through this function can still leave myPosLoading stuck — possibly a
+  // synchronous throw before the loop is even reached. The watchdog and the
+  // surrounding try/catch/finally are a second, independent layer that does
+  // not rely on this function's own internals ever behaving — whatever goes
+  // wrong inside, the lobby can no longer get stuck on "GPS wird gesucht"
+  // forever, only ever fall back to the manual retry button.
+  //
+  // A native (FusedLocationProviderClient) Android module was tried here and
+  // in useTelemetry.ts's startPosition (see git history — "native GPS statt
+  // expo-location") — reverted after real-device testing showed it
+  // measurably WORSE (near a minute to a fix, vs. this) rather than better.
+  // Root cause not fully confirmed (the one-shot getCurrentLocation() call
+  // it used, instead of the continuous-watch-take-first-update strategy
+  // this function already uses, is the leading suspect), but with no device
+  // here to verify a fix, reverting to this known-working expo-location
+  // path for all platforms was the safer call. Revisit only with real
+  // hardware in hand to actually iterate against.
+  const WATCHDOG_MS = 30_000;
+  // Reported: GPS in the Lobby worked instantly the very first time
+  // (permission dialog just granted), then never again on later lobby
+  // visits. Root cause: the watchPositionAsync subscription this function
+  // starts was NEVER torn down if the component unmounted while a fix was
+  // still pending (leave the lobby, back out, create/join a different one
+  // before the up-to-24s window elapsed) — the old `useEffect(() => {
+  // loadMyPosition(); }, [])` had no cleanup at all. That leaked native
+  // location listener keeps running forever; a SECOND LobbyScreen mount
+  // then starts its OWN watchPositionAsync on top of it, and Android's
+  // FusedLocationProvider does not reliably serve every concurrent listener
+  // — the newer one can simply never fire. The very first visit is exactly
+  // the one case with no earlier leaked subscription to collide with,
+  // which is why only that one "just worked". posSubRef/mountedRef below
+  // are now reachable from the mount effect's cleanup so an in-flight
+  // subscription (and any pending state updates) actually get cancelled on
+  // unmount instead of leaking.
+  const posSubRef = useRef<Location.LocationSubscription | null>(null);
+  const mountedRef = useRef(true);
+  const loadMyPosition = async () => {
     setMyPosLoading(true);
     setMyPosErr(false);
-    try {
-      const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== 'granted') { setMyPosErr(true); setMyPosLoading(false); return; }
-      if (attempt === 0) {
-        Location.getLastKnownPositionAsync().then(cached => {
-          if (cached) setMyPos(p => p ?? { lat: cached.coords.latitude, lon: cached.coords.longitude });
-        }).catch(() => {});
-      }
-      const pos = await withTimeout(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }), 8000);
-      setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+    setMyPosPermDenied(false);
+    setMyPosAttempt(0);
+
+    const gen = ++loadGenRef.current;
+    const watchdog = setTimeout(() => {
+      if (loadGenRef.current !== gen || !mountedRef.current) return; // superseded, or unmounted
+      setMyPosErr(true);
       setMyPosLoading(false);
-    } catch {
-      if (attempt < 2) {
-        loadMyPosition(attempt + 1);
-      } else {
+    }, WATCHDOG_MS);
+
+    try {
+      const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
+      if (!mountedRef.current) return;
+      if (!perm || perm.status !== 'granted') {
+        // A perm object that came back but says !granted is a REAL denial
+        // (as opposed to the request itself timing out/throwing) — that
+        // can only ever be fixed in Settings, not by tapping retry again.
+        if (perm) setMyPosPermDenied(true);
         setMyPosErr(true);
         setMyPosLoading(false);
+        return;
       }
+
+      // Fill from the OS's own cache if we don't have anything yet, or all
+      // we have is the (possibly much older) locally-persisted last fix —
+      // a fresher OS-cached fix is worth preferring over that.
+      Location.getLastKnownPositionAsync().then(cached => {
+        if (!mountedRef.current || !cached) return;
+        setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
+      }).catch(() => {});
+
+      let settled = false;
+      posSubRef.current?.remove();
+      Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 }, pos => {
+        if (settled) return;
+        settled = true;
+        posSubRef.current?.remove();
+        posSubRef.current = null;
+        if (!mountedRef.current) return;
+        setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setMyPosStale(false);
+        setMyPosLoading(false);
+        saveLastPosition(pos.coords.latitude, pos.coords.longitude);
+      }).then(s => {
+        if (settled || !mountedRef.current) { s.remove(); return; }
+        posSubRef.current = s;
+      }).catch(() => {});
+
+      const WINDOW_MS = 8000;
+      const WINDOWS = 3;
+      for (let i = 0; i < WINDOWS && !settled && mountedRef.current; i++) {
+        setMyPosAttempt(i);
+        await new Promise(r => setTimeout(r, WINDOW_MS));
+      }
+      if (!mountedRef.current) return;
+      posSubRef.current?.remove();
+      posSubRef.current = null;
+      if (!settled) { setMyPosErr(true); setMyPosLoading(false); }
+    } catch {
+      if (mountedRef.current) { setMyPosErr(true); setMyPosLoading(false); }
+    } finally {
+      clearTimeout(watchdog);
     }
   };
 
-  useEffect(() => { loadMyPosition(); }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    loadMyPosition();
+    return () => {
+      mountedRef.current = false;
+      posSubRef.current?.remove();
+      posSubRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     const socket = getSocket();
@@ -164,7 +325,10 @@ export default function LobbyScreen({
     const onLeft = ({ userId }: any) => setMembers(m => m.filter(x => x.id !== userId));
     const onReady = ({ userId, ready: r }: any) => setMembers(m => m.map(x => x.id === userId ? { ...x, ready: r } : x));
     const onStart = ({ sessionId }: any) => onGameStart(sessionId);
-    const onError = ({ code }: any) => { if (START_ERR[code]) setStartErr(START_ERR[code]!); };
+    // Fallback to the raw code rather than doing nothing for one we haven't
+    // mapped in START_ERR — a silent no-op here is exactly what made a tap
+    // on "Start" look broken with zero feedback (see START_ERR's comment).
+    const onError = ({ code, detail }: any) => setStartErr(START_ERR[code] || detail || `Fehler: ${code}`);
     const onComicMapReady = ({ reqId, comicMap }: any) => {
       if (reqId !== comicMapReqRef.current) return; // superseded by a newer request
       setComicMapLoading(false);
@@ -203,15 +367,49 @@ export default function LobbyScreen({
     };
   }, [lobbyId, isHost, onGameStart]);
 
+  // Debounced: rapidly tapping through several mode/settings buttons in a
+  // row previously fired one full lobby:ar_update round-trip PER TAP —
+  // each one its own DB read (effectiveArSettings) + write + broadcast to
+  // everyone in the lobby. Reported symptom: the app becomes unresponsive
+  // after switching modes a few times in quick succession. Coalescing
+  // bursts into a single emit removes that pile-up regardless of exactly
+  // which part of the round-trip it was overwhelming (client render churn
+  // from rapid-fire lobby:ar_updated broadcasts, or the server/DB side).
+  const pendingPatchRef = useRef<Partial<ArSettings>>({});
+  const emitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (emitTimerRef.current) clearTimeout(emitTimerRef.current); }, []);
   const emitUpdate = (patch: Partial<ArSettings>) => {
-    getSocket().emit('lobby:ar_update', { lobbyId, arSettings: { ...arRef.current, ...patch } });
+    // Apply locally right away — otherwise the UI only reflects a change once
+    // the debounced emit below round-trips through the server, which reads as
+    // "nothing happened" if you tap again in the meantime. Worse, onMapPress
+    // builds its next point list off the `polygon`/`zones` closure variables
+    // (derived from `ar`) — without this, several taps within one debounce
+    // window all read the same stale array and each tap's patch overwrites
+    // the previous one's pending point instead of appending to it.
+    setAr(prev => ({ ...prev, ...patch }));
+    pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
+    if (emitTimerRef.current) clearTimeout(emitTimerRef.current);
+    emitTimerRef.current = setTimeout(() => {
+      const merged = { ...arRef.current, ...pendingPatchRef.current };
+      pendingPatchRef.current = {};
+      emitTimerRef.current = null;
+      getSocket().emit('lobby:ar_update', { lobbyId, arSettings: merged });
+    }, 150);
   };
 
   const polygon = ar.polygon || [];
   const zones = ar.zones || [];
   const subMode = ar.subMode || 'hide_and_seek';
-  const teamMode = subMode !== 'hide_and_seek';
+  const teamMode = TEAM_MODES.includes(subMode);
+  const hsVariant = ['ffa', 'the_ship'].includes(ar.hsVariant || '') ? ar.hsVariant! : 'classic';
+  // ffa/The Ship have no roles at all (not seeker/hider, not team) —
+  // role/team assignment UI only makes sense for the classic variant.
+  const rolesApply = subMode === 'hide_and_seek' && hsVariant === 'classic';
+  const teamVariant = teamMode && ar.teamVariant === 'ffa' ? 'ffa' : 'team';
   const foundMode = ar.foundMode || 'spectator';
+  const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
+  const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
+  const livesPerPlayer = ar.livesPerPlayer || 3;
   const bots = ar.bots || [];
   const debugMode = ar.debugMode || false;
   const hitTrackingMode = ar.hitTrackingMode || 'compass';
@@ -235,9 +433,40 @@ export default function LobbyScreen({
     const next = ((irIdOf(uid) ?? -1) + 1) % 256;
     emitUpdate({ irIds: { ...(ar.irIds || {}), [uid]: next } });
   };
+  // Player classes (scout/sniper/bomber) — additive to role/team. Scout is
+  // now the server-side default for anyone unset (see effectiveArSettings/
+  // createAropsGame in arops.js) — "none" is no longer a real, reachable
+  // state, so this is a true wrap-around cycle now: scout -> sniper ->
+  // bomber -> scout -> … The old none -> scout -> sniper -> bomber -> none
+  // cycle had a real bug once that changed: tapping the row while it
+  // already (correctly) showed the default "Scout" moved AWAY from it to
+  // Sniper, since idx=0 -> next=CLASS_CYCLE[1]='sniper' — reported as
+  // "started as Scout, overlay was still Sniper" is consistent with
+  // exactly that trap.
+  const CLASS_CYCLE = ['scout', 'sniper', 'bomber'] as const;
+  const classOf = (uid: string) => ar.classes?.[uid] ?? 'scout';
+  const cycleClass = (uid: string) => {
+    if (!isHost) return;
+    const idx = CLASS_CYCLE.indexOf(classOf(uid));
+    const next = CLASS_CYCLE[(idx + 1) % CLASS_CYCLE.length];
+    emitUpdate({ classes: { ...(ar.classes || {}), [uid]: next } });
+  };
 
   const onMapPress = (feature: any) => {
     if (!isHost) return;
+    // Placing a point is a strong signal the host is actively looking at the
+    // map right now — a good moment to retry a GPS fix that hasn't resolved
+    // yet (observed: a fix that seemed stuck often just appears shortly
+    // after the host starts tapping the map anyway). Checking myPosStale too
+    // (not just !myPos) matters now that myPos starts pre-seeded from the
+    // persisted last-known position: without it, this retry-on-tap safety
+    // net could never fire again once that seed was in place, even though
+    // it's stale — the exact case a fresh fix is still needed for.
+    // Excluded once myPosPermDenied: a denied permission can't be fixed by
+    // retrying, only by a Settings change — retrying anyway on every single
+    // tap while placing several points in a row was hammering the
+    // permission check for nothing every time (reported as "GPS churns").
+    if ((!myPos || myPosStale) && !myPosLoading && !myPosPermDenied) loadMyPosition();
     const c = feature?.geometry?.coordinates;
     if (!Array.isArray(c)) return;
     if (tapMode === 'zones' && NEEDS_ZONES[subMode] !== undefined) {
@@ -280,7 +509,14 @@ export default function LobbyScreen({
     comicMapReqRef.current = reqId;
     setComicMapLoading(true);
     setComicMapErr('');
-    getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId });
+    // Send the current polygon along, not just lobbyId — the auto-generate
+    // effect below fires the instant local polygon.length hits 3, but the
+    // point(s) that made it happen only reach the server via the
+    // separately-debounced (150ms) emitUpdate/lobby:ar_update, which is
+    // still in flight at this exact moment. Without this, the server's own
+    // DB-read polygon reliably lags behind by a point, misreporting
+    // "no_polygon" (Erst das Spielfeld zeichnen) right after finishing it.
+    getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId, polygon });
   };
 
   // Once the field becomes valid, auto-generate the comic map a single time
@@ -386,6 +622,17 @@ export default function LobbyScreen({
               </TouchableOpacity>
             </>
           )}
+          {/* Non-Host: kein Toggle (das bleibt Host-Sache), aber sichtbare
+              Anzeige sobald debugMode aktiv ist — debug hebt die Fog-of-War
+              für ALLE Spieler auf (Server: getAropsSnapshot überspringt die
+              reveal-Prüfung komplett), das lief bisher unsichtbar für jeden
+              außer dem Host, der es selbst gesetzt hat. Nur sichtbar wenn
+              aktiv (kein totes Icon für den Normalfall). */}
+          {!isHost && debugMode && (
+            <View style={[st.iconBtnLg, st.smallBtnActive]}>
+              <Icon name="bug" size={19} color="#f0c840" />
+            </View>
+          )}
         </View>
         {lobbyCode && (
           <TouchableOpacity
@@ -408,9 +655,136 @@ export default function LobbyScreen({
         <View style={st.modeRowTight}>
           {SUB_MODES.map(m => (
             <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
-              onPress={() => emitUpdate({ subMode: m.id })}>
+              onPress={() => emitUpdate({ subMode: m.id })}
+              onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
               <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
               <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+      {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
+          (ar_settings.hsVariant), keine eigenen Modi — daher ein Umschalter
+          statt weiterer SUB_MODES-Einträge. */}
+      {isHost && subMode === 'hide_and_seek' && (
+        <View style={st.rowBtns}>
+          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'classic' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ hsVariant: 'classic' })}
+            onLongPress={() => Alert.alert('Team', GAME_MODE_PROFILES.hide_and_seek?.shortDescription || '')}>
+            <Icon name="ghost" size={13} color={hsVariant === 'classic' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Team</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'ffa' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ hsVariant: 'ffa' })}
+            onLongPress={() => Alert.alert('Jeder gegen jeden',
+              GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
+            <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, hsVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'the_ship' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ hsVariant: 'the_ship' })}
+            onLongPress={() => Alert.alert('The Ship',
+              GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription || '')}>
+            <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {/* Alle Modus-spezifischen Einstellungen konsistent direkt unter dem
+          Modus-Umschalter, für jeden Modus gleich positioniert (vorher lagen
+          Gefunden/Zerstören/Deathmatch-Einstellungen unter der Karte, nur
+          hsVariant war oben — uneinheitlich). Domination/CTF haben keine
+          echte Variante zum Umschalten, zeigen aber trotzdem eine Zeile in
+          derselben Position — sonst wirkt die Lobby inkonsistent (leere
+          Lücke bei genau diesen beiden Modi, während jeder andere Modus
+          dort etwas zeigt).*/}
+      {/* Team/FFA toggle for the 4 team-capable modes — analogous to Hide &
+          Seek's variant picker above. Zerstören's 'defuse' sub-variant is
+          inherently two-sided (attacker arms / defender defuses) and has no
+          ffa reading, so that picker below hides it while ffa is selected. */}
+      {teamMode && (
+        <View style={st.rowBtns}>
+          <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'team' && st.smallBtnActive]}
+            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'team' })}
+            onLongPress={() => Alert.alert('Team (A vs. B)', 'Zwei feste Seiten treten gegeneinander an.')}>
+            <Icon name="people" size={13} color={teamVariant === 'team' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, teamVariant === 'team' && st.smallTxtActive]}>Team (A vs. B)</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'ffa' && st.smallBtnActive]}
+            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'ffa' })}
+            onLongPress={() => Alert.alert('Jeder gegen jeden',
+              GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
+            <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, teamVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
+          </TouchableOpacity>
+          {(subMode === 'ctf' || subMode === 'deathmatch') && (
+            <Text style={st.smallTxt}>
+              {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
+            </Text>
+          )}
+        </View>
+      )}
+      {isHost && rolesApply && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Gefunden:</Text>
+          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ foundMode: 'spectator' })}>
+            <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ foundMode: 'seeker' })}>
+            <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ foundMode: 'freeze' })}>
+            <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {isHost && subMode === 'seek_destroy' && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Zerstören:</Text>
+          <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ destroyVariant: 'instant' })}>
+            <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch</Text>
+          </TouchableOpacity>
+          {teamVariant === 'team' && (
+            <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
+              onPress={() => emitUpdate({ destroyVariant: 'defuse' })}>
+              <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.smallBtnActive]}
+            onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
+            <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {isHost && subMode === 'deathmatch' && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Treffer:</Text>
+          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'respawn' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ deathmatchOnHit: 'respawn' })}>
+            <Text style={[st.smallTxt, deathmatchOnHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'freeze' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ deathmatchOnHit: 'freeze' })}>
+            <Icon name="snowflake" size={13} color={deathmatchOnHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
+            <Text style={[st.smallTxt, deathmatchOnHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {isHost && subMode === 'deathmatch' && deathmatchOnHit === 'respawn' && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Leben:</Text>
+          {[1, 3, 5].map(n => (
+            <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
+              onPress={() => emitUpdate({ livesPerPlayer: n })}>
+              <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -436,7 +810,8 @@ export default function LobbyScreen({
               geometry: { type: 'Point', coordinates: [myPos.lon, myPos.lat] },
             }}>
               <CircleLayer id="myPosDot" style={{
-                circleRadius: 8, circleColor: '#40a0ff', circleOpacity: 0.85,
+                circleRadius: 8, circleColor: myPosStale ? '#807050' : '#40a0ff',
+                circleOpacity: myPosStale ? 0.5 : 0.85,
                 circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
               }} />
             </ShapeSource>
@@ -458,11 +833,30 @@ export default function LobbyScreen({
             </ShapeSource>
           )}
         </MapView>
-        <TouchableOpacity style={st.locateBtn} onPress={() => loadMyPosition()} disabled={myPosLoading}>
+        <TouchableOpacity
+          style={st.locateBtn}
+          onPress={() => (myPosPermDenied ? Linking.openSettings() : loadMyPosition())}
+          disabled={myPosLoading}
+        >
           {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
             <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
           )}
         </TouchableOpacity>
+        {myPosLoading && (
+          <View style={st.gpsStatusBadge}>
+            <Text style={st.gpsStatusTxt}>GPS wird gesucht… ({myPosAttempt + 1}/3)</Text>
+          </View>
+        )}
+        {!myPosLoading && myPosPermDenied && (
+          <View style={st.gpsStatusBadge}>
+            <Text style={st.gpsStatusTxt}>Standort-Zugriff verweigert — antippen für Einstellungen</Text>
+          </View>
+        )}
+        {!myPosLoading && !myPosPermDenied && myPosStale && (
+          <View style={st.gpsStatusBadge}>
+            <Text style={st.gpsStatusTxt}>Letzte bekannte Position</Text>
+          </View>
+        )}
       </View>
 
       {ar.comicMap && (
@@ -471,10 +865,15 @@ export default function LobbyScreen({
             <Camera defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
             <ComicMapLayers features={ar.comicMap.features} />
           </MapView>
-          {comicMapStale && (
+          {comicMapStale ? (
             <View style={st.comicStaleBadge}>
               <Icon name="warning" size={11} color="#100" />
               <Text style={st.comicStaleTxt}>veraltet</Text>
+            </View>
+          ) : (
+            <View style={[st.comicStaleBadge, st.comicCachedBadge]}>
+              <Icon name="checkCircle" size={11} color="#0a2010" />
+              <Text style={st.comicStaleTxt}>gecached</Text>
             </View>
           )}
         </View>
@@ -519,8 +918,14 @@ export default function LobbyScreen({
             )}
             <TouchableOpacity style={st.iconBtnLg} onPress={generateComicMap}
               disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
+              {/* Reported: once a map already exists, this used to flip
+                  back to the 'palette' (first-generate) icon whenever it
+                  wasn't currently stale — reading as if a second, different
+                  tap was still needed to "really" refresh. Once any map
+                  exists at all, always show the refresh icon; onPress
+                  already regenerates unconditionally either way. */}
               {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={comicMapStale ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
+                <Icon name={ar.comicMap ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
               )}
             </TouchableOpacity>
           </View>
@@ -598,22 +1003,6 @@ export default function LobbyScreen({
               </View>
             </>
           )}
-          {subMode === 'hide_and_seek' && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Gefunden:</Text>
-              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'spectator' })}>
-                <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'seeker' })}>
-                <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
-                <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
           <View style={st.divider} />
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
@@ -626,14 +1015,16 @@ export default function LobbyScreen({
       <View style={st.divider} />
       <View style={st.sectionRow}>
         <Icon name="people" size={13} color="#e0c080" />
-        <Text style={st.section}>Spieler {isHost ? (teamMode ? '(Team antippen)' : '(Rolle antippen)') : ''}</Text>
+        <Text style={st.section}>
+          Spieler {isHost ? ((teamMode && teamVariant === 'team') ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
+        </Text>
       </View>
     </View>
   );
 
   const footer = (
     <View>
-      {me && displayMembers.length > 0 && (
+      {me && displayMembers.length > 0 && ((teamMode && teamVariant === 'team') || rolesApply) && (
         <View style={st.roleRow}>
           <Icon name={teamMode ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
             size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : '#e0c080'} />
@@ -641,6 +1032,18 @@ export default function LobbyScreen({
             {teamMode
               ? `Dein Team: ${teamOf(me.id) === 'a' ? 'A' : 'B'}`
               : `Deine Rolle: ${roleOf(me.id) === 'seeker' ? 'Seeker' : 'Hider'}`}
+          </Text>
+        </View>
+      )}
+      {me && displayMembers.length > 0 && !(teamMode && teamVariant === 'team') && !rolesApply && (
+        <View style={st.roleRow}>
+          <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color="#e0c080" />
+          <Text style={st.role}>
+            {hsVariant === 'the_ship'
+              ? 'Dein Ziel wird nur dir angezeigt, sobald das Spiel startet'
+              : teamMode && teamVariant === 'ffa'
+              ? 'Jeder gegen jeden — jeder spielt für sich, keine Teams'
+              : 'Jeder gegen jeden — keine festen Rollen oder Teams'}
           </Text>
         </View>
       )}
@@ -679,25 +1082,43 @@ export default function LobbyScreen({
           <View style={st.row}>
             {item.isBot && <Icon name="robot" size={13} color="#807050" />}
             <Text style={st.name}>{item.username}</Text>
-            {teamMode ? (
+            {(teamMode && teamVariant === 'team') ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleTeam(item.id)}>
                 <Icon name="circle" size={11} color={teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050'} />
                 <Text style={[st.roleTag, { color: teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050' }]}>
                   {teamOf(item.id) === 'a' ? 'Team A' : 'Team B'}
                 </Text>
               </TouchableOpacity>
-            ) : (
+            ) : rolesApply ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleRole(item.id)}>
                 <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color="#c0a0f0" />
                 <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? 'Seeker' : 'Hider'}</Text>
               </TouchableOpacity>
-            )}
+            ) : null}
             {hitTrackingMode === 'ir' && (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => cycleIrId(item.id)}>
                 <Icon name="flash" size={12} color="#f0c840" />
                 <Text style={st.roleTag}>{irIdOf(item.id) !== undefined ? `IR ${irIdOf(item.id)}` : 'IR –'}</Text>
               </TouchableOpacity>
             )}
+            {/* Klasse (scout/sniper/bomber) — additiv zu Rolle/Team, jeder
+                Modus, optional. Tap zum Durchschalten wie IR-ID oben;
+                Long-Press zeigt die Steckbrief-Kurzbeschreibung (Tooltip-
+                Pattern für Touch-Geräte, siehe AR-Ops-Modi-Plan Phase 7). */}
+            <TouchableOpacity disabled={!isHost} style={st.roleTagRow}
+              onPress={() => cycleClass(item.id)}
+              onLongPress={() => {
+                const cls = classOf(item.id);
+                Alert.alert(
+                  cls ? PLAYER_TYPE_PROFILES[cls].name : 'Keine Klasse',
+                  cls ? PLAYER_TYPE_PROFILES[cls].shortDescription : 'Standard-Schusswerte, kein Klassen-Perk.'
+                );
+              }}>
+              <Icon name="shieldAccount" size={12} color={classOf(item.id) ? '#f0c840' : '#807050'} />
+              <Text style={[st.roleTag, classOf(item.id) && { color: '#f0c840' }]}>
+                {classOf(item.id) ? PLAYER_TYPE_PROFILES[classOf(item.id)!].name : '–'}
+              </Text>
+            </TouchableOpacity>
             <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}
               color={item.ready ? '#80ff40' : '#807050'} style={{ marginLeft: 8 }} />
             {isHost && item.isBot && (
@@ -752,12 +1173,19 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
     alignItems: 'center', justifyContent: 'center',
   },
+  gpsStatusBadge: {
+    position: 'absolute', bottom: 14, left: 10, backgroundColor: 'rgba(20,16,32,.9)',
+    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
+    borderWidth: 1, borderColor: '#40a0ff',
+  },
+  gpsStatusTxt: { color: '#40a0ff', fontSize: 10, fontWeight: '700' },
   comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
   comicStaleBadge: {
     position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
   },
   comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
+  comicCachedBadge: { backgroundColor: '#80e070' },
   rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
   smallBtn: { backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
   smallBtnRow: {

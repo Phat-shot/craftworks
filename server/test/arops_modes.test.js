@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════
 const assert = require('assert');
 const arops = require('../src/game/arops');
-const shared = require('../../packages/arops-shared/dist/src');
+const shared = require('@craftworks/arops-shared');
 
 // These tests predate "Auto" mode (field-size-derived timings/hitConfig, ON
 // by default) and are deliberately about the STABLE, known DEFAULTS/
@@ -205,13 +205,30 @@ console.log('\n═══ CTF ═══');
   check('valid base set; timeout starts live phase', () => {
     const r = arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
     assert.equal(r.ok, true);
+    // Both players in their own base right as base_setup ends — otherwise
+    // the base/respawn checkpoint (applySpawnCheckpoint) marks them
+    // 'downed', and zonePresence excludes non-alive players from every
+    // subsequent flag check below.
+    tel(gs, 'A1', baseA);
+    tel(gs, 'B1', baseB);
     gs.phaseStartTime = Date.now() - 1000; // > 500ms baseSettingMs
     tick(gs, 100);
     assert.equal(gs.phase, 'live');
+    assert.equal(gs.players.A1.status, 'alive', 'A1 was in its own base at the checkpoint');
+    assert.equal(gs.players.B1.status, 'alive', 'B1 was in its own base at the checkpoint');
   });
 
   check('enemy dwell in base steals the flag', () => {
-    tel(gs, 'A1', baseB);         // A1 stands in B's base
+    // A1 walks from its own base to B's base — gradual steps, not a single
+    // jump: A1 now has a real prior position (baseA, set by the checkpoint
+    // above), so a one-sample teleport across the field would get rejected
+    // as implausible movement, same as anywhere else telemetry is fed here.
+    let pos = baseA;
+    const brg = shared.bearingDeg(baseA, baseB);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseB) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
     tick(gs, 200);
     assert.equal(gs.modeState.flags.b.state, 'home', 'not yet');
     tick(gs, 200);
@@ -223,6 +240,39 @@ console.log('\n═══ CTF ═══');
     const snap = arops.getAropsSnapshot(gs, 'B1');
     const a1 = snap.players.find(p => p.userId === 'A1');
     assert.ok(typeof a1.lat === 'number', 'carrier position must be public');
+  });
+
+  check('flag pickup progress is exposed with team attribution while being stolen', () => {
+    const gs2 = createGame('ctf_pickup',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf',
+        timings: { ...FAST, flagPickupDwellMs: 600 }, targetCaptures: 2, gameDurationMs: 600_000 } });
+    const baseA2 = shared.destinationPoint(MUC, 270, 120);
+    const baseB2 = shared.destinationPoint(MUC, 90, 120);
+    arops.actionArSetBase(gs2, 'A1', { lat: baseA2.lat, lon: baseA2.lon });
+    arops.actionArSetBase(gs2, 'B1', { lat: baseB2.lat, lon: baseB2.lon });
+    tel(gs2, 'A1', baseA2);
+    tel(gs2, 'B1', baseB2);
+    gs2.phaseStartTime = Date.now() - 1000;
+    tick(gs2, 100);
+    assert.equal(gs2.phase, 'live');
+
+    // A1 walks into B's base (enemy) to start stealing — gradual steps, same
+    // anti-teleport reasoning as the test above.
+    let pos = baseA2;
+    const brg = shared.bearingDeg(baseA2, baseB2);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseB2) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs2, 'A1', pos);
+    }
+    tick(gs2, 300); // partway through the 600ms dwell
+    const snap = arops.getAropsSnapshot(gs2, 'B1');
+    const flagB = snap.flags.find(f => f.team === 'b');
+    assert.ok(flagB.pickupPct > 0 && flagB.pickupPct < 100, `expected partial progress, got ${flagB.pickupPct}`);
+    assert.equal(flagB.pickupTeam, 'a', "A1 (enemy of team b) is stealing team b's flag");
+    const flagA = snap.flags.find(f => f.team === 'a');
+    assert.equal(flagA.pickupPct, 0);
+    assert.equal(flagA.pickupTeam, null);
   });
 
   check('carrying the flag home captures (own flag home)', () => {
@@ -273,51 +323,601 @@ console.log('\n═══ CTF ═══');
   });
 }
 
+// ═══ BASE/RESPAWN CHECKPOINT ════════════════════════════════
+console.log('\n═══ Base/Respawn Checkpoint (CTF) ═══');
+{
+  const gs = createGame('spawn1',
+    [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+    { ar_settings: { polygon: FIELD, subMode: 'ctf',
+      timings: { ...FAST, spawnCheckDwellMs: 300 }, targetCaptures: 2, gameDurationMs: 600_000 } });
+
+  const baseA = shared.destinationPoint(MUC, 270, 120);
+  const baseB = shared.destinationPoint(MUC, 90, 120);
+  arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
+  arops.actionArSetBase(gs, 'B1', { lat: baseB.lat, lon: baseB.lon });
+
+  check('player NOT in their base when phase 1 ends becomes downed, not removed from the match', () => {
+    // B1 is in its own base; A1 never sent any telemetry at all (no position).
+    tel(gs, 'B1', baseB);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    assert.equal(gs.phase, 'live');
+    assert.equal(gs.players.A1.status, 'downed', 'A1 never confirmed being in its base');
+    assert.equal(gs.players.B1.status, 'alive', 'B1 was in its own base at the checkpoint');
+  });
+
+  check('a downed player cannot shoot or use perks', () => {
+    TS += 1100;
+    const r1 = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA.lat, lon: baseA.lon, ts: TS, accuracyM: 5, headingDeg: 0 },
+    });
+    assert.equal(r1.ok, false);
+    assert.equal(r1.err, 'downed');
+    const r2 = arops.actionArUsePerk(gs, 'A1', { perk: 'radar' });
+    assert.equal(r2.ok, false);
+    assert.equal(r2.err, 'downed');
+  });
+
+  check('a downed player does not count for zone presence (e.g. cannot steal the enemy flag)', () => {
+    // A1 wanders into B1's base while still downed (A1 has no prior
+    // position yet, so start from the field center).
+    let pos = gs.players.A1.lastAccepted || MUC;
+    const brg = shared.bearingDeg(pos, baseB);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseB) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
+    tick(gs, 400);
+    assert.equal(gs.modeState.flags.b.state, 'home', 'downed A1 must not be able to steal the flag');
+  });
+
+  check('late-spawn allowed: dwelling in own base for spawnCheckDwellMs revives the player', () => {
+    // Walk A1 back to its own base.
+    let pos = gs.players.A1.lastAccepted;
+    const brg = shared.bearingDeg(pos, baseA);
+    for (let i = 0; i < 30 && shared.haversineMeters(pos, baseA) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
+    assert.equal(gs.players.A1.status, 'downed', 'not yet — just arrived, hasn\'t dwelled');
+    tick(gs, 350); // > spawnCheckDwellMs (300)
+    assert.equal(gs.players.A1.status, 'alive', 'A1 dwelled in its own base long enough to spawn in');
+    assert.ok(gs.events.some(e => e.type === 'player_spawned' && e.userId === 'A1'));
+  });
+
+  check('leaving the base before the dwell completes resets progress', () => {
+    const gs2 = createGame('spawn2',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf',
+        timings: { ...FAST, spawnCheckDwellMs: 1000 }, targetCaptures: 2, gameDurationMs: 600_000 } });
+    const bA = shared.destinationPoint(MUC, 270, 120);
+    const bB = shared.destinationPoint(MUC, 90, 120);
+    arops.actionArSetBase(gs2, 'A1', { lat: bA.lat, lon: bA.lon });
+    arops.actionArSetBase(gs2, 'B1', { lat: bB.lat, lon: bB.lon });
+    tel(gs2, 'B1', bB);
+    gs2.phaseStartTime = Date.now() - 1000;
+    tick(gs2, 100);
+    assert.equal(gs2.players.A1.status, 'downed');
+
+    tel(gs2, 'A1', bA);
+    tick(gs2, 400); // partial dwell, not yet enough
+    assert.equal(gs2.players.A1.status, 'downed');
+    assert.ok(gs2.players.A1.spawnDwellMs > 0);
+
+    // Step outside the base — progress must reset, not just pause.
+    const outside = shared.destinationPoint(bA, 0, 200);
+    tel(gs2, 'A1', outside);
+    tick(gs2, 100);
+    assert.equal(gs2.players.A1.spawnDwellMs, 0, 'leaving the base resets dwell progress');
+  });
+
+  check('needsSpawn/ownBase are exposed in the snapshot for the downed player themselves', () => {
+    const snap = arops.getAropsSnapshot(gs, 'A1');
+    // A1 is alive again by this point (respawned in the earlier check), so
+    // needsSpawn should be false and ownBase should still be populated.
+    assert.equal(snap.me.needsSpawn, false);
+    assert.ok(snap.me.ownBase && typeof snap.me.ownBase.lat === 'number');
+  });
+}
+
+// ═══ TEAM PING (map tap) ══════════════════════════════════════
+console.log('\n═══ TEAM PING ═══');
+{
+  function setupPing(sessionId, over = {}) {
+    // Explicit team assignment — domination's default alternates by array
+    // index (A1='a', A2='b', ...), which would make A1/A2 opponents instead
+    // of the teammates this test needs.
+    return createGame(sessionId,
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' },
+       { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
+        teams: { A1: 'a', A2: 'a', B1: 'b' },
+        timings: FAST, gameDurationMs: 600_000, pingCooldownMs: 50, ...over } });
+  }
+
+  check('ping is visible to teammates, never to the opposing team', () => {
+    const gs = setupPing('ping_basic');
+    const r = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r.ok, true, JSON.stringify(r));
+
+    const snapMate = arops.getAropsSnapshot(gs, 'A2');
+    assert.equal(snapMate.me.teamPings.length, 1);
+    assert.equal(snapMate.me.teamPings[0].byUserId, 'A1');
+    assert.equal(snapMate.me.teamPings[0].lat, MUC.lat);
+
+    const snapSelf = arops.getAropsSnapshot(gs, 'A1');
+    assert.equal(snapSelf.me.teamPings.length, 1, 'the pinger sees their own ping too (same team)');
+
+    const snapFoe = arops.getAropsSnapshot(gs, 'B1');
+    assert.equal(snapFoe.me.teamPings.length, 0, 'opposing team never receives the ping');
+  });
+
+  check('cooldown blocks a second ping in quick succession', () => {
+    const gs = setupPing('ping_cooldown', { pingCooldownMs: 60_000 });
+    const r1 = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r1.ok, true);
+    const r2 = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r2.ok, false);
+    assert.equal(r2.err, 'cooldown', JSON.stringify(r2));
+  });
+
+  check('missing/invalid lat-lon is rejected', () => {
+    const gs = setupPing('ping_badloc');
+    const r = arops.actionArUsePerk(gs, 'A1', { perk: 'ping' });
+    assert.equal(r.ok, false);
+    assert.equal(r.err, 'bad_location');
+  });
+
+  check('teamless modes (no team) cannot ping — nobody to ping', () => {
+    const gs = createGame('ping_noteam',
+      [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', hsVariant: 'ffa', gameDurationMs: 600_000 } });
+    tick(gs, 10); // ffa has no hiding phase — one tick reaches 'seeking'
+    const r = arops.actionArUsePerk(gs, 'A', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r.ok, false);
+    assert.equal(r.err, 'no_team');
+  });
+
+  check('a ping expires and disappears from the snapshot after pingDurationMs', () => {
+    const gs = setupPing('ping_expiry', { pingDurationMs: 500 });
+    const r = arops.actionArUsePerk(gs, 'A1', { perk: 'ping', lat: MUC.lat, lon: MUC.lon });
+    assert.equal(r.ok, true);
+    assert.equal(arops.getAropsSnapshot(gs, 'A2').me.teamPings.length, 1);
+    gs.teamPings.a[0].expiresAt = Date.now() - 1; // force-expire without a real sleep
+    assert.equal(arops.getAropsSnapshot(gs, 'A2').me.teamPings.length, 0);
+  });
+}
+
+// ═══ DEATHMATCH ═════════════════════════════════════════════
+console.log('\n═══ DEATHMATCH ═══');
+{
+  function setupDeathmatch(sessionId, over = {}) {
+    const gs = createGame(sessionId,
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'deathmatch', gameDurationMs: 600_000,
+        timings: { ...FAST, spawnCheckDwellMs: 300 }, ...over } });
+    const baseA = shared.destinationPoint(MUC, 270, 100);
+    const baseB = shared.destinationPoint(MUC, 90, 100);
+    arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: baseB.lat, lon: baseB.lon });
+    tel(gs, 'A1', baseA);
+    tel(gs, 'B1', baseB);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    return { gs, baseA, baseB };
+  }
+
+  check('starts in base_setup; captain-only (generic bases check, not hardcoded to ctf)', () => {
+    const { gs } = setupDeathmatch('dm_setup');
+    assert.equal(gs.phase, 'live'); // already ticked past setup in the helper
+    assert.equal(gs.players.A1.team, 'a');
+    assert.equal(gs.players.B1.team, 'b');
+  });
+
+  check('respawn variant: hit downs the target and costs a life, does not remove them from the match', () => {
+    const { gs, baseA, baseB } = setupDeathmatch('dm_respawn', { deathmatchOnHit: 'respawn', livesPerPlayer: 2 });
+    let posA = baseA, posB = baseB;
+    const brgA = shared.bearingDeg(baseA, MUC), brgB = shared.bearingDeg(baseB, MUC);
+    for (let i = 0; i < 12; i++) { posA = shared.destinationPoint(posA, brgA, 9); tel(gs, 'A1', posA); }
+    for (let i = 0; i < 12; i++) { posB = shared.destinationPoint(posB, brgB, 9); tel(gs, 'B1', posB); }
+    const heading = shared.bearingDeg(posA, posB);
+    TS += 1100;
+    const r = arops.actionArHitAttempt(gs, 'A1', { sample: { lat: posA.lat, lon: posA.lon, ts: TS, accuracyM: 5, headingDeg: heading } });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'downed');
+    assert.equal(gs.modeState.lives.B1, 1);
+    assert.equal(gs.gameOver, false, 'still has lives left, match continues');
+  });
+
+  check('respawn variant: a downed player revives after dwelling in their own base', () => {
+    const { gs, baseB } = setupDeathmatch('dm_revive', { deathmatchOnHit: 'respawn', livesPerPlayer: 2 });
+    gs.players.B1.status = 'downed';
+    gs.players.B1.spawnDwellMs = 0;
+    tel(gs, 'B1', baseB);
+    tick(gs, 350); // > spawnCheckDwellMs (300)
+    assert.equal(gs.players.B1.status, 'alive');
+  });
+
+  check('respawn variant: 0 lives eliminates the player and ends the match for their team', () => {
+    const { gs, baseA } = setupDeathmatch('dm_elim', { deathmatchOnHit: 'respawn', livesPerPlayer: 1 });
+    const shooterPos = baseA; // A1 is already there (setupDeathmatch's tel), no jump
+    const targetPos = shared.destinationPoint(baseA, 0, 5);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(shooterPos, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: shooterPos.lat, lon: shooterPos.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'found', 'eliminated, out for the rest of the match');
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'team_a');
+  });
+
+  check('freeze variant: hit freezes the target, no life lost, no elimination', () => {
+    const { gs, baseA } = setupDeathmatch('dm_freeze', { deathmatchOnHit: 'freeze', freezeMs: 5000 });
+    const shooterPos = baseA;
+    const targetPos = shared.destinationPoint(baseA, 0, 20);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(shooterPos, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: shooterPos.lat, lon: shooterPos.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'alive');
+    assert.ok(gs.players.B1.frozenUntil > Date.now());
+    assert.deepEqual(gs.modeState.lives, { A1: 3, B1: 3 }, 'freeze variant never touches lives');
+  });
+
+  check('a downed player cannot shoot (reuses the generic status gate)', () => {
+    const { gs, baseA } = setupDeathmatch('dm_downed_gate', { deathmatchOnHit: 'respawn' });
+    gs.players.A1.status = 'downed';
+    TS += 1100;
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA.lat, lon: baseA.lon, ts: TS, accuracyM: 5, headingDeg: 0 },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.err, 'downed');
+  });
+}
+
+// ═══ BATTLE ROYALE ("Jeder gegen jeden", Hide & Seek variant) ══
+console.log('\n═══ BATTLE ROYALE ═══');
+{
+  function setupBR(sessionId, players, over = {}) {
+    const gs = createGame(sessionId, players, { ar_settings: {
+      polygon: FIELD, subMode: 'hide_and_seek', hsVariant: 'ffa',
+      gameDurationMs: 600_000, hitCooldownMs: 50, ...over,
+    } });
+    // 'ffa' has no hiding phase — one tick flips hiding -> seeking regardless
+    // of hidingDurationMs (see MODES.hide_and_seek's tick()).
+    tick(gs, 10);
+    return gs;
+  }
+
+  check('no teams, no roles assigned (unlike Hide & Seek, no seeker/hider concept here)', () => {
+    const gs = setupBR('br_setup', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    assert.equal(gs.players.A.team, null);
+    assert.equal(gs.players.B.team, null);
+  });
+
+  check('everyone is an opponent of everyone — no allies, positions never shared as teammates', () => {
+    const gs = setupBR('br_opp', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' }]);
+    tel(gs, 'A', MUC);
+    tel(gs, 'B', shared.destinationPoint(MUC, 0, 20));
+    tel(gs, 'C', shared.destinationPoint(MUC, 180, 20));
+    const snap = arops.getAropsSnapshot(gs, 'A');
+    const b = snap.players.find(p => p.userId === 'B');
+    const c = snap.players.find(p => p.userId === 'C');
+    assert.equal(typeof b.lat, 'undefined', 'B is an opponent, not revealed by default');
+    assert.equal(typeof c.lat, 'undefined', 'C is an opponent, not revealed by default');
+  });
+
+  check('a hit eliminates permanently (no freeze, no downed) and can end the match when one player remains', () => {
+    const gs = setupBR('br_elim', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' }]);
+    tel(gs, 'A', MUC);
+    tel(gs, 'B', shared.destinationPoint(MUC, 0, 20));
+    tel(gs, 'C', shared.destinationPoint(MUC, 180, 20));
+    TS += 1100;
+    const r1 = arops.actionArHitAttempt(gs, 'A', { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(r1.hit, true, JSON.stringify(r1));
+    assert.equal(gs.players.B.status, 'found');
+    assert.equal(gs.players.B.frozenUntil, 0, 'no freeze — permanent elimination instead');
+    assert.equal(gs.gameOver, false, 'C is still alive');
+
+    sleepMs(60); // clear hitCooldownMs
+    TS += 1100;
+    const r2 = arops.actionArHitAttempt(gs, 'A', { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 180 } });
+    assert.equal(r2.hit, true, JSON.stringify(r2));
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'A', 'last player standing wins by userId');
+  });
+
+  check('time limit: highest score wins, tie is a draw', () => {
+    const gs = setupBR('br_time', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gs.players.A.score = 30;
+    gs.players.B.score = 10;
+    gs.phaseStartTime = Date.now() - 700_000; // > gameDurationMs (600_000)
+    tick(gs, 100);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'A');
+
+    const gsTie = setupBR('br_time_tie', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gsTie.players.A.score = 20;
+    gsTie.players.B.score = 20;
+    gsTie.phaseStartTime = Date.now() - 700_000;
+    tick(gsTie, 100);
+    assert.equal(gsTie.gameOver, true);
+    assert.equal(gsTie.winner, 'draw');
+  });
+
+  check('classic Hide & Seek is unaffected by the ffa variant: roles assigned, hiding phase respected', () => {
+    const gs = createGame('br_regression', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+    ], { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', hidingDurationMs: 100_000, gameDurationMs: 600_000 } });
+    assert.equal(gs.phase, 'hiding');
+    assert.notEqual(gs.players.A.role, undefined);
+    tick(gs, 10);
+    assert.equal(gs.phase, 'hiding', 'classic variant still respects hidingDurationMs, unlike ffa/the_ship');
+  });
+
+  check('solo debug session never auto-ends via checkWin just because "1 player is left"', () => {
+    const gs = setupBR('br_solo', [{ userId: 'A', username: 'A' }], { debugMode: true });
+    tel(gs, 'A', MUC);
+    // No opponents exist to eliminate anyone — checkWin is only ever invoked
+    // from applyHit, so this asserts the guard exists without needing to
+    // contrive an actual self-hit.
+    assert.equal(gs.gameOver, false);
+  });
+}
+
+// ═══ THE SHIP (Hide & Seek variant) ═════════════════════════
+console.log('\n═══ THE SHIP ═══');
+{
+  function setupShip(sessionId, players, over = {}) {
+    const gs = createGame(sessionId, players, { ar_settings: {
+      polygon: FIELD, subMode: 'hide_and_seek', hsVariant: 'the_ship',
+      gameDurationMs: 600_000, hitCooldownMs: 50, ...over,
+    } });
+    // The Ship has no hiding phase — one tick is enough to flip
+    // hiding -> seeking regardless of hidingDurationMs (see MODES.hide_and_seek's
+    // tick()). Tests below attempt hits immediately, which requires the
+    // 'seeking' phase (mode.shootPhases).
+    tick(gs, 10);
+    return gs;
+  }
+
+  check('no teams assigned; every player gets exactly one target, forming a single cycle over the whole roster', () => {
+    const gs = setupShip('ship_setup', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+      { userId: 'C', username: 'C' }, { userId: 'D', username: 'D' },
+    ]);
+    assert.equal(gs.players.A.team, null);
+    const targets = gs.modeState.targets;
+    assert.equal(Object.keys(targets).length, 4);
+    let cur = 'A', seen = new Set(), steps = 0;
+    while (!seen.has(cur) && steps < 10) { seen.add(cur); cur = targets[cur]; steps++; }
+    assert.equal(seen.size, 4, 'cycle must cover all 4 players');
+    assert.equal(cur, 'A', 'cycle must close back on itself');
+  });
+
+  check('target identity is private: only in the assigned hunter\'s own me-block, never in the public roster', () => {
+    const gs = setupShip('ship_priv', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+      { userId: 'C', username: 'C' }, { userId: 'D', username: 'D' },
+    ]);
+    const aTarget = gs.modeState.targets.A;
+    const snapA = arops.getAropsSnapshot(gs, 'A');
+    assert.equal(snapA.me.targetUserId, aTarget);
+    assert.equal(snapA.players.find(p => p.userId === aTarget).targetUserId, undefined,
+      'roster entries never carry targetUserId, only the me block does');
+    const snapB = arops.getAropsSnapshot(gs, 'B');
+    assert.notEqual(snapB.me.targetUserId, aTarget, 'targets are a bijection — nobody else shares A\'s target');
+  });
+
+  check('can only hit your assigned target — anyone else present is not even a candidate', () => {
+    const gs = setupShip('ship_hit', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' },
+    ]);
+    const realTarget = gs.modeState.targets.A;
+    const decoy = ['B', 'C'].find(u => u !== realTarget);
+    tel(gs, 'A', MUC);
+    tel(gs, decoy, MUC); // decoy right next to the shooter, but not their assigned target
+    TS += 1100;
+    const rMiss = arops.actionArHitAttempt(gs, 'A',
+      { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(rMiss.hit, false);
+    assert.equal(rMiss.reason, 'no_candidates', JSON.stringify(rMiss));
+
+    sleepMs(60); TS += 1100;
+    tel(gs, realTarget, MUC);
+    TS += 1100;
+    const rHit = arops.actionArHitAttempt(gs, 'A',
+      { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(rHit.hit, true, JSON.stringify(rHit));
+    assert.equal(rHit.targetId, realTarget);
+    assert.equal(gs.players[realTarget].status, 'found');
+  });
+
+  check('killing your target makes you inherit their target — the chain stays a single cycle over survivors', () => {
+    const gs = setupShip('ship_chain', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+      { userId: 'C', username: 'C' }, { userId: 'D', username: 'D' },
+    ]);
+    const t1 = gs.modeState.targets.A;
+    const t2 = gs.modeState.targets[t1];
+    tel(gs, 'A', MUC);
+    tel(gs, t1, MUC);
+    TS += 1100;
+    const r = arops.actionArHitAttempt(gs, 'A', { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players[t1].status, 'found');
+    assert.equal(gs.modeState.targets.A, t2, 'A inherits the eliminated target\'s own target');
+    assert.equal(gs.modeState.targets[t1], null);
+  });
+
+  check('eliminations cascade down to exactly one survivor, who wins by userId', () => {
+    const gs = setupShip('ship_win', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }, { userId: 'C', username: 'C' },
+    ]);
+    for (const u of ['A', 'B', 'C']) tel(gs, u, MUC);
+    let rounds = 0;
+    while (!gs.gameOver && rounds < 10) {
+      const alive = Object.values(gs.players).filter(p => p.status === 'alive');
+      const shooter = alive[0].userId;
+      sleepMs(60); TS += 1100;
+      const r = arops.actionArHitAttempt(gs, shooter,
+        { sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: 0 } });
+      assert.equal(r.hit, true, JSON.stringify(r));
+      rounds++;
+    }
+    assert.equal(gs.gameOver, true);
+    assert.ok(['A', 'B', 'C'].includes(gs.winner));
+    assert.equal(Object.values(gs.players).filter(p => p.status === 'alive').length, 1);
+  });
+
+  check('time limit: highest score wins, tie is a draw', () => {
+    const gs = setupShip('ship_time', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gs.players.A.score = 30;
+    gs.players.B.score = 10;
+    gs.phaseStartTime = Date.now() - 700_000;
+    tick(gs, 100);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'A');
+
+    const gsTie = setupShip('ship_time_tie', [{ userId: 'A', username: 'A' }, { userId: 'B', username: 'B' }]);
+    gsTie.players.A.score = 20;
+    gsTie.players.B.score = 20;
+    gsTie.phaseStartTime = Date.now() - 700_000;
+    tick(gsTie, 100);
+    assert.equal(gsTie.gameOver, true);
+    assert.equal(gsTie.winner, 'draw');
+  });
+
+  check('classic Hide & Seek is unaffected: roles assigned, hiding phase still gated by hidingDurationMs', () => {
+    const gs = createGame('ship_regression', [
+      { userId: 'A', username: 'A' }, { userId: 'B', username: 'B' },
+    ], { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', hidingDurationMs: 100_000, gameDurationMs: 600_000 } });
+    assert.equal(gs.phase, 'hiding');
+    assert.equal(gs.modeState.targets, undefined, 'classic variant never builds an assassin chain');
+    tick(gs, 10);
+    assert.equal(gs.phase, 'hiding', 'classic variant still respects hidingDurationMs, unlike The Ship');
+  });
+
+  check('solo debug session never auto-ends via checkWin just because "1 player is left"', () => {
+    const gs = setupShip('ship_solo', [{ userId: 'A', username: 'A' }], { debugMode: true });
+    tel(gs, 'A', MUC);
+    assert.equal(gs.modeState.targets.A, null, 'nobody to hunt with only one player');
+    assert.equal(gs.gameOver, false);
+  });
+}
+
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {
-  const mk = () => createGame('snd' + Math.random(),
+  const mk = (over = {}) => createGame('snd' + Math.random(),
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-    { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1],
-      timings: FAST, gameDurationMs: 600_000 } });
+    { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2],
+      timings: FAST, gameDurationMs: 600_000, ...over } });
 
-  check('attacker plants after dwell; bomb timer runs', () => {
+  check('instant variant (default): either team can capture the active target, destroying it and scoring', () => {
+    const gs = mk();
+    assert.equal(gs.cfg.destroyVariant, 'instant');
+    assert.equal(gs.modeState.activeIndex, 0);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200);
+    assert.equal(gs.modeState.destroyed[0], false, 'not yet — dwell not complete');
+    tick(gs, 200);
+    assert.equal(gs.modeState.destroyed[0], true);
+    assert.equal(gs.modeState.activeIndex, 1, 'next non-destroyed zone activates');
+    assert.ok(gs.events.some(e => e.type === 'target_destroyed' && e.byTeam === 'a'));
+    assert.ok(gs.players.A1.score > 0, 'capturing player is credited');
+  });
+
+  check('instant variant: contested (both teams present) pauses capture progress', () => {
     const gs = mk();
     tel(gs, 'A1', Z1);
+    tel(gs, 'B1', Z1);
+    tick(gs, 400);
+    assert.equal(gs.modeState.destroyed[0], false, 'contested — nobody captures');
+  });
+
+  check('capture progress is exposed in the snapshot with team attribution (for the flow-ring overlay)', () => {
+    const gs = mk();
+    tel(gs, 'B1', Z1);
+    tick(gs, 100); // partway through the dwell
+    const snap = arops.getAropsSnapshot(gs, 'A1');
+    assert.ok(snap.capture, 'capture progress should be present');
+    assert.equal(snap.capture.team, 'b');
+    assert.ok(snap.capture.pct > 0 && snap.capture.pct < 100, `expected partial pct, got ${snap.capture.pct}`);
+  });
+
+  check('instant variant: destroying every target without reactivation ends the match for the capturing team', () => {
+    // A dedicated single-zone game — destroying the only target should end the match immediately.
+    const gsSolo = createGame('snd_solo',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
+    tel(gsSolo, 'A1', Z1);
+    tick(gsSolo, 200); tick(gsSolo, 200);
+    assert.equal(gsSolo.gameOver, true);
+    assert.equal(gsSolo.winner, 'team_a');
+  });
+
+  check('destroyReactivate: after all targets are destroyed, they reset and the match continues', () => {
+    const gs = createGame('snd_reactivate',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST,
+        gameDurationMs: 600_000, destroyReactivate: true } });
+    tel(gs, 'A1', Z1);
     tick(gs, 200); tick(gs, 200);
-    assert.ok(gs.modeState.bomb, 'planted');
-    assert.ok(gs.events.some(e => e.type === 'bomb_planted'));
+    assert.equal(gs.gameOver, false, 'reactivation keeps the match going instead of ending it');
+    assert.deepEqual(gs.modeState.destroyed, [false], 'the single zone reactivated');
+    assert.ok(gs.events.some(e => e.type === 'targets_reactivated'));
+  });
+
+  check('defuse variant: attacker arms the target, defender defuses it — target survives, stays active', () => {
+    const gs = mk({ destroyVariant: 'defuse' });
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.ok(gs.modeState.armed, 'armed');
+    assert.ok(gs.events.some(e => e.type === 'target_armed'));
+    tel(gs, 'B1', Z1);
+    tel(gs, 'A1', shared.destinationPoint(Z1, 90, 30)); // attacker leaves, clean presence for defuse
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.armed, null, 'defused');
+    assert.equal(gs.modeState.destroyed[0], false, 'defusing spares the target, it stays active');
+    assert.ok(gs.events.some(e => e.type === 'target_defused'));
     assert.equal(gs.gameOver, false);
   });
 
-  check('defender defuses → defenders win', () => {
-    const gs = mk();
+  check('defuse variant: explosion (no defuse in time) destroys the target and scores for the attacking team', () => {
+    const gs = mk({ destroyVariant: 'defuse', zones: [Z1] });
     tel(gs, 'A1', Z1);
-    tick(gs, 200); tick(gs, 200);            // plant
-    tel(gs, 'B1', Z1);                        // defender enters site
-    // attacker leaves (so presence is clean)
-    tel(gs, 'A1', shared.destinationPoint(Z1, 90, 30));
-    tick(gs, 200); tick(gs, 200);            // defuse dwell
+    tick(gs, 200); tick(gs, 200);
+    assert.ok(gs.modeState.armed);
+    gs.modeState.armed.explodeAt = Date.now() - 1;
+    tick(gs, 100);
+    assert.equal(gs.modeState.destroyed[0], true);
     assert.equal(gs.gameOver, true);
-    assert.equal(gs.winner, 'team_b');
+    assert.equal(gs.winner, 'team_a');
   });
 
-  check('bomb timer expiry → attackers win', () => {
+  check('time limit: higher score wins, tie is a draw', () => {
     const gs = mk();
-    tel(gs, 'A1', Z1);
-    tick(gs, 200); tick(gs, 200);            // plant
-    gs.modeState.bomb.explodeAt = Date.now() - 1;
+    gs.players.A1.score = 20;
+    gs.players.B1.score = 10;
+    gs.phaseStartTime = Date.now() - 700_000;
     tick(gs, 100);
     assert.equal(gs.gameOver, true);
     assert.equal(gs.winner, 'team_a');
-    assert.ok(gs.events.some(e => e.type === 'bomb_exploded'));
-  });
 
-  check('time limit without plant → defenders win', () => {
-    const gs = mk();
-    gs.phaseStartTime = Date.now() - 700_000;
-    tick(gs, 100);
-    assert.equal(gs.winner, 'team_b');
+    const gsTie = mk();
+    gsTie.players.A1.score = 15;
+    gsTie.players.B1.score = 15;
+    gsTie.phaseStartTime = Date.now() - 700_000;
+    tick(gsTie, 100);
+    assert.equal(gsTie.winner, 'draw');
   });
 
   check('zones required for snd/domination', () => {
@@ -327,6 +927,165 @@ console.log('\n═══ SEEK & DESTROY ═══');
     assert.throws(() => createGame('bad2',
       [{ userId: 'x', username: 'x' }, { userId: 'y', username: 'y' }],
       { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1] } }), /need_zones/);
+  });
+}
+
+// ═══ TEAM/FFA VARIANT (Domination, Zerstören, Deathmatch, CTF) ═══
+// "Jeder gegen jeden" for the 4 team-capable modes, analogous to Hide &
+// Seek's hsVariant — ar_settings.teamVariant='ffa'. See arops.js's MODES
+// table (cfg.teamVariant) and CLAUDE.md-adjacent design notes in this file's
+// mode blocks for the per-mode semantics chosen.
+console.log('\n═══ TEAM/FFA VARIANT ═══');
+{
+  check('domination ffa: no teams assigned, zone captured individually, win on target score', () => {
+    const gs = createGame('dom_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', teamVariant: 'ffa', zones: [Z1, Z2],
+        timings: FAST, targetScore: 3, gameDurationMs: 600_000 } });
+    assert.equal(gs.players.A1.team, null);
+    assert.equal(gs.players.A2.team, null);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.owners.z1, 'A1');
+    assert.ok(gs.events.some(e => e.type === 'zone_captured' && e.userId === 'A1'));
+    // tick()'s dt is capped at 2000ms regardless of the requested advance —
+    // two calls for a real cumulative 4s (matches the DOMINATION section's
+    // own tick(gs, 2000) convention above).
+    tick(gs, 2000); tick(gs, 2000);
+    assert.ok(gs.modeState.playerScore.A1 >= 3);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1');
+  });
+
+  check('domination ffa: two players together in a zone contest it (no capture)', () => {
+    const gs = createGame('dom_ffa2',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', teamVariant: 'ffa', zones: [Z1, Z2],
+        timings: FAST, targetScore: 100, gameDurationMs: 600_000 } });
+    tel(gs, 'A1', Z1); tel(gs, 'A2', Z1);
+    tick(gs, 500);
+    assert.equal(gs.modeState.owners.z1, null, 'contested, nobody alone');
+  });
+
+  check('seek_destroy ffa: individual capture, defuse variant force-reset to instant', () => {
+    const gs = createGame('snd_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', teamVariant: 'ffa', destroyVariant: 'defuse',
+        zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
+    assert.equal(gs.cfg.destroyVariant, 'instant', 'ffa forces defuse back to instant (two-sided, no ffa reading)');
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.destroyed[0], true);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1');
+    assert.ok(gs.events.some(e => e.type === 'target_destroyed' && e.byUserId === 'A1'));
+  });
+
+  check('deathmatch ffa: no captains, each player sets own base, last standing wins', () => {
+    const gs = createGame('dm_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'deathmatch', teamVariant: 'ffa', gameDurationMs: 600_000,
+        timings: { ...FAST, spawnCheckDwellMs: 300 }, deathmatchOnHit: 'respawn', livesPerPlayer: 1 } });
+    assert.equal(gs.players.A1.team, null);
+    const baseA1 = shared.destinationPoint(MUC, 270, 100);
+    const baseA2 = shared.destinationPoint(MUC, 90, 100);
+    const r1 = arops.actionArSetBase(gs, 'A1', { lat: baseA1.lat, lon: baseA1.lon });
+    assert.equal(r1.ok, true, 'any player can set own base in ffa, no captain gate');
+    const r2 = arops.actionArSetBase(gs, 'A2', { lat: baseA2.lat, lon: baseA2.lon });
+    assert.equal(r2.ok, true);
+    tel(gs, 'A1', baseA1);
+    tel(gs, 'A2', baseA2);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    assert.equal(gs.phase, 'live');
+    assert.equal(gs.players.A1.status, 'alive', 'A1 was in its own base at the checkpoint');
+    assert.equal(gs.players.A2.status, 'alive', 'A2 was in its own base at the checkpoint');
+
+    // A2 moves near A1 for the shot — both already established/alive above,
+    // same pattern as the existing 'respawn variant: 0 lives eliminates...' test.
+    const targetPos = shared.destinationPoint(baseA1, 0, 5);
+    tel(gs, 'A2', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(baseA1, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA1.lat, lon: baseA1.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.A2.status, 'found', 'eliminated (1 life)');
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1', 'last player standing wins');
+  });
+
+  check('ctf ffa: N flags one per player, no captain gate, steal + capture at own base', () => {
+    const gs = createGame('ctf_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf', teamVariant: 'ffa',
+        timings: FAST, targetCaptures: 1, gameDurationMs: 600_000 } });
+    assert.equal(gs.players.A1.team, null);
+    assert.deepEqual(Object.keys(gs.modeState.flags).sort(), ['A1', 'A2']);
+
+    const baseA1 = shared.destinationPoint(MUC, 270, 120);
+    const baseA2 = shared.destinationPoint(MUC, 90, 120);
+    const r1 = arops.actionArSetBase(gs, 'A1', { lat: baseA1.lat, lon: baseA1.lon });
+    assert.equal(r1.ok, true, 'no captain gate in ffa');
+    arops.actionArSetBase(gs, 'A2', { lat: baseA2.lat, lon: baseA2.lon });
+    tel(gs, 'A1', baseA1);
+    tel(gs, 'A2', baseA2);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+    assert.equal(gs.phase, 'live');
+
+    // A1 walks into A2's base to steal A2's flag
+    let pos = baseA1;
+    const brg = shared.bearingDeg(baseA1, baseA2);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos, baseA2) > 8; i++) {
+      pos = shared.destinationPoint(pos, brg, 12);
+      tel(gs, 'A1', pos);
+    }
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.flags.A2.state, 'carried');
+    assert.equal(gs.modeState.flags.A2.carrier, 'A1');
+
+    // A1 carries it home to A1's own base
+    let pos2 = gs.players.A1.lastAccepted;
+    const brg2 = shared.bearingDeg(pos2, baseA1);
+    for (let i = 0; i < 22 && shared.haversineMeters(pos2, baseA1) > 8; i++) {
+      pos2 = shared.destinationPoint(pos2, brg2, 12);
+      tel(gs, 'A1', pos2);
+    }
+    tick(gs, 100);
+    assert.equal(gs.modeState.captures.A1, 1);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1');
+  });
+
+  check("ctf ffa: capturing doesn't require your own flag to be home (unlike team mode)", () => {
+    const gs = createGame('ctf_ffa2',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf', teamVariant: 'ffa',
+        timings: FAST, targetCaptures: 5, gameDurationMs: 600_000 } });
+    const baseA1 = shared.destinationPoint(MUC, 270, 120);
+    const baseA2 = shared.destinationPoint(MUC, 90, 120);
+    arops.actionArSetBase(gs, 'A1', { lat: baseA1.lat, lon: baseA1.lon });
+    arops.actionArSetBase(gs, 'A2', { lat: baseA2.lat, lon: baseA2.lon });
+    tel(gs, 'A1', baseA1);
+    tel(gs, 'A2', baseA2);
+    gs.phaseStartTime = Date.now() - 1000;
+    tick(gs, 100);
+
+    // Both flags simultaneously away from home — under the classic team-mode
+    // rule this would block BOTH captures; ffa has no such requirement.
+    gs.modeState.flags.A1.state = 'carried'; gs.modeState.flags.A1.carrier = 'A2';
+    gs.modeState.flags.A2.state = 'carried'; gs.modeState.flags.A2.carrier = 'A1';
+    tick(gs, 100);
+    assert.equal(gs.modeState.captures.A1, 1, "A1 captures A2's flag despite A1's own flag being stolen too");
+  });
+
+  check('teamVariant is ignored for non-team modes (hide_and_seek uses hsVariant instead)', () => {
+    const gs = createGame('hs_teamvariant_noop',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek', teamVariant: 'ffa', hidingDurationMs: 100 } });
+    assert.equal(gs.cfg.teamVariant, 'team', 'usesTeams=false modes never read ffa off teamVariant');
   });
 }
 

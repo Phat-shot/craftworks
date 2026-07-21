@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-feature android:name="android.hardware.type.watch" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- ui/PairingScreen.kt holds a short, time-bounded partial wake lock
+         while actively waiting for a pairing claim — confirmed via adb
+         logcat that Wear OS freezing this app's process is why an
+         otherwise-successful Play Services delivery (both the message push
+         and the DataItem sync) never reaches the app. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:allowBackup="true"
@@ -30,16 +37,40 @@
         <!-- Receives pairing + game-state pushes from the phone over the
              Data Layer API (MessageClient) — see GameStateListenerService
              for the "/arops/claim" (pairing) and "/arops/state" (match
-             state) paths, both under this one prefix. -->
+             state) paths, both under this one prefix (filtered in code via
+             event.path, not here).
+
+             BIND_LISTENER, not MESSAGE_RECEIVED: reported bug — phone
+             consistently reported a successful send, watch's own node
+             check confirmed a reachable phone, yet the claim never
+             registered, with no trace of it even being rejected (see
+             PairingRepository.lastRejectedToken, which stayed empty). A
+             WearableListenerService is bound directly by Play Services via
+             BIND_LISTENER; MESSAGE_RECEIVED + a <data> element is an
+             intent-broadcast pattern that doesn't apply to this API at all
+             — with the wrong action declared, Play Services never
+             discovers this service as a listener, so onMessageReceived
+             would never fire regardless of connectivity or the message
+             ever having been sent.
+
+             tools:ignore="WearableBindListener": lint flags BIND_LISTENER
+             itself as deprecated (Google steers new code toward a
+             runtime-registered MessageClient.addListener() instead) — but
+             deprecated is not the same as broken/removed, and it's still
+             the correct, functional way to receive a push while this
+             app's process may be dead (exactly the scenario extensively
+             documented throughout this file/PairingRepository as the
+             reason a pull-based DataItem fallback exists at all). Ripping
+             out background-wake delivery for a lint nit, right after
+             confirming it's the actual fix for a real delivery bug, isn't
+             worth the risk — revisit only with a deliberate migration to
+             the newer API, not as a side effect of silencing a warning. -->
         <service
             android:name=".GameStateListenerService"
-            android:exported="true">
+            android:exported="true"
+            tools:ignore="WearableBindListener">
             <intent-filter>
-                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-                <data
-                    android:scheme="wear"
-                    android:host="*"
-                    android:pathPrefix="/arops/" />
+                <action android:name="com.google.android.gms.wearable.BIND_LISTENER" />
             </intent-filter>
         </service>
 

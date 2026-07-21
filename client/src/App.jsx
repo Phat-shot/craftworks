@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 
 import { api, getSocket, disconnectSocket } from './api';
@@ -9,20 +9,31 @@ import Home from './pages/Home';
 import Friends from './pages/Friends';
 import ChatPage from './pages/ChatPage';
 import LobbyList from './pages/LobbyList';
-import LobbyRoom from './pages/LobbyRoom';
-import GamePage from './pages/GamePage';
 import Profile from './pages/Profile';
 import Leaderboard from './pages/Leaderboard';
 import JoinRedirect from './pages/JoinRedirect';
 import Legal    from './pages/Legal';
-import Workshop from './pages/Workshop';
-import WorkshopContent from './pages/WorkshopContent';
 import Brands         from './pages/Brands';
+import Admin          from './pages/Admin';
 import MapSelect      from './pages/MapSelect';
-import MapEditor      from './pages/MapEditor';
 import ChallengePage  from './pages/ChallengePage';
 import ErrorBoundary    from './components/ErrorBoundary';
 import './App.css';
+
+// Lazy-loaded: pulls in @craftworks/arops-shared (AropsLobbyPanel) and other
+// heavier per-page code into their own chunks instead of the single ~734KB
+// entry bundle every route used to share (Vite itself flagged this — "some
+// chunks are larger than 500kB, consider dynamic import()"). Isolation is
+// the real point: a problem in one of these pages' code (or a dependency
+// only they use) can no longer affect pages that don't render them at all,
+// like /login — previously everything was eagerly evaluated in one script
+// regardless of which route was actually active.
+const LobbyRoom = lazy(() => import('./pages/LobbyRoom'));
+const GamePage = lazy(() => import('./pages/GamePage'));
+const Workshop = lazy(() => import('./pages/Workshop'));
+const WorkshopContent = lazy(() => import('./pages/WorkshopContent'));
+const MapEditor = lazy(() => import('./pages/MapEditor'));
+const LazyFallback = () => <div className="loading-screen">⏳</div>;
 
 // ── Auth Context ──────────────────────────
 export const AuthCtx = createContext(null);
@@ -90,8 +101,8 @@ export default function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/legal/:type" element={<Legal />} />
           <Route path="/join/:type/:code" element={<JoinRedirect />} />
-          <Route path="/workshop"         element={<ErrorBoundary><Workshop /></ErrorBoundary>} />
-          <Route path="/workshop/content" element={<ErrorBoundary><WorkshopContent /></ErrorBoundary>} />
+          <Route path="/workshop"         element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><Workshop /></Suspense></ErrorBoundary>} />
+          <Route path="/workshop/content" element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><WorkshopContent /></Suspense></ErrorBoundary>} />
           <Route path="/verify-email" element={<div>Verifying…</div>} />
           <Route path="/challenge/:token"  element={<ChallengePage />} />
 
@@ -102,17 +113,18 @@ export default function App() {
             <Route path="chat"             element={<ChatPage />} />
             <Route path="chat/:userId"     element={<ChatPage />} />
             <Route path="lobby"            element={<LobbyList />} />
-            <Route path="lobby/:id"        element={<LobbyRoom />} />
-            <Route path="game/:sessionId"  element={<GamePage />} />
+            <Route path="lobby/:id"        element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><LobbyRoom /></Suspense></ErrorBoundary>} />
+            <Route path="game/:sessionId"  element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><GamePage /></Suspense></ErrorBoundary>} />
             <Route path="profile"          element={<Profile />} />
             <Route path="profile/:id"      element={<Profile />} />
             <Route path="leaderboard"      element={<Leaderboard />} />
-            <Route path="workshop"           element={<ErrorBoundary><Workshop /></ErrorBoundary>} />
-            <Route path="workshop/content"   element={<ErrorBoundary><WorkshopContent /></ErrorBoundary>} />
+            <Route path="workshop"           element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><Workshop /></Suspense></ErrorBoundary>} />
+            <Route path="workshop/content"   element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><WorkshopContent /></Suspense></ErrorBoundary>} />
             <Route path="brands"              element={<Brands />} />
+            <Route path="admin"               element={<Admin />} />
             <Route path="play"                element={<MapSelect />} />
-            <Route path="workshop/editor/:id"   element={<MapEditor />} />
-            <Route path="workshop/editor"        element={<MapEditor />} />
+            <Route path="workshop/editor/:id"   element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><MapEditor /></Suspense></ErrorBoundary>} />
+            <Route path="workshop/editor"        element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><MapEditor /></Suspense></ErrorBoundary>} />
 
           </Route>
         </Routes>

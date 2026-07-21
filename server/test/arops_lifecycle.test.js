@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════
 const assert = require('assert');
 const arops = require('../src/game/arops');
-const shared = require('../../packages/arops-shared/dist/src');
+const shared = require('@craftworks/arops-shared');
 
 // These tests predate "Auto" mode (field-size-derived timings/hitConfig,
 // ON by default) and are deliberately about the STABLE, known DEFAULTS/
@@ -183,14 +183,20 @@ check('aiming east misses hider standing north — no near-miss leak at 90°', (
 
 check('slightly-off aim returns near-miss diagnostics (no direction)', () => {
   gs.players.S.lastHitAttemptAt = 0;
-  // ~30° off at 50m with 6m accuracy: tol = 15 + atan(12/50) ≈ 28.5° → miss, but within 2x
+  // Every player defaults to Scout now (see createAropsGame) — its cone is
+  // 3x the base half-angle, capped at maxToleranceDeg (here 45°, see
+  // effectiveHitInfo): 15*3=45 already AT the cap, so unlike the old
+  // classless default this is a FLAT 45° regardless of distance/GPS
+  // accuracy (45 + any gpsAngle is still capped at 45). 60° off is
+  // comfortably outside that cone (a real miss) but still within 2x
+  // (90°) for the near-miss diagnostic to fire.
   const r = arops.actionArHitAttempt(gs, 'S', {
-    sample: sampleAt(posS, { headingDeg: 32, ts: tBase + 250 }),
+    sample: sampleAt(posS, { headingDeg: 60, ts: tBase + 250 }),
   });
   assert.equal(r.hit, false);
   assert.ok(r.near, 'expected near-miss info: ' + JSON.stringify(r));
-  assert.ok(r.near.deltaDeg >= 28 && r.near.deltaDeg <= 36, 'delta ~32, got ' + r.near.deltaDeg);
-  assert.ok(r.near.toleranceDeg >= 25, 'tolerance widened, got ' + r.near.toleranceDeg);
+  assert.ok(r.near.deltaDeg >= 56 && r.near.deltaDeg <= 64, 'delta ~60, got ' + r.near.deltaDeg);
+  assert.ok(r.near.toleranceDeg >= 40, 'tolerance ~45 (Scout cap), got ' + r.near.toleranceDeg);
   assert.equal(r.near.bearing, undefined, 'direction must never leak');
 });
 

@@ -1,22 +1,8 @@
 'use strict';
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { RACES, TDB, getTowersForRace } = require('../game/towers');
-
-// Middleware: attach user if token present, but don't reject if missing
-const optionalAuth = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (token) {
-      const jwt = require('jsonwebtoken');
-      const payload = jwt.verify(token, process.env.JWT_SECRET);
-      const { rows } = await req.db.query('SELECT id FROM users WHERE id=$1', [payload.sub]);
-      if (rows[0]) req.user = rows[0];
-    }
-  } catch {}
-  next();
-};
 const { getWaveConfig } = require('../game/engine');
 
 

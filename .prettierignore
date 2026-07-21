@@ -1,0 +1,6 @@
+node_modules
+client/build
+packages
+apps
+hardware
+package-lock.json

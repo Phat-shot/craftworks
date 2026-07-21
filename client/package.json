@@ -3,17 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.0",
+    "@craftworks/arops-shared": "^0.1.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^6.30.4",
     "socket.io-client": "^4.7.2",
     "axios": "^1.6.2",
     "i18next": "^23.7.6",
     "react-i18next": "^14.0.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^5.0.10"
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.5"
   },
   "scripts": {
     "start": "vite",

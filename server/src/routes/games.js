@@ -1,7 +1,7 @@
 // routes/games.js
 const router = require('express').Router();
 const { requireAuth } = require('../middleware/auth');
-const { db } = require('../index');
+const db = require('../db/pool');
 
 // Game history for current user
 router.get('/history', requireAuth, async (req, res) => {

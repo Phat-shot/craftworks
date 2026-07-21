@@ -20,3 +20,4 @@ __exportStar(require("./hit"), exports);
 __exportStar(require("./geofence"), exports);
 __exportStar(require("./timings"), exports);
 __exportStar(require("./compass"), exports);
+__exportStar(require("./profiles"), exports);

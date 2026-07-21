@@ -6,11 +6,18 @@
 //  Run: node server/test/comic_map.test.js
 // ═══════════════════════════════════════════════════════════
 const assert = require('assert');
-const { reduceOverpassElements, polygonBbox, comicFeatureType } = require('../src/game/comic_map');
+const {
+  reduceOverpassElements, polygonBbox, comicFeatureType,
+  bboxContains, filterFeaturesToBbox, expandedCacheBbox, getCachedOrFetchComicMapFeatures,
+} = require('../src/game/comic_map');
 
 let passed = 0, failed = 0;
 function check(name, fn) {
   try { fn(); passed++; console.log('  ✓ ' + name); }
+  catch (e) { failed++; console.error('  ✗ ' + name + ' — ' + e.message); }
+}
+async function checkAsync(name, fn) {
+  try { await fn(); passed++; console.log('  ✓ ' + name); }
   catch (e) { failed++; console.error('  ✗ ' + name + ' — ' + e.message); }
 }
 
@@ -99,5 +106,77 @@ check('computes min/max with padding', () => {
   assert.ok(Math.abs(bbox.east - (11.58 + 0.001)) < 1e-9);
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+console.log('\n═══ bboxContains ═══');
+check('a fully covers a smaller b', () => {
+  const a = { south: 0, west: 0, north: 10, east: 10 };
+  const b = { south: 2, west: 2, north: 8, east: 8 };
+  assert.equal(bboxContains(a, b), true);
+});
+check('b sticks out past a on one side → false', () => {
+  const a = { south: 0, west: 0, north: 10, east: 10 };
+  const b = { south: -1, west: 2, north: 8, east: 8 };
+  assert.equal(bboxContains(a, b), false);
+});
+check('identical bboxes → true (inclusive bounds)', () => {
+  const a = { south: 0, west: 0, north: 10, east: 10 };
+  assert.equal(bboxContains(a, a), true);
+});
+
+console.log('\n═══ filterFeaturesToBbox ═══');
+check('keeps a feature with at least one point inside the bbox', () => {
+  const bbox = { south: 0, west: 0, north: 10, east: 10 };
+  const features = [
+    { type: 'building', points: [{ lat: 5, lon: 5 }] },     // inside
+    { type: 'building', points: [{ lat: 50, lon: 50 }] },   // outside
+    { type: 'road', points: [{ lat: 50, lon: 50 }, { lat: 5, lon: 5 }] }, // one point inside
+  ];
+  const out = filterFeaturesToBbox(features, bbox);
+  assert.equal(out.length, 2);
+});
+check('empty input → empty output', () => {
+  assert.deepEqual(filterFeaturesToBbox([], { south: 0, west: 0, north: 1, east: 1 }), []);
+});
+
+console.log('\n═══ expandedCacheBbox ═══');
+check('expanded bbox fully contains the tight polygon bbox', () => {
+  const poly = [{ lat: 48.10, lon: 11.50 }, { lat: 48.11, lon: 11.51 }, { lat: 48.105, lon: 11.505 }];
+  const tight = polygonBbox(poly);
+  const expanded = expandedCacheBbox(poly);
+  assert.ok(bboxContains(expanded, tight), 'expanded must fully cover the tight bbox');
+  assert.ok(expanded.south < tight.south && expanded.north > tight.north, 'expanded must be strictly larger');
+});
+check('expansion is capped regardless of how large the field is', () => {
+  // A field spanning ~0.05° (~5.5km) — expansion (2x) would be ~0.1° without
+  // the cap; the hard cap (0.01°) must win instead.
+  const poly = [{ lat: 48.00, lon: 11.00 }, { lat: 48.05, lon: 11.05 }, { lat: 48.00, lon: 11.05 }];
+  const tight = polygonBbox(poly);
+  const expanded = expandedCacheBbox(poly);
+  const pad = expanded.north - tight.north;
+  assert.ok(pad <= 0.01 + 1e-9, `expected padding capped at ~0.01°, got ${pad}`);
+});
+
+(async () => {
+  console.log('\n═══ getCachedOrFetchComicMapFeatures (cache-hit path only — no live network in tests) ═══');
+  await checkAsync('a covering cached region is used, filtered down to the requested bbox, no insert', async () => {
+    const poly = [{ lat: 48.10, lon: 11.50 }, { lat: 48.11, lon: 11.51 }, { lat: 48.105, lon: 11.505 }];
+    let inserted = false;
+    const fakeDb = {
+      query: async (sql) => {
+        if (sql.startsWith('SELECT')) {
+          return { rows: [{ features: [
+            { type: 'building', points: [{ lat: 48.105, lon: 11.505 }] }, // inside the field
+            { type: 'building', points: [{ lat: 49.0, lon: 12.0 }] },    // far outside — must be filtered out
+          ] }] };
+        }
+        inserted = true;
+        return { rows: [] };
+      },
+    };
+    const features = await getCachedOrFetchComicMapFeatures(fakeDb, poly);
+    assert.equal(features.length, 1);
+    assert.equal(inserted, false, 'a cache hit must not write a new cache row');
+  });
+
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+})();
