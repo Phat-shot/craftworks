@@ -53,6 +53,15 @@ async function finalizeGameFromWorker(io, db, sessionId, players, win, abandoned
 
   for (let i = 0; i < all.length; i++) {
     const p = all[i];
+    // AR Ops bots (userId 'bot_...', see platform.js's own bot-id check)
+    // never get a real game_players row in the first place — they're not
+    // real users, just synthetic in-memory opponents — so this UPDATE was
+    // guaranteed to fail every single time for every bot in every finished
+    // match (Postgres: "invalid input syntax for type uuid"), silently
+    // swallowed by the .catch below but spamming the server log on every
+    // AR Ops game with bots. Skip them outright instead of querying for a
+    // row that structurally can't exist.
+    if (p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('bot_'))) continue;
     await db.query(
       `UPDATE game_players SET status='finished', wave=$1, score=$2, kills=$3, rank=$4, finished_at=NOW()
        WHERE session_id=$5 AND user_id=$6`,

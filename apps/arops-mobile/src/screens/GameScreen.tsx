@@ -250,8 +250,12 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
 // `rotateDeg` is 0 in every compass-driven view mode (map itself rotates,
 // this stays screen-fixed) and the live heading-vs-map-bearing delta in
 // free-2D mode (map doesn't rotate on its own, this does) — see renderMap.
-function ShotOverlay({ rotateDeg, myHitShape, effectiveConeHalfAngleDeg, color }: {
-  rotateDeg: number; myHitShape: 'cone' | 'lateral' | 'omni';
+// `pitchDeg` mirrors the MapView's own Camera pitch (mapPitch, 0 in free-2D,
+// 45° once compass-oriented) — without it this flat overlay reads as a
+// sticker "slapped on top" of the map's own tilted 3D perspective instead of
+// looking like it lies on the same ground plane.
+function ShotOverlay({ rotateDeg, pitchDeg, myHitShape, effectiveConeHalfAngleDeg, color }: {
+  rotateDeg: number; pitchDeg: number; myHitShape: 'cone' | 'lateral' | 'omni';
   effectiveConeHalfAngleDeg: number; color: string;
 }) {
   if (myHitShape === 'omni') return null; // omni's range circle stays map-anchored (rotation-irrelevant)
@@ -261,21 +265,34 @@ function ShotOverlay({ rotateDeg, myHitShape, effectiveConeHalfAngleDeg, color }
   // Wrapper is a zero-size anchor pinned exactly at screen-center — rotating
   // IT (not the shape itself) pivots the whole wedge around the player's own
   // position, regardless of how far the shape extends above that point.
-  const anchor = { position: 'absolute' as const, top: '50%' as const, left: '50%' as const, width: 0, height: 0 };
+  // `rotateX` tilts that same rigid (already heading-rotated, since `rotate`
+  // is listed AFTER `rotateX` and so is applied to the point first/innermost)
+  // shape to match the map's own pitch — `perspective` first in the list is
+  // what makes that tilt read as actual depth instead of a flat vertical
+  // squash, the standard RN recipe for a "tilted card" look.
+  const anchor = {
+    position: 'absolute' as const, top: '50%' as const, left: '50%' as const, width: 0, height: 0,
+    transform: [{ perspective: 800 }, { rotateX: `${pitchDeg}deg` }, { rotate: `${rotateDeg}deg` }] as any,
+  };
+  // Apex AT the anchor (the player's own position, y=0 here), widening
+  // AWAY (upward/outward, toward -LENGTH_PX) — a cone of fire narrows to a
+  // point at the shooter and spreads out with range, not the other way
+  // around. Reported inverted once already: borderBottomColor put the WIDE
+  // edge at the anchor and the point pointing away instead.
   const shape = myHitShape === 'cone'
     ? (() => {
         const halfWidthPx = Math.tan(effectiveConeHalfAngleDeg * Math.PI / 180) * LENGTH_PX;
         return {
           position: 'absolute' as const, left: -halfWidthPx, top: -LENGTH_PX, width: 0, height: 0,
-          borderLeftWidth: halfWidthPx, borderRightWidth: halfWidthPx, borderBottomWidth: LENGTH_PX,
-          borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: fill,
+          borderLeftWidth: halfWidthPx, borderRightWidth: halfWidthPx, borderTopWidth: LENGTH_PX,
+          borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: fill,
         };
       })()
     : { position: 'absolute' as const, left: -18, top: -LENGTH_PX, width: 36, height: LENGTH_PX,
         backgroundColor: fill, borderWidth: 1.5, borderColor: border };
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <View style={[anchor, { transform: [{ rotate: `${rotateDeg}deg` }] }]}>
+      <View style={anchor}>
         <View style={shape} />
       </View>
     </View>
@@ -1216,7 +1233,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       )}
     </MapView>
     {showRange && telemetry.sample && activeHeadingDeg !== null && (
-      <ShotOverlay rotateDeg={shotOverlayRotateDeg} myHitShape={myHitShape}
+      <ShotOverlay rotateDeg={shotOverlayRotateDeg} pitchDeg={mapPitch} myHitShape={myHitShape}
         effectiveConeHalfAngleDeg={effectiveConeHalfAngleDeg} color={classAccentColor} />
     )}
     </View>
