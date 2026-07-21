@@ -90,6 +90,15 @@ function registerGameHandlers(io, socket, db) {
       // are never DELETEd anywhere, only their status updated, so this is
       // unexpected and worth a server-side trail if it recurs.
       console.warn(`[lobby:start] lobby_not_found lobbyId=${lobbyId} userId=${userId}`);
+      // Reported to also happen independent of any server redeploy — rules
+      // out "container was mid-restart" as the sole explanation. Log the
+      // requester's own recent lobbies alongside so a recurrence shows
+      // whether lobbyId is a genuinely wrong/stale id (absent from this
+      // list too) or something stranger (present here, but the direct
+      // SELECT above still missed it).
+      db.query('SELECT id, code, status, created_at FROM lobbies WHERE host_id=$1 ORDER BY created_at DESC LIMIT 3', [userId])
+        .then(r => console.warn(`[lobby:start] recent lobbies for host ${userId}: ${JSON.stringify(r.rows)}`))
+        .catch(() => {});
       return socket.emit('error', { code: 'lobby_not_found' });
     }
     if (rows[0].host_id !== userId) return socket.emit('error', { code: 'not_host' });

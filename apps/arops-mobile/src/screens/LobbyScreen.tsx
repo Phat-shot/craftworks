@@ -590,6 +590,17 @@ export default function LobbyScreen({
               </TouchableOpacity>
             </>
           )}
+          {/* Non-Host: kein Toggle (das bleibt Host-Sache), aber sichtbare
+              Anzeige sobald debugMode aktiv ist — debug hebt die Fog-of-War
+              für ALLE Spieler auf (Server: getAropsSnapshot überspringt die
+              reveal-Prüfung komplett), das lief bisher unsichtbar für jeden
+              außer dem Host, der es selbst gesetzt hat. Nur sichtbar wenn
+              aktiv (kein totes Icon für den Normalfall). */}
+          {!isHost && debugMode && (
+            <View style={[st.iconBtnLg, st.smallBtnActive]}>
+              <Icon name="bug" size={19} color="#f0c840" />
+            </View>
+          )}
         </View>
         {lobbyCode && (
           <TouchableOpacity

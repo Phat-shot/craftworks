@@ -196,6 +196,11 @@ function registerPlatformHandlers(io, socket, db) {
         // diagnosable from server logs instead of only a vague client-side
         // report.
         console.warn(`[lobby:ar_update] lobby_not_found lobbyId=${lobbyId} userId=${userId}`);
+        // See game.js's lobby:start for why this got a second log line too —
+        // reported to also happen independent of any server redeploy.
+        db.query('SELECT id, code, status, created_at FROM lobbies WHERE host_id=$1 ORDER BY created_at DESC LIMIT 3', [userId])
+          .then(r => console.warn(`[lobby:ar_update] recent lobbies for host ${userId}: ${JSON.stringify(r.rows)}`))
+          .catch(() => {});
         return socket.emit('error', { code: 'lobby_not_found' });
       }
       if (rows[0].host_id !== userId) return socket.emit('error', { code: 'not_host' });
