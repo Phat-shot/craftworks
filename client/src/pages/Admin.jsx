@@ -76,7 +76,7 @@ export default function Admin() {
           Kein Zugriff — {user?.username} ist kein Admin-Account. Vergeben mit:
         </p>
         <pre style={{ background: 'var(--bg2)', padding: 12, borderRadius: 8, fontSize: 12 }}>
-          UPDATE users SET is_admin=true WHERE email='...';
+          {"UPDATE users SET is_admin=true WHERE email='...';"}
         </pre>
       </div>
     );
