@@ -236,6 +236,40 @@ function registerGameHandlers(io, socket, db) {
     socket.join(`game:${sessionId}`);
   });
 
+  // Debug-only, Match-Simulation-exclusive self-cleanup (see
+  // MatchSimScreen.tsx) — each sim run creates its own throwaway lobby+
+  // session and previously just let it run out its own gameDurationMs
+  // instead of tearing itself down. Deliberately NOT gated behind
+  // requireAdmin (a sim run's own host must be able to clean up after
+  // itself without needing admin rights) — the ar_settings.simulation
+  // check below is the real safety boundary instead: this can only ever
+  // end a session createAropsGame's own applySimOverrides flagged as a
+  // simulation in the first place, never a real match, regardless of who
+  // calls it. Same worker-destroy + finished/ended_at pattern as
+  // admin.js's force-end route.
+  socket.on('game:sim_end', async ({ sessionId }) => {
+    try {
+      const { rows } = await db.query(
+        `SELECT gs.id, gs.lobby_id, l.host_id, l.workshop_map_config
+         FROM game_sessions gs JOIN lobbies l ON l.id = gs.lobby_id
+         WHERE gs.id=$1 AND gs.ended_at IS NULL`, [sessionId]
+      );
+      const row = rows[0];
+      if (!row) return socket.emit('error', { code: 'session_not_found' });
+      if (row.host_id !== userId) return socket.emit('error', { code: 'not_host' });
+      if (row.workshop_map_config?.ar_settings?.simulation !== true) {
+        return socket.emit('error', { code: 'not_a_simulation' });
+      }
+      if (gameManager.has(sessionId)) gameManager.destroy(sessionId);
+      await db.query(`UPDATE game_sessions SET status='finished', ended_at=NOW() WHERE id=$1`, [sessionId]);
+      await db.query(`UPDATE lobbies SET status='finished' WHERE id=$1`, [row.lobby_id]);
+      socket.emit('game:sim_end_result', { ok: true });
+    } catch (e) {
+      console.error('game:sim_end error:', e.message);
+      socket.emit('error', { code: 'server_error', detail: e.message });
+    }
+  });
+
   // Debug-mode RTT probe (AR Ops debug overlay) — immediate echo, no cost
   // to normal play since it's only ever sent when the overlay is open.
   socket.on('debug:ping', ({ t }) => {

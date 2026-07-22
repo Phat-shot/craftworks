@@ -79,6 +79,20 @@ router.post('/register', authLimiter,
       );
       const userId = rows[0].id;
 
+      // Admin bootstrap: if the platform currently has zero admins (a
+      // brand-new deployment's very first registration, OR an
+      // already-running instance that predates is_admin ever being set),
+      // the next real (non-guest — this route only) account to register
+      // becomes admin automatically. Never fires again once any admin
+      // exists — further admin grants go through the Admin panel itself
+      // (POST /admin/users/:id/set-admin). Small benign race window on two
+      // simultaneous first-ever registrations (worst case: two admins
+      // instead of one) — accepted rather than adding locking for this.
+      const { rows: adminCount } = await db.query('SELECT COUNT(*)::int AS n FROM users WHERE is_admin=true');
+      if (adminCount[0].n === 0) {
+        await db.query('UPDATE users SET is_admin=true WHERE id=$1', [userId]);
+      }
+
       // Create verification token
       const token = nanoid(64);
       const exp = new Date(Date.now() + 24*3600*1000);

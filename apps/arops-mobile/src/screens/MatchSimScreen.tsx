@@ -15,9 +15,11 @@
 // ═══════════════════════════════════════════════════════════
 import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet } from 'react-native';
+import * as Location from 'expo-location';
+import { Magnetometer } from 'expo-sensors';
 import { destinationPoint, squareFieldCorners, SIM_SNIPPETS } from '@craftworks/arops-shared';
 import type { SimSnippet, SimShootBeat, SimCheckpoint } from '@craftworks/arops-shared';
-import { getSocket, getUser, createArLobby, getLastPosition } from '../api';
+import { getSocket, getUser, createArLobby, getLastPosition, joinLobbyByCode } from '../api';
 import Icon from '../components/Icon';
 import { useTheme, ThemeTokens } from '../theme';
 
@@ -34,7 +36,6 @@ interface SimSnap {
 interface CheckResult { snippetKey: string; label: string; pass: boolean; detail: string; }
 
 const CHECK_MARGIN_MS = 3_000; // network/processing slack before reading a checkpoint's result
-const FINAL_MARGIN_MS = 5_000; // extra wait after a snippet's own durationMs before tearing down
 const SHOT_RESULT_TIMEOUT_MS = 20_000; // generous — real device network/server latency, no fake clock here
 
 function sleep(ms: number): Promise<void> { return new Promise(res => setTimeout(res, ms)); }
@@ -187,15 +188,118 @@ async function runSnippet(snippet: SimSnippet, myUserId: string, origin: { lat: 
     ];
 
     await Promise.all([...shotPromises, ...checkPromises]);
-    await sleep(Math.max(0, snippet.durationMs - Math.max(
-      0,
-      ...testerShots.map(b => b.tMs), ...botShots.map(b => b.tMs), ...snippet.checkpoints.map(c => c.tMs),
-    ) + FINAL_MARGIN_MS));
+    // Actively tear the session down instead of leaving it to idle out its
+    // own gameDurationMs (previously a known limitation — every sim run
+    // left its sessions dangling server-side). game:sim_end
+    // (server/src/socket/game.js) is a narrowly-scoped self-cleanup event:
+    // it only ever works on a session this same run flagged as
+    // ar_settings.simulation, so it can't be repurposed to end a real match.
+    await new Promise<void>(resolve => {
+      const onEnded = () => { socket.off('game:sim_end_result', onEnded); resolve(); };
+      socket.once('game:sim_end_result', onEnded);
+      socket.emit('game:sim_end', { sessionId });
+      setTimeout(() => { socket.off('game:sim_end_result', onEnded); resolve(); }, 5_000);
+    });
   } finally {
     cleanup();
   }
 
   return results.length ? results : fail('Kein einziger Check ausgeführt');
+}
+
+// ── PRE-FLIGHT: sensors ──────────────────────────────────────
+// Deliberately NOT reusing the useTelemetry() hook here — its own doc
+// comment (apps/arops-mobile/src/hooks/useTelemetry.ts) records that an
+// earlier attempt to keep it mounted outside GameScreen's own lifetime
+// correlated with the whole app becoming unresponsive on a real device.
+// This is a self-contained, short-lived GPS+compass check instead: same
+// expo-location/expo-sensors primitives, but subscribed and torn down only
+// for the duration of this one preflight phase, never left running.
+const SENSOR_TEST_ATTEMPTS = 8;
+const SENSOR_TEST_WINDOW_MS = 3_000; // 8×3s = 24s worst case, matches the Lobby screen's own established GPS-retry budget
+
+async function runSensorTest(): Promise<CheckResult[]> {
+  const label = 'Vorflug: Sensoren';
+  const perm = await Location.requestForegroundPermissionsAsync().catch(() => null);
+  const granted = perm?.status === 'granted';
+  if (!granted) {
+    return [{ snippetKey: 'preflight', label: `${label}: GPS-Berechtigung`, pass: false, detail: perm ? `verweigert (${perm.status})` : 'Anfrage fehlgeschlagen' }];
+  }
+
+  let gotFix = false;
+  let gotCompass = false;
+  const magSub = Magnetometer.addListener(() => { gotCompass = true; });
+  Magnetometer.setUpdateInterval(200);
+  let posSub: Location.LocationSubscription | null = null;
+  try {
+    posSub = await Location.watchPositionAsync(
+      { accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 },
+      () => { gotFix = true; },
+    );
+  } catch { /* posSub stays null — the retry loop below just runs out and reports gotFix=false */ }
+
+  for (let i = 0; i < SENSOR_TEST_ATTEMPTS && !(gotFix && gotCompass); i++) {
+    await sleep(SENSOR_TEST_WINDOW_MS);
+  }
+  posSub?.remove();
+  magSub.remove();
+
+  return [
+    { snippetKey: 'preflight', label: `${label}: GPS-Berechtigung`, pass: true, detail: 'erteilt' },
+    {
+      snippetKey: 'preflight', label: `${label}: GPS-Fix`, pass: gotFix,
+      detail: gotFix ? 'Position empfangen' : `kein Fix nach ${SENSOR_TEST_ATTEMPTS * SENSOR_TEST_WINDOW_MS / 1000}s`,
+    },
+    {
+      // Ambiguous by design if it fails: a magnetometer reading only ever
+      // arrives while the phone isn't perfectly motionless/shielded — a
+      // held-still phone on a table can legitimately produce zero deltas.
+      // Documented here rather than treated as a hard sensor failure.
+      snippetKey: 'preflight', label: `${label}: Kompass`, pass: gotCompass,
+      detail: gotCompass ? 'Lesung empfangen' : 'keine Lesung (evtl. Handy lag still/abgeschirmt, oder Sensor fehlt)',
+    },
+  ];
+}
+
+// ── PRE-FLIGHT: code generation + join-by-code ───────────────
+// Exercises the REST join-by-code path (POST /lobbies/join/:code via
+// joinLobbyByCode, api.ts) the match snippets themselves never touch — they
+// join their own freshly-created lobby directly over the socket since the
+// host is auto-inserted into lobby_members at creation time. This lobby is
+// deliberately never started (no lobby:start) — no session/worker is ever
+// created, so there's nothing to actively clean up afterward; it just sits
+// at status='waiting' like every other never-started lobby already does.
+async function runCodeJoinTest(): Promise<CheckResult[]> {
+  const label = 'Vorflug: Code/Beitritt';
+  const results: CheckResult[] = [];
+  let lobby: { lobbyId: string; code: string };
+  try {
+    lobby = await createArLobby('Sim: Code/Join-Test');
+  } catch (e: any) {
+    return [{ snippetKey: 'preflight', label: `${label}: Lobby erstellen`, pass: false, detail: e?.message || String(e) }];
+  }
+
+  const codeOk = /^[A-Za-z0-9_-]{6,12}$/.test(lobby.code);
+  results.push({ snippetKey: 'preflight', label: `${label}: Code erzeugt`, pass: codeOk, detail: `Code: ${lobby.code}` });
+
+  try {
+    const joined = await joinLobbyByCode(lobby.code);
+    results.push({
+      snippetKey: 'preflight', label: `${label}: Beitritt per Code`, pass: joined.lobbyId === lobby.lobbyId,
+      detail: `lobbyId=${joined.lobbyId} (erwartet ${lobby.lobbyId})`,
+    });
+  } catch (e: any) {
+    results.push({ snippetKey: 'preflight', label: `${label}: Beitritt per Code`, pass: false, detail: e?.message || String(e) });
+  }
+
+  try {
+    await joinLobbyByCode('ZZZZZZZZ');
+    results.push({ snippetKey: 'preflight', label: `${label}: Ungültiger Code wird abgelehnt`, pass: false, detail: 'unerwartet akzeptiert' });
+  } catch {
+    results.push({ snippetKey: 'preflight', label: `${label}: Ungültiger Code wird abgelehnt`, pass: true, detail: 'korrekt abgelehnt' });
+  }
+
+  return results;
 }
 
 export default function MatchSimScreen({ origin, onExit }: { origin: { lat: number; lon: number } | null; onExit: () => void }) {
@@ -217,6 +321,15 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
     // field is anchored at the same point, see resolveOrigin's fallback
     // chain (Lobby's live GPS → last cached fix → jittered default).
     const resolvedOrigin = resolveOrigin(origin);
+
+    setCurrentLabel('Vorflug: Sensoren');
+    const sensorResults = await runSensorTest();
+    setResults(prev => [...prev, ...sensorResults]);
+
+    setCurrentLabel('Vorflug: Code/Beitritt');
+    const joinResults = await runCodeJoinTest();
+    setResults(prev => [...prev, ...joinResults]);
+
     for (const snippet of SIM_SNIPPETS) {
       if (cancelRef.current) break;
       setCurrentLabel(snippet.label);
