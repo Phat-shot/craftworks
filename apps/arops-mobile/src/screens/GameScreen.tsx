@@ -12,8 +12,8 @@ import CameraLayer from '../components/CameraLayer';
 import { useIrScan } from '../hooks/useIrScan';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
-import { useTheme, ThemeTokens } from '../theme';
+import { BLANK_STYLE, OSM_STYLE, OSM_STYLE_DARK } from '../mapStyle';
+import { useTheme, ThemeTokens, THEMES } from '../theme';
 
 // owner/capture's key is a team letter in team mode, a userId in the ffa
 // variant (every player captures individually) — see arops.js's Domination
@@ -329,6 +329,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // header comment for why.
   const theme = useTheme();
   const st = useMemo(() => makeStyles(theme), [theme]);
+  // Same dark-map treatment as LobbyScreen for both dark UI themes ('color',
+  // 'night') — only 'day' keeps the light OSM look. See LobbyScreen.tsx's
+  // equivalent comment for why comparing against THEMES.day works without
+  // threading the ThemeName down separately.
+  const isDarkUiTheme = theme !== THEMES.day;
   const socket = getSocket();
   const me = getUser();
   const [snap, setSnap] = useState<Snap | null>(null);
@@ -1198,7 +1203,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const hasComicMap = (snap?.comicMap?.features?.length ?? 0) > 0;
   const renderMap = (interactive: boolean, free2d: boolean = false) => (
     <View style={{ flex: 1 }}>
-    <MapView ref={mapRef} style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
+    <MapView ref={mapRef} style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : (isDarkUiTheme ? OSM_STYLE_DARK : OSM_STYLE)) as any} onPress={onMapPress}
       scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}
       // Zoom can change whenever zoomEnabled/`interactive` is true, in every
       // view mode (not just free-2D) — tracked here regardless of free2d so
@@ -1297,6 +1302,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <CircleLayer id="actorDots" style={{
             circleRadius: 9, circleColor: ['get', 'color'] as any,
             circleStrokeWidth: 2, circleStrokeColor: '#ffffff', circleOpacity: ['get', 'op'] as any,
+            // 'map' instead of the default 'viewport': the own-position dot
+            // (first feature pushed into actorsGeoJSON, from telemetry.sample)
+            // shares this single layer/style with every other actor dot
+            // (teammates, enemies, radar contacts) — circlePitchAlignment is
+            // a whole-layer paint property, not per-feature, so this tilts
+            // all of them together with the map plane instead of always
+            // facing the camera flat-on. Unlike LobbyScreen's map, this one's
+            // Camera does set a real non-zero pitch (mapPitch, 45° once the
+            // compass is driving 3D/compass mode — see mapPitch above), so
+            // the effect is actually visible here.
+            circlePitchAlignment: 'map',
           }} />
         </ShapeSource>
       )}
@@ -1980,7 +1996,7 @@ function makeStyles(theme: ThemeTokens) {
   targetDist: { position: 'absolute', bottom: -16, color: '#fff', fontSize: 10, fontWeight: '800' },
   shutter: {
     width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(240,200,64,.25)',
-    borderWidth: 4, borderColor: '#f0c840', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 4, borderColor: 'rgba(240,200,64,.5)', alignItems: 'center', justifyContent: 'center',
   },
   shutterCd: { borderColor: '#605030' },
   shutterTxt: { fontSize: 24, color: '#f0c840', fontWeight: '800' },
@@ -2009,7 +2025,7 @@ function makeStyles(theme: ThemeTokens) {
   debugBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center',
-    backgroundColor: 'rgba(8,16,8,.85)', borderBottomWidth: 1, borderBottomColor: '#40ff80',
+    backgroundColor: 'rgba(8,16,8,.25)', borderBottomWidth: 1, borderBottomColor: 'rgba(64,255,128,.5)',
     paddingHorizontal: 12, paddingVertical: 6,
   },
   debugBarTxt: { color: '#a0e0a0', fontSize: 11, fontWeight: '700' },

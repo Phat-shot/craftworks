@@ -92,7 +92,7 @@ function makeStyles(theme: ThemeTokens) {
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
     // Confirm/accept action keeps its literal green brand accent, same
     // convention as every other primary CTA across the app.
-    btn: { backgroundColor: 'rgba(60,160,20,.3)', borderWidth: 2, borderColor: '#3a8020', borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10 },
+    btn: { backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: 'rgba(58,128,32,.5)', borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10 },
     btnTxt: { color: '#80ff40', fontWeight: '800' },
     errRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 },
     errTxt: { color: theme.danger, fontSize: 12 },

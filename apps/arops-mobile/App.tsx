@@ -395,26 +395,26 @@ function makeStyles(theme: ThemeTokens) {
     // every theme — see the JSX comment above these buttons.
     rejoinBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(40,160,200,.2)', borderWidth: 2, borderColor: '#2088a0',
+      backgroundColor: 'rgba(40,160,200,.25)', borderWidth: 2, borderColor: 'rgba(32,136,160,.5)',
       borderRadius: 12, padding: 14, marginBottom: 16,
     },
     rejoinTxt: { color: '#40e0ff', fontSize: 15, fontWeight: '800' },
     btnDisabled: { opacity: 0.5 },
     hostBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: '#3a8020',
+      backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: 'rgba(58,128,32,.5)',
       borderRadius: 12, padding: 16, marginBottom: 12,
     },
     hostTxt: { color: '#80ff40', fontSize: 16, fontWeight: '800' },
     joinBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(160,60,200,.2)', borderWidth: 2, borderColor: '#803aa0',
+      backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: 'rgba(128,58,160,.5)',
       borderRadius: 12, padding: 16,
     },
     joinTxt: { color: '#e060ff', fontSize: 16, fontWeight: '800' },
     glossaryBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(240,200,64,.12)', borderWidth: 2, borderColor: '#8a7020',
+      backgroundColor: 'rgba(240,200,64,.25)', borderWidth: 2, borderColor: 'rgba(138,112,32,.5)',
       borderRadius: 12, padding: 16, marginTop: 12,
     },
     glossaryTxt: { color: '#f0c840', fontSize: 16, fontWeight: '800' },
@@ -439,7 +439,7 @@ function makeStyles(theme: ThemeTokens) {
     settingsBtnActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg2 },
     settingsBtnTxt: { color: theme.text2, fontSize: 12, fontWeight: '800' },
     logoutBtn: {
-      marginTop: 12, backgroundColor: 'rgba(224,48,32,.2)', borderWidth: 2, borderColor: '#a03020',
+      marginTop: 12, backgroundColor: 'rgba(224,48,32,.25)', borderWidth: 2, borderColor: 'rgba(160,48,32,.5)',
       borderRadius: 10, paddingVertical: 12, alignItems: 'center',
     },
     logoutTxt: { color: theme.danger, fontWeight: '800', fontSize: 14 },

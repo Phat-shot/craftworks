@@ -114,7 +114,7 @@ function makeStyles(theme: ThemeTokens) {
     // Keeps the same literal magenta brand accent as the start menu's own
     // "Lobby beitreten" button (App.tsx) — same action, same identity.
     btn: {
-      width: 320, backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: '#803aa0',
+      width: 320, backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: 'rgba(128,58,160,.5)',
       borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10,
     },
     btnTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },

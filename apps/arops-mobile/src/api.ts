@@ -77,7 +77,7 @@ export async function loadHeadingSettings(): Promise<void> {
 // existing installs see no visual change until the player explicitly opts
 // into Night/Day via the Einstellungen picker. Type lives in theme.ts (the
 // canonical definition, re-exported here) rather than duplicated.
-const DEFAULT_THEME: ThemeName = 'color';
+const DEFAULT_THEME: ThemeName = 'night';
 let currentTheme: ThemeName = DEFAULT_THEME;
 
 export function getTheme(): ThemeName { return currentTheme; }

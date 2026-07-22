@@ -6,10 +6,10 @@ import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from 
 import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition, getDebugEnabled } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
+import { OSM_STYLE, OSM_STYLE_DARK, BLANK_STYLE } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig, scaleTimings, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
-import { useTheme, ThemeTokens } from '../theme';
+import { useTheme, ThemeTokens, THEMES } from '../theme';
 import MatchSimScreen from './MatchSimScreen';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
@@ -129,6 +129,13 @@ export default function LobbyScreen({
 }: { lobbyId: string; isHost?: boolean; lobbyCode?: string; onGameStart: (sessionId: string) => void }) {
   const theme = useTheme();
   const st = useMemo(() => makeStyles(theme), [theme]);
+  // Map tiles fake a dark-mode look (mapStyle.ts's OSM_STYLE_DARK) for both
+  // dark UI themes ('color', the original dark-purple default, and 'night') —
+  // only 'day' keeps the stock light OSM raster look. `theme` is the exact
+  // object reference ThemeProvider hands out per name (see theme.ts), so
+  // comparing against THEMES.day avoids threading the ThemeName itself down
+  // through props just for this.
+  const mapStyle = theme === THEMES.day ? OSM_STYLE : OSM_STYLE_DARK;
   const [members, setMembers] = useState<Member[]>([]);
   const [ar, setAr] = useState<ArSettings>({});
   const [polyErrs, setPolyErrs] = useState<string[]>([]);
@@ -890,7 +897,7 @@ export default function LobbyScreen({
       )}
 
       <View style={st.mapBox}>
-        <MapView style={{ flex: 1 }} mapStyle={OSM_STYLE as any} onPress={onMapPress}>
+        <MapView style={{ flex: 1 }} mapStyle={mapStyle as any} onPress={onMapPress}>
           {/* key changes force MapLibre to re-apply defaultSettings: once when
               our own position resolves (async, arrives after mount), again
               once the field polygon is complete enough to re-center on it. */}
@@ -905,6 +912,14 @@ export default function LobbyScreen({
                 circleRadius: 8, circleColor: myPosStale ? '#807050' : '#40a0ff',
                 circleOpacity: myPosStale ? 0.5 : 0.85,
                 circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
+                // 'map' instead of the default 'viewport': lets the dot tilt
+                // with the map plane instead of always facing the camera
+                // flat-on. This MapView's Camera never sets a non-zero pitch
+                // (defaultSettings only has centerCoordinate/zoomLevel, see
+                // above) though, so on this particular screen it's currently
+                // a no-op in practice — kept for consistency with GameScreen
+                // and in case this map ever gains tilt later.
+                circlePitchAlignment: 'map',
               }} />
             </ShapeSource>
           )}
@@ -1338,10 +1353,10 @@ function makeStyles(theme: ThemeTokens) {
     btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     // Ready/Start keep their literal green/purple brand accents, same
     // convention as every other primary CTA across the app.
-    btn: { backgroundColor: 'rgba(60,160,20,.2)', borderWidth: 2, borderColor: '#3a8020', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
+    btn: { backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: 'rgba(58,128,32,.5)', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
     btnActive: { backgroundColor: 'rgba(60,160,20,.45)' },
     btnTxt: { color: '#80ff40', fontSize: 15, fontWeight: '800' },
-    startBtn: { backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: '#803aa0', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
+    startBtn: { backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: 'rgba(128,58,160,.5)', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
     startTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },
     modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,.85)', alignItems: 'center', justifyContent: 'center' },
     modalBox: { backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent, borderRadius: 16, padding: 24, alignItems: 'center', gap: 12 },
