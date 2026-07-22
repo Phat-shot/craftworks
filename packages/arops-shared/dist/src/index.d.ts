@@ -5,3 +5,4 @@ export * from './geofence';
 export * from './timings';
 export * from './compass';
 export * from './profiles';
+export * from './simScript';

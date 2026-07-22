@@ -121,14 +121,22 @@ function registerGameHandlers(io, socket, db) {
       if (!polyCheck.ok) {
         return socket.emit('error', { code: 'ar_invalid_polygon', details: polyCheck.errors });
       }
+      // Match-simulation (see packages/arops-shared/src/simScript.ts): the
+      // bot roster and zones come from the fixed snippet, not from
+      // ar.bots/ar.zones (the client never sends those for a sim run) — the
+      // player-count and zone-count preflights below would otherwise reject
+      // a perfectly valid sim lobby. createAropsGame's own applySimOverrides
+      // + validateZones call still guards correctness once the match
+      // actually starts.
+      const isSim = ar?.simulation === true;
       const { rows: cnt } = await db.query('SELECT COUNT(*) AS n FROM lobby_members WHERE lobby_id=$1', [lobbyId]);
       const botCount = Array.isArray(ar?.bots) ? ar.bots.length : 0;
-      if (!ar?.debugMode && (+cnt[0].n + botCount) < 2) {
+      if (!isSim && !ar?.debugMode && (+cnt[0].n + botCount) < 2) {
         return socket.emit('error', { code: 'ar_need_two_players' });
       }
       // Zone preflight for zone-based modes
       const sub = ar?.subMode || 'hide_and_seek';
-      if (sub === 'domination' || sub === 'seek_destroy') {
+      if (!isSim && (sub === 'domination' || sub === 'seek_destroy')) {
         const minZones = sub === 'domination' ? 2 : 1;
         const zonesRaw = Array.isArray(ar?.zones) ? ar.zones : [];
         if (zonesRaw.length < minZones) {
@@ -171,8 +179,17 @@ function registerGameHandlers(io, socket, db) {
 
     // Bots have no `users` row (FK constraint) — appended AFTER persistence,
     // in-memory only, same order convention as effectiveArSettings' defaulting.
-    if (lobby.game_mode === 'ar_ops' && Array.isArray(lobby.workshop_map_config?.ar_settings?.bots)) {
-      for (const b of lobby.workshop_map_config.ar_settings.bots) {
+    const arForBots = lobby.workshop_map_config?.ar_settings;
+    if (lobby.game_mode === 'ar_ops' && arForBots?.simulation === true) {
+      // Match-simulation: bot roster comes from the fixed snippet, not from
+      // arForBots.bots (see the lobby:start preflight above) — same
+      // in-memory-only convention as regular bots.
+      const snippet = aropsShared.SIM_SNIPPETS.find(s => s.key === arForBots.simSnippetKey);
+      for (const b of snippet?.bots || []) {
+        members.push({ userId: b.id, username: b.username, avatar_color: null, isBot: true });
+      }
+    } else if (lobby.game_mode === 'ar_ops' && Array.isArray(arForBots?.bots)) {
+      for (const b of arForBots.bots) {
         members.push({ userId: b.id, username: b.username, avatar_color: null, isBot: true });
       }
     }

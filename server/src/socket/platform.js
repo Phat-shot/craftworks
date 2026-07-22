@@ -274,6 +274,18 @@ function registerPlatformHandlers(io, socket, db) {
         next.livesPerPlayer = Math.min(10, Math.max(1, Math.round(+arSettings.livesPerPlayer)));
       }
       if (typeof arSettings?.debugMode === 'boolean') next.debugMode = arSettings.debugMode;
+      // Debug-only on-device match simulation (see packages/arops-shared/
+      // src/simScript.ts) — client only ever sends `polygon` + these two
+      // fields; subMode/classes/teams/zones/hitConfig/onHit/destroyVariant
+      // and the bot roster all come from the fixed snippet definition
+      // itself server-side (createAropsGame's applySimOverrides / this
+      // handler's lobby:start bot-append below), never from the client, so
+      // there is nothing here to whitelist beyond the flag + which snippet.
+      if (typeof arSettings?.simulation === 'boolean') next.simulation = arSettings.simulation;
+      if (typeof arSettings?.simSnippetKey === 'string'
+          && aropsShared.SIM_SNIPPETS.some(s => s.key === arSettings.simSnippetKey)) {
+        next.simSnippetKey = arSettings.simSnippetKey;
+      }
       if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {
         next.hitTrackingMode = arSettings.hitTrackingMode;
       }

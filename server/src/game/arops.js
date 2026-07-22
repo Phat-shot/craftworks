@@ -1135,8 +1135,45 @@ function tickSpawnRespawn(gs, t, dtMs) {
 // ═══════════════════════════════════════════════════════════
 //  SESSION CREATION
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+//  MATCH-SIMULATION (debug-only — see packages/arops-shared/src/simScript.ts
+//  for the fixed, non-configurable snippet definitions this drives; the
+//  mobile Match-Simulation screen imports the SAME module to predict
+//  expected outcomes, so the two can never silently drift apart).
+// ═══════════════════════════════════════════════════════════
+// A snippet only ever supplies `subMode`/`classes`/`teams`/`zones`/
+// `hitConfig`/`onHit`/`destroyVariant` — every other ar_settings field
+// (polygon, simulation, simSnippetKey) passes through unchanged, so the
+// rest of createAropsGame's normal parsing below runs completely unaware
+// this is a simulation, exactly like a host manually configuring the same
+// values from the Lobby UI would.
+function applySimOverrides(ar, players) {
+  const snippet = shared.SIM_SNIPPETS.find(s => s.key === ar.simSnippetKey);
+  if (!snippet) return ar;
+  const origin = fieldCentroid(ar.polygon || []);
+  const tester = players.find(p => !p.isBot);
+  const classes = tester ? { [tester.userId]: snippet.testerClass } : {};
+  const teams = (tester && snippet.testerTeam) ? { [tester.userId]: snippet.testerTeam } : {};
+  for (const b of snippet.bots) {
+    classes[b.id] = b.class;
+    if (b.team) teams[b.id] = b.team;
+  }
+  const zones = (snippet.zones || []).map(z => shared.destinationPoint(origin, z.bearingDeg, z.distanceM));
+  return {
+    ...ar,
+    subMode: snippet.subMode,
+    classes, teams, zones,
+    teamVariant: 'team',
+    ...(snippet.onHit ? { onHit: snippet.onHit } : {}),
+    ...(snippet.destroyVariant ? { destroyVariant: snippet.destroyVariant } : {}),
+    ...(snippet.hitConfig ? { hitConfig: snippet.hitConfig } : {}),
+    debugMode: true, // ground-truth visibility — the tester must see real bot positions
+  };
+}
+
 function createAropsGame(sessionId, players, workshopConfig) {
-  const ar = workshopConfig?.ar_settings || {};
+  let ar = workshopConfig?.ar_settings || {};
+  if (ar.simulation === true) ar = applySimOverrides(ar, players);
   const polygon = ar.polygon || [];
   const subMode = MODES[ar.subMode] ? ar.subMode : 'hide_and_seek';
   const mode = MODES[subMode];
@@ -1193,6 +1230,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
   cfg.autoScale = autoScale;
   cfg.foundMode = ['seeker', 'freeze'].includes(ar.foundMode) ? ar.foundMode : 'spectator';
   cfg.debugMode = ar.debugMode === true;
+  cfg.simulation = ar.simulation === true;
   // Hide & Seek variant: 'classic' (default, seeker/hider roles), 'ffa'
   // ("Jeder gegen jeden" — no teams/roles, permanent elimination) or
   // 'the_ship' (secret assassin-chain — no roles). All three are variants,
@@ -1344,6 +1382,12 @@ function createAropsGame(sessionId, players, workshopConfig) {
     _lastModeTick: now(),
     _hasBots: Object.values(playerState).some(p => p.isBot),
     _lastBotStep: 0,
+    _simSnippet: cfg.simulation ? shared.SIM_SNIPPETS.find(s => s.key === ar.simSnippetKey) || null : null,
+    _simOrigin: cfg.simulation ? fieldCentroid(polygon) : null,
+    _simStartAt: now(),
+    _simTesterId: cfg.simulation ? (players.find(p => !p.isBot)?.userId || null) : null,
+    _simShotsDone: new Set(),
+    _lastSimBotStep: 0,
   };
   if (mode.initState) mode.initState(gs);
   return gs;
@@ -1907,6 +1951,70 @@ function tickBots(gs, t) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  MATCH-SIMULATION BOT DRIVER (replaces tickBots when gs.cfg.simulation —
+//  see applySimOverrides above and packages/arops-shared/src/simScript.ts).
+//  Bots walk their scripted route at the same brisk-walk pace tickBots
+//  already uses (gradual steps, not a teleport — a big instant jump would
+//  trip the same anti-spoof plausibility check a real client is subject
+//  to), and fire their own scripted shots (tester-fired shots are driven by
+//  the mobile Match-Simulation screen itself, not here).
+// ═══════════════════════════════════════════════════════════
+const SIM_BOT_STEP_MS = 1200;
+const SIM_BOT_SPEED_MPS = 1.3;
+
+function activeSimWaypoint(route, elapsedMs) {
+  let active = route[0];
+  for (const w of route) {
+    if (w.tMs <= elapsedMs) active = w; else break;
+  }
+  return active;
+}
+
+function tickSimBots(gs, t) {
+  const snippet = gs._simSnippet;
+  if (!snippet) return;
+  if (gs._lastSimBotStep && t - gs._lastSimBotStep < SIM_BOT_STEP_MS) return;
+  gs._lastSimBotStep = t;
+  const elapsed = t - gs._simStartAt;
+  const stepM = (SIM_BOT_STEP_MS / 1000) * SIM_BOT_SPEED_MPS;
+
+  for (const botScript of snippet.bots) {
+    const p = gs.players[botScript.id];
+    if (!p || p.status !== 'alive') continue;
+    const wp = activeSimWaypoint(botScript.route, elapsed);
+    const dest = shared.destinationPoint(gs._simOrigin, wp.bearingDeg, wp.distanceM);
+    if (!p.lastAccepted) {
+      actionArTelemetry(gs, p.userId, {
+        sample: { lat: dest.lat, lon: dest.lon, ts: t, accuracyM: 3, headingDeg: 0 },
+      });
+      continue;
+    }
+    const distToDest = shared.haversineMeters(p.lastAccepted, dest);
+    const headingDeg = shared.bearingDeg(p.lastAccepted, dest);
+    const next = distToDest <= stepM ? dest : shared.destinationPoint(p.lastAccepted, headingDeg, stepM);
+    actionArTelemetry(gs, p.userId, {
+      sample: { lat: next.lat, lon: next.lon, ts: t, accuracyM: 3, headingDeg },
+    });
+  }
+
+  for (let i = 0; i < snippet.shoots.length; i++) {
+    const beat = snippet.shoots[i];
+    if (beat.shooterId === 'tester' || elapsed < beat.tMs || gs._simShotsDone.has(i)) continue;
+    gs._simShotsDone.add(i);
+    const shooterId = beat.shooterId;
+    const targetId = beat.targetId === 'tester' ? gs._simTesterId : beat.targetId;
+    const shooter = gs.players[shooterId];
+    const target = gs.players[targetId];
+    if (!shooter || !target || !shooter.lastAccepted || !target.lastAccepted) continue;
+    const headingDeg = shared.bearingDeg(shooter.lastAccepted, target.lastAccepted);
+    actionArHitAttempt(gs, shooterId, {
+      sample: { lat: shooter.lastAccepted.lat, lon: shooter.lastAccepted.lon, ts: t, accuracyM: 3, headingDeg },
+      targetId,
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  TICK (core: geofence exposure + proximity, then mode logic)
 // ═══════════════════════════════════════════════════════════
 function tickArops(gs) {
@@ -1932,7 +2040,7 @@ function tickArops(gs) {
   mode.tick(gs, t, dtMs);
   if (gs.gameOver) return;
 
-  tickBots(gs, t);
+  if (gs.cfg.simulation) tickSimBots(gs, t); else tickBots(gs, t);
 
   // Proximity warner (active shoot phases only)
   for (const p of Object.values(gs.players)) {
