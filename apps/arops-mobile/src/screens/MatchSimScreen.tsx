@@ -39,6 +39,23 @@ const SHOT_RESULT_TIMEOUT_MS = 10_000; // generous real-device network/server la
 
 function sleep(ms: number): Promise<void> { return new Promise(res => setTimeout(res, ms)); }
 
+// Races a promise against a hard deadline — used so the sensor preflight
+// (which can genuinely hang: expo-location's requestForegroundPermissionsAsync
+// has no built-in timeout, see LobbyScreen.tsx's own hardened GPS code for
+// the same documented risk) can never block the rest of the run. The
+// underlying promise is left running regardless — if it eventually settles
+// after the deadline, its result is simply discarded, it does not resolve
+// this wrapper a second time.
+function withHardTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+  return new Promise(resolve => {
+    let settled = false;
+    const timer = setTimeout(() => { if (!settled) { settled = true; resolve(onTimeout()); } }, ms);
+    promise.then(v => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } });
+  });
+}
+
+const SENSOR_HARD_TIMEOUT_MS = 90_000;
+
 /** Waits for a socket event, or a fallback timeout — used for the few
  *  places a short, real (not blind-sleep) wait matters: ar_update landing,
  *  and the sim_end cleanup ack. */
@@ -304,6 +321,7 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
   const [done, setDone] = useState(false);
   const [currentLabel, setCurrentLabel] = useState('');
   const [progress, setProgress] = useState('');
+  const [sensorProgress, setSensorProgress] = useState('');
   const [results, setResults] = useState<CheckResult[]>([]);
   const cancelRef = useRef(false);
 
@@ -312,6 +330,7 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
     setDone(false);
     setResults([]);
     setProgress('');
+    setSensorProgress('');
     cancelRef.current = false;
     const myUserId = getUser()?.id || '';
     // Resolved once per run (not per scenario) — every scenario's synthetic
@@ -319,10 +338,22 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
     // chain (Lobby's live GPS → last cached fix → jittered default).
     const resolvedOrigin = resolveOrigin(origin);
 
-    setCurrentLabel('Vorflug: Sensoren');
-    const sensorResults = await runSensorTest(setProgress);
-    setResults(prev => [...prev, ...sensorResults]);
-    setProgress('');
+    // Sensor detection runs in the BACKGROUND — nothing here has a hard
+    // dependency on it (every scenario uses scripted, not real, positions),
+    // so it must never block the rest of the run. A hard 90s deadline
+    // ensures it always reports SOMETHING even if the underlying
+    // expo-location call itself hangs (no built-in timeout there — see
+    // LobbyScreen.tsx's own hardened GPS code for the same documented
+    // risk). Results are merged in whenever they actually land.
+    const sensorPromise = withHardTimeout(
+      runSensorTest(setSensorProgress),
+      SENSOR_HARD_TIMEOUT_MS,
+      () => [{
+        snippetKey: 'preflight', label: 'Vorflug: Sensoren', pass: false,
+        detail: `Zeitüberschreitung nach ${SENSOR_HARD_TIMEOUT_MS / 1000}s — lief im Hintergrund weiter, hat den restlichen Testlauf nicht blockiert`,
+      }],
+    );
+    sensorPromise.then(r => { setResults(prev => [...prev, ...r]); setSensorProgress(''); });
 
     setCurrentLabel('Vorflug: Code/Beitritt');
     const joinResults = await runCodeJoinTest(setProgress);
@@ -337,6 +368,10 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
       const r = await runScenario(scenario, myUserId, resolvedOrigin);
       setResults(prev => [...prev, ...r]);
     }
+    // Everything else is done — the sensor test almost certainly finished
+    // (or timed out) long before this point, but wait for it explicitly so
+    // "done" always reflects the FULL result set, never a partial one.
+    await sensorPromise;
     setRunning(false);
     setDone(true);
     setCurrentLabel('');
@@ -372,6 +407,15 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
             <Text style={st.runningTxt}>Läuft: {currentLabel}</Text>
           </View>
           {!!progress && <Text style={st.progressTxt}>{progress}</Text>}
+          {/* Sensor detection runs concurrently in the background — its own
+              status line, separate from the main flow above, since it no
+              longer blocks it. */}
+          {!!sensorProgress && (
+            <View style={st.sensorRow}>
+              <Icon name="satellite" size={12} color={theme.text3} />
+              <Text style={st.sensorTxt}>{sensorProgress}</Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -415,6 +459,8 @@ function makeStyles(theme: ThemeTokens) {
     runningRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     runningTxt: { color: theme.text2, fontSize: 13 },
     progressTxt: { color: theme.text3, fontSize: 12, marginTop: 4, marginLeft: 34 },
+    sensorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+    sensorTxt: { color: theme.text3, fontSize: 11 },
     summary: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
     summaryTxt: { fontSize: 16, fontWeight: '900' },
     list: { flex: 1 },

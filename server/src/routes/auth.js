@@ -151,7 +151,7 @@ router.post('/guest', authLimiter,
       await freeStaleGuestUsername(db, username);
       const { rows } = await db.query(
         `INSERT INTO users (email, username, password_hash, email_verified, is_guest, language)
-         VALUES ($1,$2,$3,true,true,$4) RETURNING id, username, avatar_color`,
+         VALUES ($1,$2,$3,true,true,$4) RETURNING id, username, avatar_color, is_admin, is_guest`,
         [email, username, hash, language]
       );
       const user = rows[0];
@@ -200,7 +200,7 @@ router.post('/login', authLimiter,
       user: {
         id: user.id, username: user.username, email: user.email,
         avatar_color: user.avatar_color, language: user.language,
-        email_verified: user.email_verified,
+        email_verified: user.email_verified, is_admin: user.is_admin, is_guest: user.is_guest,
       }
     });
   }
