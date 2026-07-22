@@ -4,6 +4,17 @@
 //  Reference: walking speed ~1.4 m/s. Per user requirement all
 //  values err LONGER rather than shorter and are clamped to
 //  sane bounds. Every value can be overridden via ar_settings.
+//
+//  Size categories (host-facing mental model, not a literal code branch —
+//  every formula below is a smooth function of L, these are just the
+//  reference points each was tuned against): small <2,500m² (L<50),
+//  medium up to 10,000m² (L up to 100), large beyond that (L>100). Floors/
+//  coefficients throughout are chosen so small/medium/large each land in a
+//  visibly different part of their own range instead of several categories
+//  all bottoming out at the same fixed floor (the previous tuning's
+//  reference field was ~50,000m², 5x today's "medium" ceiling, so most
+//  values used to sit flatly at their floor for anything at or below what's
+//  now the medium/large boundary).
 // ═══════════════════════════════════════════════════════════
 
 export interface ModeTimings {
@@ -49,27 +60,44 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 export function scaleTimings(areaM2: number): ModeTimings {
   const L = Math.sqrt(Math.max(1, areaM2)); // characteristic length in m
   return {
-    zoneRadiusM:          clamp(L / 25, 12, 45),
-    freezeMs:             clamp(((L / 2) / 1.4) * 1000, 3_000, 30_000),
+    // ~L/8: small ≈10m (floor), medium ≈13m, large(L=200) ≈25m.
+    zoneRadiusM:          clamp(L / 8, 10, 40),
+    // 100ms/m of L: small ≈5s, medium ≈10s, large(L=200) ≈20s, caps at 30s
+    // (L=300). Linear in L directly (not the walking-speed-derived shape
+    // below) — simplest formula that visibly differentiates all 3 categories.
+    freezeMs:             clamp(L * 100, 3_000, 30_000),
     freezeMoveToleranceM: 15, // fixed: below GPS drift would punish standing still
-    freezeExtensionMs:    clamp((((L / 2) / 1.4) * 1000) * 0.25, 1_000, 8_000),
-    baseSettingMs:        clamp((L / 1.4) * 1000, 90_000, 300_000),
-    flagPickupDwellMs:    clamp((L / 50) * 1000, 4_000, 15_000),
-    flagReturnMs:         clamp(L * 200, 30_000, 90_000),
-    minBaseSeparationM:   clamp(L * 0.5, 60, 600),
-    captureDwellMs:       clamp((L / 40) * 1000, 5_000, 20_000),
-    plantDwellMs:         clamp((L / 30) * 1000, 8_000, 20_000),
-    defuseDwellMs:        clamp((L / 40) * 1000, 6_000, 15_000),
-    bombTimerMs:          clamp(((L / 1.4) + 30) * 1200, 90_000, 300_000),
-    revealTrapRadiusM:    clamp(L * 0.15, 15, 60),
-    spawnCheckDwellMs:    clamp((L / 40) * 1000, 5_000, 15_000),
+    freezeExtensionMs:    clamp(L * 25, 1_000, 8_000),
+    // Base-placement/Warmup phase 1 — small ≈36s, medium ≈71s, large(L=200)
+    // ≈143s. Floor lowered from 90s: a full 90s-5min setup was disproportionate
+    // for a small field's much shorter overall match.
+    baseSettingMs:        clamp((L / 1.4) * 1000, 30_000, 240_000),
+    // Small ≈2.5s, medium ≈5s, large(L=200) ≈10s.
+    flagPickupDwellMs:    clamp((L / 20) * 1000, 2_000, 12_000),
+    // Small ≈15s, medium ≈30s, large(L=200) ≈60s.
+    flagReturnMs:         clamp(L * 300, 10_000, 90_000),
+    // Small ≈30m, medium ≈60m, large(L=200) ≈120m — the old 60m floor left
+    // almost no room to place 2 bases at all on a small/medium field.
+    minBaseSeparationM:   clamp(L * 0.6, 15, 500),
+    // Small ≈3.3s, medium ≈6.7s, large(L=200) ≈13.3s.
+    captureDwellMs:       clamp((L / 15) * 1000, 3_000, 20_000),
+    plantDwellMs:         clamp((L / 15) * 1000, 4_000, 20_000),
+    defuseDwellMs:        clamp((L / 20) * 1000, 3_000, 15_000),
+    // Small ≈51s, medium ≈86s, large(L=200) ≈158s.
+    bombTimerMs:          clamp(((L / 1.4) + 15) * 1000, 45_000, 240_000),
+    // Small ≈10m, medium ≈20m, large(L=200) ≈40m.
+    revealTrapRadiusM:    clamp(L * 0.2, 8, 60),
+    spawnCheckDwellMs:    clamp((L / 20) * 1000, 3_000, 15_000),
   };
 }
 
 /** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
 export function scaleDroneRangeM(areaM2: number): number {
   const L = Math.sqrt(Math.max(1, areaM2));
-  return clamp(L * 0.4, 50, 200);
+  // Small ≈25m, medium ≈50m, large(L=200) ≈100m — the old L*0.4 floor of
+  // 50m was already the WHOLE field on a small/medium field (near-useless
+  // as a "nearby" signal, it'd fire almost constantly).
+  return clamp(L * 0.5, 15, 200);
 }
 
 export interface CoreScaledConfig {
@@ -105,7 +133,10 @@ export interface CoreScaledConfig {
  */
 export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
   const L = Math.sqrt(Math.max(1, areaM2));
-  const gameDurationMs = clamp((L / 1.4) * 1000 * 2.5, 300_000, 3_600_000);
+  // Small ≈3min (floor), medium ≈3.6min, large(L=200) ≈7.1min. Floor lowered
+  // from 5min and coefficient raised (2.5→3) so medium fields clear the
+  // floor with visible room instead of landing right on top of it.
+  const gameDurationMs = clamp((L / 1.4) * 1000 * 3, 180_000, 3_600_000);
   // Perk cooldowns used to be derived purely from a field-size ratio against
   // a fixed reference (bigger field → shorter cooldown, capped at the
   // reference value) — completely decoupled from gameDurationMs. A small
@@ -122,13 +153,19 @@ export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
   // suddenly grant an absurdly long cooldown either.
   const perkCooldown = (fractionOfMatch: number, referenceMs: number) =>
     clamp(gameDurationMs * fractionOfMatch, 15_000, referenceMs);
-  // One life per ~5 minutes of match — the same "field size -> match length
-  // -> derived value" chain every other auto value here follows (perkCooldown
+  // One life per ~90s of match — the same "field size -> match length ->
+  // derived value" chain every other auto value here follows (perkCooldown
   // above included), so a bigger field naturally affords more lives via its
   // longer auto-derived match, not via its own separate area formula.
-  const livesPerPlayer = clamp(Math.round(gameDurationMs / 300_000), 2, 6);
+  // Divisor lowered from 5min (300_000) so small/medium matches (now
+  // several minutes shorter, see gameDurationMs above) don't all flatten to
+  // the same 2-life floor.
+  const livesPerPlayer = clamp(Math.round(gameDurationMs / 90_000), 2, 6);
   return {
-    hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45_000, 600_000),
+    // Small ≈20s (floor), medium ≈36s, large(L=200) ≈71s. Floor lowered
+    // from 45s — a tiny field has nowhere to hide anyway, a long head start
+    // is wasted time, not fairness.
+    hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 20_000, 600_000),
     gameDurationMs,
     // Scout's base range — 10-100m regardless of field size (other classes'
     // ranges derive from this via their own shotRangeMultiplier, see

@@ -7,11 +7,10 @@ const MUC = { lat: 48.13743, lon: 11.57549 };
 const REF_AREA_M2 = 224 * 224; // a "medium" reference field, L≈224m
 
 test('timings: small field hits lower clamps', () => {
-  const t = scaleTimings(10_000); // 100×100m → L=100
-  assert.equal(t.zoneRadiusM, 12);
-  assert.equal(t.freezeMs, 35_714 | 0 + 0 ? t.freezeMs : t.freezeMs); // no NaN
-  assert.ok(t.freezeMs >= 30_000);
-  assert.ok(t.captureDwellMs >= 5_000, 'domination capture ≥ 5s as specified');
+  const t = scaleTimings(400); // 20×20m → L=20, well under the 2,500m² "small" boundary
+  assert.equal(t.zoneRadiusM, 10);
+  assert.equal(t.freezeMs, 3_000);
+  assert.equal(t.captureDwellMs, 3_000);
   assert.equal(t.freezeMoveToleranceM, 15);
 });
 
@@ -28,19 +27,19 @@ test('timings: monotonic with field size', () => {
 test('timings: huge field hits upper clamps', () => {
   const t = scaleTimings(3_000_000);
   assert.equal(t.freezeMs, 30_000);
-  assert.equal(t.baseSettingMs, 300_000);
-  assert.equal(t.zoneRadiusM, 45);
+  assert.equal(t.baseSettingMs, 240_000);
+  assert.equal(t.zoneRadiusM, 40);
 });
 
 test('scaleDroneRangeM: small field hits lower clamp', () => {
-  assert.equal(scaleDroneRangeM(2_000), 50);
+  assert.equal(scaleDroneRangeM(400), 15); // L=20, well under the small boundary
 });
 
 test('scaleDroneRangeM: monotonic with field size', () => {
-  const a = scaleDroneRangeM(40_000);    // L=200 → 80
+  const a = scaleDroneRangeM(40_000);    // L=200 → 100
   const b = scaleDroneRangeM(1_000_000); // L=1000 → 200 (clamped)
   assert.ok(b >= a);
-  assert.equal(a, 80);
+  assert.equal(a, 100);
 });
 
 test('scaleDroneRangeM: huge field hits upper clamp', () => {
@@ -49,8 +48,8 @@ test('scaleDroneRangeM: huge field hits upper clamp', () => {
 
 test('scaleCoreConfig: small field hits lower clamps', () => {
   const c = scaleCoreConfig(2_000); // ~45x45m, L≈45
-  assert.equal(c.hidingDurationMs, 45_000);
-  assert.ok(c.hitRangeM >= 20);
+  assert.equal(c.hidingDurationMs, 20_000);
+  assert.ok(c.hitRangeM >= 10);
 });
 
 test('scaleCoreConfig: monotonic hiding/game duration + range with field size', () => {
@@ -80,7 +79,7 @@ test('scaleCoreConfig: cooldowns track match duration (grow with a longer match,
 });
 
 test('scaleCoreConfig: a short match never gets a cooldown longer than the match itself', () => {
-  const tiny = scaleCoreConfig(2_000); // lower-clamped short match (gameDurationMs=300_000)
+  const tiny = scaleCoreConfig(2_000); // lower-clamped short match (gameDurationMs=180_000)
   assert.ok(tiny.radarCooldownMs < tiny.gameDurationMs);
   assert.ok(tiny.droneCooldownMs < tiny.gameDurationMs);
   assert.ok(tiny.revealTrapCooldownMs < tiny.gameDurationMs);

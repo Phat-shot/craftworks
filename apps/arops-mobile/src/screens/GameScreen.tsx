@@ -196,53 +196,54 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   }, [pulse]);
   const p = Math.max(0, Math.min(1, progress));
   if (p <= 0) return null;
-  // Reported TWICE now: the top edge reads as "just a static line", not a
-  // glow. Root cause of both reports: this used to fill 3 segments per half
-  // SEQUENTIALLY (top-arm, then side, then bottom-arm) so the border would
-  // "end" exactly at top-center — but sequential fill means only ONE
-  // segment is ever actually changing at a given moment while the other two
-  // sit static (fully lit or fully empty); the top-arm segment in
-  // particular stayed 100% lit and completely unchanging for the first 2/3
-  // of the ENTIRE cooldown, reading exactly as "a fixed line", not
-  // something animating. Every segment now scales with the SAME plain
-  // fraction of `p` simultaneously instead — the whole frame visibly
-  // breathes/shrinks together at every instant, nothing ever sits static.
-  const frac: `${number}%` = `${p * 100}%`;
-  // Two layers per edge instead of one flat bar — a soft, low-opacity halo
+  // Single continuous CLOCKWISE sweep starting at top-center ("0°", 12
+  // o'clock) — a classic pie/countdown-timer read: at p=1 the whole border
+  // is lit, and as p depletes toward 0 the ELAPSED portion erases starting
+  // at the top and sweeping clockwise (top-right arm -> right edge ->
+  // bottom-right arm -> bottom-left arm -> left edge -> top-left arm, 6
+  // legs of equal 1/6 weight), always finishing the very last sliver
+  // exactly back at top-center. Replaces an earlier symmetric two-sided
+  // shrink (both halves depleting from their own center simultaneously)
+  // that fixed a prior "reads as a static line" bug but gave up the actual
+  // clockwise-timer semantics in the process.
+  const legQ = (i: number) => Math.max(0, Math.min(1, 6 * p - (5 - i)));
+  const armFrac = (i: number) => `${legQ(i) * 50}%` as `${number}%`;
+  const edgeFrac = (i: number) => `${legQ(i) * 100}%` as `${number}%`;
+  // Two layers per leg instead of one flat bar — a soft, low-opacity halo
   // (thicker) behind a crisp, bright core (thin, pulsing) — to actually read
   // as "glowing" rather than a hard-edged stroke. Both anchored flush INSIDE
-  // the button's own edge (no negative offsets, no shadow/elevation, which
-  // RN never clips to the View's own box) so nothing can bleed past the
-  // button's border the way the old shadow-based version did.
-  // Third report: halo was 7px against the button's own 2px border (see
-  // st.radarBtn: borderWidth 2, borderRadius 12) — read as "a much wider
-  // line than the button's edge", not a glow around it. Thinned to 4px, and
-  // the whole overlay clipped to the button's own corner radius so the
-  // straight per-edge bars don't visibly overshoot the rounded corners.
+  // the button's own edge, whole overlay clipped to the button's own corner
+  // radius so the straight per-leg bars don't visibly overshoot the rounded
+  // corners.
   const haloStyle = { backgroundColor: color, opacity: 0.22, borderRadius: 3 };
   const coreStyle = { backgroundColor: color, opacity: pulse as any, borderRadius: 1 };
   return (
     <View style={[StyleSheet.absoluteFill, { borderRadius: 12, overflow: 'hidden' }]} pointerEvents="none">
-      {/* Reported: the border-perimeter glow alone was hard to read as "how
-          much time is left" at a glance — tracing a thin shrinking outline
-          takes real attention. A plain fill rising from the bottom (classic
-          "gauge"/battery-level look) reads instantly, so it's added here as
-          a first, lowest layer — the border glow paints on top of it. */}
-      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: frac, backgroundColor: color, opacity: 0.22 }} />
-      {/* Right half. */}
-      <View style={[{ position: 'absolute', top: 0, left: '50%', height: 4, width: frac }, haloStyle]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, left: '50%', height: 2, width: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', top: 0, right: 0, width: 4, height: frac }, haloStyle]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, right: 0, width: 2, height: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', bottom: 0, right: 0, height: 4, width: frac }, haloStyle]} />
-      <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, height: 2, width: frac }, coreStyle]} />
-      {/* Left half, mirrored. */}
-      <View style={[{ position: 'absolute', top: 0, right: '50%', height: 4, width: frac }, haloStyle]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 2, width: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', top: 0, left: 0, width: 4, height: frac }, haloStyle]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 2, height: frac }, coreStyle]} />
-      <View style={[{ position: 'absolute', bottom: 0, left: 0, height: 4, width: frac }, haloStyle]} />
-      <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 2, width: frac }, coreStyle]} />
+      {/* The border-sweep alone is still hard to read as "how much time is
+          left" at a glance — a plain fill rising from the bottom (classic
+          gauge/battery-level look) reads instantly, added as a first,
+          lowest layer. Uses the overall `p` directly (not the per-leg
+          sweep) — a supplementary reading aid, not part of the clockwise
+          motion itself. */}
+      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: `${p * 100}%`, backgroundColor: color, opacity: 0.22 }} />
+      {/* leg0: top-center -> top-right corner */}
+      <View style={[{ position: 'absolute', top: 0, right: 0, height: 4, width: armFrac(0) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: 0, height: 2, width: armFrac(0) }, coreStyle]} />
+      {/* leg1: top-right corner -> bottom-right corner */}
+      <View style={[{ position: 'absolute', bottom: 0, right: 0, width: 4, height: edgeFrac(1) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, width: 2, height: edgeFrac(1) }, coreStyle]} />
+      {/* leg2: bottom-right corner -> bottom-center */}
+      <View style={[{ position: 'absolute', bottom: 0, left: '50%', height: 4, width: armFrac(2) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, left: '50%', height: 2, width: armFrac(2) }, coreStyle]} />
+      {/* leg3: bottom-center -> bottom-left corner */}
+      <View style={[{ position: 'absolute', bottom: 0, left: 0, height: 4, width: armFrac(3) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 2, width: armFrac(3) }, coreStyle]} />
+      {/* leg4: bottom-left corner -> top-left corner */}
+      <View style={[{ position: 'absolute', top: 0, left: 0, width: 4, height: edgeFrac(4) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 2, height: edgeFrac(4) }, coreStyle]} />
+      {/* leg5: top-left corner -> top-center */}
+      <View style={[{ position: 'absolute', top: 0, right: '50%', height: 4, width: armFrac(5) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 2, width: armFrac(5) }, coreStyle]} />
     </View>
   );
 }
@@ -1138,14 +1139,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // up the difference between the real heading and however the map is
   // currently (manually) oriented.
   const shotOverlayRotateDeg = isFree2D ? (activeHeadingDeg ?? 0) - mapBearingDeg : 0;
-  // Standard Web Mercator meters-per-pixel at a given latitude/zoom (256px
-  // tiles) — lets ShotOverlay's screen-space wedge be sized in real px that
-  // match the SAME scale the map's own geo-referenced range ring
-  // (rangeGeoJSON) renders at, so the two stay visually congruent instead of
-  // the overlay's reach silently disagreeing with the actual max-range
-  // circle drawn on the map (reported: not "deckungsgleich").
+  // Standard Web Mercator meters-per-pixel at a given latitude/zoom — lets
+  // ShotOverlay's screen-space wedge be sized in real px that match the SAME
+  // scale the map's own geo-referenced range ring (rangeGeoJSON) renders at,
+  // so the two stay visually congruent instead of the overlay's reach
+  // silently disagreeing with the actual max-range circle drawn on the map.
+  // The textbook constant (156543.03392) assumes classic 256px raster
+  // tiles; MapLibre GL's vector tiles are 512px, i.e. one full zoom level
+  // coarser at the same reported zoomLevel — reported (and confirmed): the
+  // overlay was rendering exactly half the map's own range-ring diameter
+  // with the 256px constant. +1 to the exponent (equivalently doubling the
+  // constant) corrects for the 512px tile convention.
   const metersPerPixel = (latDeg: number, zoom: number) =>
-    (156543.03392 * Math.cos(latDeg * Math.PI / 180)) / Math.pow(2, zoom);
+    (156543.03392 * Math.cos(latDeg * Math.PI / 180)) / Math.pow(2, zoom + 1);
   const shotOverlayLengthPx = telemetry.sample
     ? Math.max(8, effectiveMaxRangeM / metersPerPixel(telemetry.sample.lat, mapZoomLevel))
     : 130;
