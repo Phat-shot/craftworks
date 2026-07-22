@@ -283,7 +283,7 @@ function registerPlatformHandlers(io, socket, db) {
       // there is nothing here to whitelist beyond the flag + which snippet.
       if (typeof arSettings?.simulation === 'boolean') next.simulation = arSettings.simulation;
       if (typeof arSettings?.simSnippetKey === 'string'
-          && aropsShared.SIM_SNIPPETS.some(s => s.key === arSettings.simSnippetKey)) {
+          && aropsShared.SIM_SCENARIOS.some(s => s.key === arSettings.simSnippetKey)) {
         next.simSnippetKey = arSettings.simSnippetKey;
       }
       if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {

@@ -184,7 +184,7 @@ function registerGameHandlers(io, socket, db) {
       // Match-simulation: bot roster comes from the fixed snippet, not from
       // arForBots.bots (see the lobby:start preflight above) — same
       // in-memory-only convention as regular bots.
-      const snippet = aropsShared.SIM_SNIPPETS.find(s => s.key === arForBots.simSnippetKey);
+      const snippet = aropsShared.SIM_SCENARIOS.find(s => s.key === arForBots.simSnippetKey);
       for (const b of snippet?.bots || []) {
         members.push({ userId: b.id, username: b.username, avatar_color: null, isBot: true });
       }

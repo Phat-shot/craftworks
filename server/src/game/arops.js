@@ -1148,25 +1148,29 @@ function tickSpawnRespawn(gs, t, dtMs) {
 // this is a simulation, exactly like a host manually configuring the same
 // values from the Lobby UI would.
 function applySimOverrides(ar, players) {
-  const snippet = shared.SIM_SNIPPETS.find(s => s.key === ar.simSnippetKey);
-  if (!snippet) return ar;
+  const scenario = shared.SIM_SCENARIOS.find(s => s.key === ar.simSnippetKey);
+  if (!scenario) return ar;
   const origin = fieldCentroid(ar.polygon || []);
   const tester = players.find(p => !p.isBot);
-  const classes = tester ? { [tester.userId]: snippet.testerClass } : {};
-  const teams = (tester && snippet.testerTeam) ? { [tester.userId]: snippet.testerTeam } : {};
-  for (const b of snippet.bots) {
+  const classes = tester ? { [tester.userId]: scenario.testerClass } : {};
+  const teams = (tester && scenario.testerTeam) ? { [tester.userId]: scenario.testerTeam } : {};
+  for (const b of scenario.bots) {
     classes[b.id] = b.class;
     if (b.team) teams[b.id] = b.team;
   }
-  const zones = (snippet.zones || []).map(z => shared.destinationPoint(origin, z.bearingDeg, z.distanceM));
+  const zones = (scenario.zones || []).map(z => shared.destinationPoint(origin, z.bearingDeg, z.distanceM));
   return {
     ...ar,
-    subMode: snippet.subMode,
+    subMode: scenario.subMode,
     classes, teams, zones,
     teamVariant: 'team',
-    ...(snippet.onHit ? { onHit: snippet.onHit } : {}),
-    ...(snippet.destroyVariant ? { destroyVariant: snippet.destroyVariant } : {}),
-    ...(snippet.hitConfig ? { hitConfig: snippet.hitConfig } : {}),
+    ...(scenario.onHit ? { onHit: scenario.onHit } : {}),
+    ...(scenario.hitConfig ? { hitConfig: scenario.hitConfig } : {}),
+    // Bypasses platform.js's 5s floor on client-sent timings entirely (this
+    // writes directly into the internal ar object before createAropsGame's
+    // own parsing, which has no such floor) — lets a whole freeze/capture
+    // cycle fit inside a scenario that's only 1-10s long in total.
+    ...(scenario.timings ? { timings: scenario.timings } : {}),
     debugMode: true, // ground-truth visibility — the tester must see real bot positions
   };
 }
@@ -1382,7 +1386,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
     _lastModeTick: now(),
     _hasBots: Object.values(playerState).some(p => p.isBot),
     _lastBotStep: 0,
-    _simSnippet: cfg.simulation ? shared.SIM_SNIPPETS.find(s => s.key === ar.simSnippetKey) || null : null,
+    _simSnippet: cfg.simulation ? shared.SIM_SCENARIOS.find(s => s.key === ar.simSnippetKey) || null : null,
     _simOrigin: cfg.simulation ? fieldCentroid(polygon) : null,
     _simStartAt: now(),
     _simTesterId: cfg.simulation ? (players.find(p => !p.isBot)?.userId || null) : null,
@@ -1390,6 +1394,18 @@ function createAropsGame(sessionId, players, workshopConfig) {
     _lastSimBotStep: 0,
   };
   if (mode.initState) mode.initState(gs);
+  // Simulation scenarios are only ever 1-10s long in total — the normal
+  // real-match warmup/base_setup prep phase (tens of seconds, see each
+  // mode's initialPhase/phaseDurationMs) would completely dominate that
+  // budget for no benefit (nobody needs prep time against a scripted bot).
+  // Skip straight to 'live' using the same transition functions a real
+  // match reaches on its own once the timer elapses — both already
+  // tolerate running before any player telemetry exists (bases fall back
+  // to the field centroid). Never applies outside cfg.simulation.
+  if (cfg.simulation) {
+    if (gs.phase === 'warmup') transitionFromWarmup(gs, now());
+    else if (gs.phase === 'base_setup') transitionFromBaseSetup(gs, now());
+  }
   return gs;
 }
 

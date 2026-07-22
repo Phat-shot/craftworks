@@ -146,6 +146,12 @@ export default function LobbyScreen({
   const debugEnabled = useMemo(() => getDebugEnabled(), []);
   const [simSelected, setSimSelected] = useState(false);
   const [simRunning, setSimRunning] = useState(false);
+  // Mirrors simRunning for the game:start listener below (a plain
+  // useEffect closure would otherwise capture a stale simRunning at
+  // subscription time) — see that listener's own comment for why this
+  // guard exists at all.
+  const simRunningRef = useRef(false);
+  simRunningRef.current = simRunning;
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
   // Seeded from the last real fix persisted locally (see api.ts
@@ -348,7 +354,22 @@ export default function LobbyScreen({
     const onJoined = (p: any) => setMembers(m => [...m.filter(x => x.id !== p.userId), { id: p.userId, username: p.username, ready: false }]);
     const onLeft = ({ userId }: any) => setMembers(m => m.filter(x => x.id !== userId));
     const onReady = ({ userId, ready: r }: any) => setMembers(m => m.map(x => x.id === userId ? { ...x, ready: r } : x));
-    const onStart = ({ sessionId }: any) => onGameStart(sessionId);
+    // Match-Simulation creates its own throwaway lobbies from this same
+    // screen (MatchSimScreen, rendered instead of this component's normal
+    // body while simRunning — LobbyScreen itself never unmounts, so this
+    // listener stays attached the whole time) and joins each one's socket
+    // room directly on the same shared socket. Socket.IO delivers room
+    // broadcasts to every socket that joined that room regardless of which
+    // screen triggered the join, so a sim lobby's own game:start would
+    // otherwise ALSO reach this listener and wrongly navigate to a real
+    // GameScreen for a session that only ever exists for the simulation
+    // (real GPS/compass then fight a synthetic field that doesn't match
+    // wherever the device actually is — the "out of map" symptom this
+    // guard fixes). This lobby never has a legitimate game:start while a
+    // simulation is running (the normal lobby:start path is skipped
+    // entirely whenever simSelected is true), so blocking unconditionally
+    // here is always correct, never just a heuristic.
+    const onStart = ({ sessionId }: any) => { if (!simRunningRef.current) onGameStart(sessionId); };
     // Fallback to the raw code rather than doing nothing for one we haven't
     // mapped in START_ERR — a silent no-op here is exactly what made a tap
     // on "Start" look broken with zero feedback (see START_ERR's comment).
