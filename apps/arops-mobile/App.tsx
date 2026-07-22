@@ -8,6 +8,7 @@ import {
   restoreSession, loadLastPosition, createArLobby, getUser, logout,
   loadHeadingSettings, getHeadingSettings, saveHeadingSettings,
   loadTheme, getTheme, saveTheme,
+  loadDebugEnabled, getDebugEnabled, saveDebugEnabled,
   getActiveGame, ActiveGame, onSessionExpired,
 } from './src/api';
 import type { ThemeName } from './src/api';
@@ -21,6 +22,7 @@ import JoinLobbyScreen from './src/screens/JoinLobbyScreen';
 import LobbyScreen from './src/screens/LobbyScreen';
 import GameScreen from './src/screens/GameScreen';
 import GlossaryScreen from './src/screens/GlossaryScreen';
+import MatchSimScreen from './src/screens/MatchSimScreen';
 import { ThemeProvider, useTheme, THEME_LABELS, ThemeTokens } from './src/theme';
 
 type Route =
@@ -30,7 +32,8 @@ type Route =
   | { name: 'join' }
   | { name: 'lobby'; lobbyId: string; isHost: boolean; lobbyCode?: string }
   | { name: 'game'; sessionId: string }
-  | { name: 'glossary' };
+  | { name: 'glossary' }
+  | { name: 'matchsim' };
 
 // Owns the theme boot/selection state and wraps everything else in
 // ThemeProvider — AppShell (and every screen it renders) can then call
@@ -59,6 +62,9 @@ function AppShell({ themeName, setThemeName }: {
   const [watchPairOpen, setWatchPairOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Gates the Match-Simulation menu entry — device-wide, off by default
+  // (see api.ts's getDebugEnabled doc).
+  const [debugEnabled, setDebugEnabled] = useState(false);
   // Compass-smoothing prefs (see api.ts's getHeadingSettings doc) — a
   // device-level tradeoff, so it lives here instead of GameScreen's own
   // in-match popup. Re-read from storage each time the modal opens (not
@@ -136,9 +142,10 @@ function AppShell({ themeName, setThemeName }: {
     // mounts too, and the theme is already resolved before the first
     // themed screen paints (avoids a flash of the 'color' default before a
     // saved Night/Day preference loads in).
-    Promise.all([restoreSession(), loadLastPosition(), loadHeadingSettings(), loadTheme()])
+    Promise.all([restoreSession(), loadLastPosition(), loadHeadingSettings(), loadTheme(), loadDebugEnabled()])
       .then(([u]) => {
         setThemeName(getTheme());
+        setDebugEnabled(getDebugEnabled());
         setRoute(u ? { name: 'menu' } : { name: 'login' });
       })
       .catch(() => setRoute({ name: 'login' }));
@@ -260,6 +267,15 @@ function AppShell({ themeName, setThemeName }: {
             <Icon name="book" size={16} color="#f0c840" />
             <Text style={st.glossaryTxt}>Glossar</Text>
           </TouchableOpacity>
+          {/* Debug-only, fixed-script test harness (see MatchSimScreen) —
+              never visible unless the device-wide Debug-Modus toggle in
+              Einstellungen is on (default off). */}
+          {debugEnabled && (
+            <TouchableOpacity style={st.simBtn} onPress={() => setRoute({ name: 'matchsim' })}>
+              <Icon name="bug" size={16} color="#ff8040" />
+              <Text style={st.simTxt}>Match-Simulation</Text>
+            </TouchableOpacity>
+          )}
           {!!hostErr && <Text style={st.err}>{hostErr}</Text>}
           <View style={st.menuIconRow}>
             <TouchableOpacity style={[st.menuIconBtn, watchSync.paired && st.menuIconBtnActive]} onPress={() => setWatchPairOpen(true)}>
@@ -279,6 +295,7 @@ function AppShell({ themeName, setThemeName }: {
       )}
       {route.name === 'join' && <JoinLobbyScreen onJoined={(lobbyId) => setRoute({ name: 'lobby', lobbyId, isHost: false })} />}
       {route.name === 'glossary' && <GlossaryScreen onBack={() => setRoute({ name: 'menu' })} />}
+      {route.name === 'matchsim' && <MatchSimScreen onExit={() => setRoute({ name: 'menu' })} />}
       {route.name === 'lobby' && (
         <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} />
       )}
@@ -353,6 +370,18 @@ function AppShell({ themeName, setThemeName }: {
                 </TouchableOpacity>
               )}
             </View>
+            {/* Match-Simulation menu entry gate — device-wide, independent
+                of any lobby's own ar_settings.debugMode (see api.ts's
+                getDebugEnabled doc). */}
+            <Text style={[st.modalLine, { marginTop: 8 }]}>Entwickler</Text>
+            <View style={st.settingsRow}>
+              <TouchableOpacity
+                style={[st.settingsBtn, debugEnabled && st.settingsBtnActive]}
+                onPress={() => { const v = !debugEnabled; saveDebugEnabled(v); setDebugEnabled(v); }}>
+                <Icon name="bug" size={16} color={debugEnabled ? theme.accent : theme.text2} />
+                <Text style={st.settingsBtnTxt}>Debug-Modus</Text>
+              </TouchableOpacity>
+            </View>
             <TouchableOpacity style={st.logoutBtn} onPress={async () => {
               await logout();
               setSettingsOpen(false);
@@ -401,6 +430,12 @@ function makeStyles(theme: ThemeTokens) {
       borderRadius: 12, padding: 16, marginTop: 12,
     },
     glossaryTxt: { color: '#f0c840', fontSize: 16, fontWeight: '800' },
+    simBtn: {
+      width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      backgroundColor: 'rgba(255,128,64,.12)', borderWidth: 2, borderColor: '#8a4a20',
+      borderRadius: 12, padding: 14, marginTop: 12,
+    },
+    simTxt: { color: '#ff8040', fontSize: 14, fontWeight: '800' },
     err: { color: theme.danger, fontSize: 12, marginTop: 12 },
     menuIconRow: { flexDirection: 'row', gap: 12, marginTop: 24 },
     menuIconBtn: {

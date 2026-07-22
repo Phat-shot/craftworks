@@ -93,6 +93,24 @@ export async function loadTheme(): Promise<void> {
   if (raw === 'color' || raw === 'night' || raw === 'day') currentTheme = raw;
 }
 
+// App-wide Debug-Modus toggle — device-level, same persistence shape as
+// theme/heading above. Gates the Match-Simulation menu entry (see App.tsx);
+// distinct from the per-lobby ar_settings.debugMode (fog-of-war etc.),
+// which only exists once a lobby has been created.
+let debugEnabled = false;
+
+export function getDebugEnabled(): boolean { return debugEnabled; }
+
+export async function saveDebugEnabled(v: boolean): Promise<void> {
+  debugEnabled = v;
+  await AsyncStorage.setItem('debug_enabled', v ? '1' : '0').catch(() => {});
+}
+
+export async function loadDebugEnabled(): Promise<void> {
+  const raw = await AsyncStorage.getItem('debug_enabled').catch(() => null);
+  debugEnabled = raw === '1';
+}
+
 // 'ok' — refreshed successfully. 'rejected' — the SERVER actually responded
 // and said the refresh token is dead (expired/invalid); the session really
 // is over. 'network_error' — never got a response at all (timeout, no
