@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState } from 'react-native';
+import { AppState, NativeEventSubscription } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { SERVER_URL } from './config';
 import { withTimeout } from './utils/withTimeout';
@@ -22,6 +22,7 @@ let accessToken: string | null = null;
 let refreshToken: string | null = null;
 let currentUser: User | null = null;
 let socket: Socket | null = null;
+let appStateSub: NativeEventSubscription | null = null;
 let lastPosition: LastPosition | null = null;
 
 export function getUser(): User | null { return currentUser; }
@@ -346,6 +347,26 @@ export function parseLobbyCode(raw: string): string | null {
   return null;
 }
 
+// Notifies the app that the session is truly dead (server explicitly
+// rejected the refresh token) so it can route to LoginScreen immediately,
+// the same way req()'s callers already do on a 401. Without this, the two
+// tryRefresh() call sites below silently dropped a 'rejected' result: with
+// reconnectionAttempts uncapped (see getSocket()'s own comment), a dead
+// refresh token now retries connect_error forever instead of ever giving up
+// — nothing told the player their session was over, so the lobby just
+// looked permanently broken ("lobby not found") until they force-quit and
+// relaunched, which is the only path that already handled 'rejected'
+// correctly (via restoreSession()). Set once by App.tsx at boot.
+let sessionExpiredHandler: (() => void) | null = null;
+export function onSessionExpired(cb: () => void): void {
+  sessionExpiredHandler = cb;
+}
+async function handleDeadSession(): Promise<void> {
+  await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
+  accessToken = null; refreshToken = null;
+  sessionExpiredHandler?.();
+}
+
 /** Shared authenticated socket (created lazily after login). */
 export function getSocket(): Socket {
   if (!socket) {
@@ -379,6 +400,7 @@ export function getSocket(): Socket {
     socket.on('connect_error', async () => {
       const r = await tryRefresh();
       if (r === 'ok') socket?.connect();
+      else if (r === 'rejected') await handleDeadSession();
     });
     // Backgrounded JS timers (startProactiveRefresh) can be paused/throttled
     // by the OS for far longer than 10 minutes, and the transport itself is
@@ -387,9 +409,10 @@ export function getSocket(): Socket {
     // player is about to tap something. Proactively refresh + reconnect
     // right away instead of waiting for the player's tap to surface it as a
     // confusing "lobby not found".
-    AppState.addEventListener('change', async (state) => {
+    appStateSub = AppState.addEventListener('change', async (state) => {
       if (state !== 'active') return;
-      await tryRefresh();
+      const r = await tryRefresh();
+      if (r === 'rejected') { await handleDeadSession(); return; }
       if (socket && !socket.connected) socket.connect();
     });
   }
@@ -399,6 +422,8 @@ export function getSocket(): Socket {
 export function resetSocket(): void {
   socket?.disconnect();
   socket = null;
+  appStateSub?.remove();
+  appStateSub = null;
 }
 
 export async function logout(): Promise<void> {

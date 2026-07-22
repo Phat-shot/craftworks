@@ -8,7 +8,7 @@ import {
   restoreSession, loadLastPosition, createArLobby, getUser, logout,
   loadHeadingSettings, getHeadingSettings, saveHeadingSettings,
   loadTheme, getTheme, saveTheme,
-  getActiveGame, ActiveGame,
+  getActiveGame, ActiveGame, onSessionExpired,
 } from './src/api';
 import type { ThemeName } from './src/api';
 import { SERVER_URL, BUILD_TIME, COMMIT_SHA } from './src/config';
@@ -142,6 +142,16 @@ function AppShell({ themeName, setThemeName }: {
         setRoute(u ? { name: 'menu' } : { name: 'login' });
       })
       .catch(() => setRoute({ name: 'login' }));
+  }, []);
+
+  // The socket layer discovers a dead session asynchronously, independent of
+  // any screen's own action (a background reconnect, a foreground refresh —
+  // see getSocket()'s comments in api.ts) — it has no route state of its
+  // own, so it needs this callback to actually get the player back to
+  // LoginScreen instead of leaving them stuck on a lobby that silently never
+  // works again.
+  useEffect(() => {
+    onSessionExpired(() => setRoute({ name: 'login' }));
   }, []);
 
   const onGameStart = useCallback((sessionId: string) => setRoute({ name: 'game', sessionId }), []);
