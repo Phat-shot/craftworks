@@ -35,8 +35,28 @@ interface CheckResult { snippetKey: string; label: string; pass: boolean; detail
 
 const CHECK_MARGIN_MS = 3_000; // network/processing slack before reading a checkpoint's result
 const FINAL_MARGIN_MS = 5_000; // extra wait after a snippet's own durationMs before tearing down
+const SHOT_RESULT_TIMEOUT_MS = 20_000; // generous — real device network/server latency, no fake clock here
 
 function sleep(ms: number): Promise<void> { return new Promise(res => setTimeout(res, ms)); }
+
+// Arbitrary real-world anchor, only ever used as a last resort (see
+// resolveOrigin) — never shown to the player, just needs to be a
+// geometrically valid WGS84 point so squareFieldCorners/destinationPoint
+// produce a sane polygon.
+const FALLBACK_ORIGIN = { lat: 48.13743, lon: 11.57549 };
+
+// The simulation must always be able to run, even with no GPS fix
+// anywhere (emulator, indoors, freshly cleared app data) — prefers the
+// Lobby's own live position, falls back to the device's last cached fix,
+// and only as a last resort jitters a fixed default instead of failing
+// the whole run with a "keine Position" error.
+function resolveOrigin(passed: { lat: number; lon: number } | null): { lat: number; lon: number } {
+  if (passed) return passed;
+  const cached = getLastPosition();
+  if (cached) return { lat: cached.lat, lon: cached.lon };
+  const jitterDeg = (Math.random() - 0.5) * 0.2; // ± ~11km, plenty for a synthetic test field
+  return { lat: FALLBACK_ORIGIN.lat + jitterDeg, lon: FALLBACK_ORIGIN.lon + jitterDeg };
+}
 
 function checkCheckpoint(cp: SimCheckpoint, snap: SimSnap | null): { pass: boolean; detail: string } {
   if (!snap) return { pass: false, detail: 'kein Snapshot empfangen' };
@@ -71,11 +91,8 @@ function checkBotShot(beat: SimShootBeat, myUserId: string, snap: SimSnap | null
 // check's pass/fail. Never throws — a setup failure (lobby/start/timeout)
 // is folded into a single failing result so one broken snippet doesn't
 // abort the whole run.
-async function runSnippet(snippet: SimSnippet, myUserId: string): Promise<CheckResult[]> {
+async function runSnippet(snippet: SimSnippet, myUserId: string, origin: { lat: number; lon: number }): Promise<CheckResult[]> {
   const fail = (detail: string): CheckResult[] => [{ snippetKey: snippet.key, label: snippet.label, pass: false, detail }];
-
-  const origin = getLastPosition();
-  if (!origin) return fail('Keine zuletzt bekannte Position — einmal eine echte Lobby öffnen, damit ein GPS-Fix zwischengespeichert ist.');
 
   const socket = getSocket();
   let lobbyId: string;
@@ -137,15 +154,15 @@ async function runSnippet(snippet: SimSnippet, myUserId: string): Promise<CheckR
       setTimeout(() => {
         const done = (r: any) => {
           const pass = !!r?.ok && r.hit === beat.expectedHit;
-          results.push({
-            snippetKey: snippet.key, label: `${snippet.label}: Schuss @${beat.tMs}ms`, pass,
-            detail: r?.ok ? `hit=${r.hit} reason=${r.reason || '–'} (erwartet ${beat.expectedHit})` : `abgelehnt: ${r?.err}`,
-          });
+          const detail = r === null
+            ? `keine Antwort innerhalb ${SHOT_RESULT_TIMEOUT_MS / 1000}s (Netzwerk/Server-Last?)`
+            : r.ok ? `hit=${r.hit} reason=${r.reason || '–'} (erwartet ${beat.expectedHit})` : `abgelehnt: ${r.err}`;
+          results.push({ snippetKey: snippet.key, label: `${snippet.label}: Schuss @${beat.tMs}ms`, pass, detail });
           resolve();
         };
         const onResult = (r: any) => { if (r.action === 'ar_hit_attempt') { socket.off('game:action_result', onResult); done(r); } };
         socket.on('game:action_result', onResult);
-        setTimeout(() => { socket.off('game:action_result', onResult); done(null); }, 8_000);
+        setTimeout(() => { socket.off('game:action_result', onResult); done(null); }, SHOT_RESULT_TIMEOUT_MS);
         socket.emit('game:action', {
           sessionId, action: 'ar_hit_attempt', data: { sample: sample(), targetId: beat.targetId },
         });
@@ -181,7 +198,7 @@ async function runSnippet(snippet: SimSnippet, myUserId: string): Promise<CheckR
   return results.length ? results : fail('Kein einziger Check ausgeführt');
 }
 
-export default function MatchSimScreen({ onExit }: { onExit: () => void }) {
+export default function MatchSimScreen({ origin, onExit }: { origin: { lat: number; lon: number } | null; onExit: () => void }) {
   const theme = useTheme();
   const st = useMemo(() => makeStyles(theme), [theme]);
   const [running, setRunning] = useState(false);
@@ -196,10 +213,14 @@ export default function MatchSimScreen({ onExit }: { onExit: () => void }) {
     setResults([]);
     cancelRef.current = false;
     const myUserId = getUser()?.id || '';
+    // Resolved once per run (not per snippet) — every snippet's synthetic
+    // field is anchored at the same point, see resolveOrigin's fallback
+    // chain (Lobby's live GPS → last cached fix → jittered default).
+    const resolvedOrigin = resolveOrigin(origin);
     for (const snippet of SIM_SNIPPETS) {
       if (cancelRef.current) break;
       setCurrentLabel(snippet.label);
-      const r = await runSnippet(snippet, myUserId);
+      const r = await runSnippet(snippet, myUserId, resolvedOrigin);
       setResults(prev => [...prev, ...r]);
     }
     setRunning(false);

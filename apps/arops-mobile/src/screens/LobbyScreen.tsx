@@ -3,13 +3,14 @@ import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, Activ
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
-import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition } from '../api';
+import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition, getDebugEnabled } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig, scaleTimings, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
 import { useTheme, ThemeTokens } from '../theme';
+import MatchSimScreen from './MatchSimScreen';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -138,6 +139,13 @@ export default function LobbyScreen({
   const [qrOpen, setQrOpen] = useState(false);
   const [copied, setCopied] = useState<'code' | 'link' | null>(null);
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
+  // Match-Simulation entry point — a client-local pick (never touches
+  // ar_settings.subMode, which the server only ever accepts real game
+  // modes for), only offered when the app-wide Debug-Modus setting is on.
+  // See MatchSimScreen.tsx.
+  const debugEnabled = useMemo(() => getDebugEnabled(), []);
+  const [simSelected, setSimSelected] = useState(false);
+  const [simRunning, setSimRunning] = useState(false);
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
   // Seeded from the last real fix persisted locally (see api.ts
@@ -292,9 +300,18 @@ export default function LobbyScreen({
         await new Promise(r => setTimeout(r, WINDOW_MS));
       }
       if (!mountedRef.current) return;
-      posSubRef.current?.remove();
-      posSubRef.current = null;
-      if (!settled) { setMyPosErr(true); setMyPosLoading(false); }
+      if (!settled) {
+        setMyPosErr(true);
+        setMyPosLoading(false);
+        // Deliberately NOT removing posSubRef here (unlike before) — a cold
+        // GPS fix, or briefly being indoors, can easily take longer than
+        // the visible 24s retry window. Leaving watchPositionAsync running
+        // in the background means a fix that arrives late still gets
+        // adopted automatically (the callback above still fires and calls
+        // saveLastPosition) instead of silently going nowhere until the
+        // player notices and taps retry again. Superseded by the next
+        // loadMyPosition() call (which removes it first) or by unmount.
+      }
     } catch {
       if (mountedRef.current) { setMyPosErr(true); setMyPosLoading(false); }
     } finally {
@@ -651,9 +668,14 @@ export default function LobbyScreen({
                 onPress={() => emitUpdate({ hitTrackingMode: 'ir' })}>
                 <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? theme.accent : theme.text2} />
               </TouchableOpacity>
-              <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
-                <Icon name="bug" size={19} color={debugMode ? theme.accent : theme.text2} />
-              </TouchableOpacity>
+              {/* Per-Lobby-Debug (Fog-of-War aus etc.) — nur anbietbar, wenn
+                  der App-weite Entwickler-Schalter (Einstellungen) an ist,
+                  sonst bleibt dieser Toggle für alle Hosts unsichtbar. */}
+              {debugEnabled && (
+                <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
+                  <Icon name="bug" size={19} color={debugMode ? theme.accent : theme.text2} />
+                </TouchableOpacity>
+              )}
             </>
           )}
           {/* Non-Host: kein Toggle (das bleibt Host-Sache), aber sichtbare
@@ -688,13 +710,26 @@ export default function LobbyScreen({
       {isHost && (
         <View style={st.modeRowTight}>
           {SUB_MODES.map(m => (
-            <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
-              onPress={() => emitUpdate({ subMode: m.id })}
+            <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && !simSelected && st.smallBtnActive]}
+              onPress={() => { setSimSelected(false); emitUpdate({ subMode: m.id }); }}
               onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
-              <Icon name={m.icon} size={13} color={subMode === m.id ? theme.accent : theme.text2} />
-              <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
+              <Icon name={m.icon} size={13} color={subMode === m.id && !simSelected ? theme.accent : theme.text2} />
+              <Text style={[st.smallTxt, subMode === m.id && !simSelected && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
             </TouchableOpacity>
           ))}
+          {/* Match-Simulation — its own match "next to Deathmatch", not a
+              real ar_settings.subMode (server only accepts real game
+              modes there; MatchSimScreen sets subMode per-snippet itself
+              internally). Only ever a client-local pick, only shown with
+              the app-wide Debug-Modus setting on. */}
+          {debugEnabled && (
+            <TouchableOpacity key="simulation" style={[st.smallBtnTight, simSelected && st.smallBtnActive]}
+              onPress={() => setSimSelected(true)}
+              onLongPress={() => Alert.alert('Match-Simulation', 'Fest verdrahtete, automatische Testläufe (Klassen-Grenzwerte, Bot-Beschuss, Objectives) — keine Optionen.')}>
+              <Icon name="bug" size={13} color={simSelected ? theme.accent : theme.text2} />
+              <Text style={[st.smallTxt, simSelected && st.smallTxtActive]} numberOfLines={1}>Sim</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
       {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
@@ -1109,15 +1144,19 @@ export default function LobbyScreen({
         </View>
       </TouchableOpacity>
       {isHost && (
-        <TouchableOpacity style={st.startBtn} onPress={startGame}>
+        <TouchableOpacity style={st.startBtn} onPress={simSelected ? () => setSimRunning(true) : startGame}>
           <View style={st.btnRow}>
-            <Icon name="rocket" size={15} color="#e060ff" />
-            <Text style={st.startTxt}>Spiel starten</Text>
+            <Icon name={simSelected ? 'bug' : 'rocket'} size={15} color="#e060ff" />
+            <Text style={st.startTxt}>{simSelected ? 'Simulation starten' : 'Spiel starten'}</Text>
           </View>
         </TouchableOpacity>
       )}
     </View>
   );
+
+  if (simRunning) {
+    return <MatchSimScreen origin={myPos} onExit={() => setSimRunning(false)} />;
+  }
 
   return (
     <View style={st.wrap}>
