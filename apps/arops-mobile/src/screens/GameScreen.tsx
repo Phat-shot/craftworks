@@ -12,7 +12,7 @@ import CameraLayer from '../components/CameraLayer';
 import { useIrScan } from '../hooks/useIrScan';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { BLANK_STYLE, OSM_STYLE, OSM_STYLE_DARK } from '../mapStyle';
+import { BLANK_STYLE, BLANK_STYLE_DARK, OSM_STYLE, OSM_STYLE_DARK } from '../mapStyle';
 import { useTheme, ThemeTokens, THEMES } from '../theme';
 
 // owner/capture's key is a team letter in team mode, a userId in the ffa
@@ -1203,7 +1203,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const hasComicMap = (snap?.comicMap?.features?.length ?? 0) > 0;
   const renderMap = (interactive: boolean, free2d: boolean = false) => (
     <View style={{ flex: 1 }}>
-    <MapView ref={mapRef} style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : (isDarkUiTheme ? OSM_STYLE_DARK : OSM_STYLE)) as any} onPress={onMapPress}
+    <MapView ref={mapRef} style={{ flex: 1 }} mapStyle={(hasComicMap ? (isDarkUiTheme ? BLANK_STYLE_DARK : BLANK_STYLE) : (isDarkUiTheme ? OSM_STYLE_DARK : OSM_STYLE)) as any} onPress={onMapPress}
       scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}
       // Zoom can change whenever zoomEnabled/`interactive` is true, in every
       // view mode (not just free-2D) — tracked here regardless of free2d so

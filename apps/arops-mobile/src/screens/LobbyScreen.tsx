@@ -6,7 +6,7 @@ import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from 
 import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition, getDebugEnabled } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { OSM_STYLE, OSM_STYLE_DARK, BLANK_STYLE } from '../mapStyle';
+import { OSM_STYLE, OSM_STYLE_DARK, BLANK_STYLE, BLANK_STYLE_DARK } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig, scaleTimings, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
 import { withTimeout } from '../utils/withTimeout';
 import { useTheme, ThemeTokens, THEMES } from '../theme';
@@ -136,6 +136,7 @@ export default function LobbyScreen({
   // comparing against THEMES.day avoids threading the ThemeName itself down
   // through props just for this.
   const mapStyle = theme === THEMES.day ? OSM_STYLE : OSM_STYLE_DARK;
+  const blankMapStyle = theme === THEMES.day ? BLANK_STYLE : BLANK_STYLE_DARK;
   const [members, setMembers] = useState<Member[]>([]);
   const [ar, setAr] = useState<ArSettings>({});
   const [polyErrs, setPolyErrs] = useState<string[]>([]);
@@ -968,7 +969,7 @@ export default function LobbyScreen({
 
       {ar.comicMap && (
         <View style={st.comicPreviewBox}>
-          <MapView style={{ flex: 1 }} mapStyle={BLANK_STYLE as any} scrollEnabled={false} zoomEnabled={false}>
+          <MapView style={{ flex: 1 }} mapStyle={blankMapStyle as any} scrollEnabled={false} zoomEnabled={false}>
             <Camera defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
             <ComicMapLayers features={ar.comicMap.features} />
           </MapView>

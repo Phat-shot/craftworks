@@ -61,3 +61,14 @@ export const BLANK_STYLE = {
   sources: {},
   layers: [{ id: 'bg', type: 'background' as const, paint: { 'background-color': '#f3e9d2' } }],
 };
+
+// Dark-theme backdrop for the comic map — same idea as OSM_STYLE_DARK, a
+// "night city" paper instead of the light cream one. ComicMapLayers' own
+// building/forest/water/grass/path/road colors are saturated, mid-brightness
+// comic-style fills (not pale/washed), so they stay legible against a dark
+// backdrop unchanged — only the background itself needs a theme-aware swap.
+export const BLANK_STYLE_DARK = {
+  version: 8 as const,
+  sources: {},
+  layers: [{ id: 'bg', type: 'background' as const, paint: { 'background-color': '#1a1a20' } }],
+};
