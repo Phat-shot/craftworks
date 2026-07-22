@@ -226,24 +226,40 @@ router.get('/verify-email', async (req, res) => {
 });
 
 // ── REFRESH TOKEN ────────────────────────
+// The client (apps/arops-mobile/src/api.ts's tryRefresh()) treats a 401 here
+// as an authoritative "this session is truly dead" — it wipes both stored
+// tokens and forces a re-login. That contract only holds if 401 ONLY ever
+// means "the token itself is invalid/expired/unknown". A bare try/catch
+// around BOTH the jwt.verify (a real token check) and the db.query (plain
+// I/O — a transient pool/connection error has nothing to do with the token's
+// validity) used to collapse either failure into the same 401, so a brief DB
+// hiccup during a DB-heavy stretch (e.g. the Match-Simulation's ~50
+// back-to-back scenarios) could get misreported as a dead session and force
+// a real logout mid-run. jwt.verify's failure (genuinely invalid/expired
+// token) is now the only thing that produces 401; a DB error propagates as
+// a 500 instead, which the client already treats as a retryable
+// 'network_error', not a fatal one.
 router.post('/refresh', async (req, res) => {
   const { refresh_token } = req.body;
   if (!refresh_token) return res.status(401).json({ error: 'missing_token' });
 
+  let payload;
   try {
-    const payload = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
-    const { rows } = await db.query(
-      'SELECT * FROM refresh_tokens WHERE token=$1 AND expires_at > NOW()',
-      [refresh_token]
-    );
-    if (!rows[0] || rows[0].user_id !== payload.sub)
-      return res.status(401).json({ error: 'invalid_token' });
-
-    const access = signAccess(payload.sub);
-    res.json({ access_token: access });
+    payload = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
   } catch {
-    res.status(401).json({ error: 'invalid_token' });
+    return res.status(401).json({ error: 'invalid_token' });
   }
+
+  const { rows } = await db.query(
+    'SELECT * FROM refresh_tokens WHERE token=$1 AND expires_at > NOW()',
+    [refresh_token]
+  );
+  if (!rows[0] || rows[0].user_id !== payload.sub) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+
+  const access = signAccess(payload.sub);
+  res.json({ access_token: access });
 });
 
 // ── LOGOUT ───────────────────────────────

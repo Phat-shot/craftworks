@@ -380,6 +380,7 @@ export function onSessionExpired(cb: () => void): void {
   sessionExpiredHandler = cb;
 }
 async function handleDeadSession(): Promise<void> {
+  stopProactiveRefresh(); // matches logout() — no refreshToken left for the 10-min interval to use
   await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
   accessToken = null; refreshToken = null;
   sessionExpiredHandler?.();
