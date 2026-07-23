@@ -364,14 +364,31 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     return () => { cancelled = true; cancelAnimationFrame(raf); };
   }, [enabled]);
 
-  // 1 Hz send loop
+  // 1 Hz sample-state loop — ALWAYS runs regardless of socket/sessionId, so
+  // `sample`/`myPos` stay live even when the send side below is disabled
+  // (e.g. LobbyScreen passing sessionId=null to run GPS/compass acquisition
+  // without a match to send telemetry to). Reported: GPS never showed a fix
+  // in the Lobby at all — root cause was this being ONE combined effect
+  // gated on `socket && sessionId`, so with sessionId=null the interval
+  // that calls setSample() never ran in the first place; posRef/headingRef
+  // (read by buildSample) were updating fine internally, just never surfaced
+  // into the `sample` state the UI actually reads.
   useEffect(() => {
-    if (!socket || !sessionId) return;
     const iv = setInterval(() => {
       const s = buildSample();
       if (!s) return;
       sampleRef.current = s;
       setSample(s);
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [buildSample]);
+
+  // Separate 1 Hz send loop — only active with a live socket + session.
+  useEffect(() => {
+    if (!socket || !sessionId) return;
+    const iv = setInterval(() => {
+      const s = sampleRef.current;
+      if (!s) return;
       socket.emit('game:action', { sessionId, action: 'ar_telemetry', data: { sample: s } });
     }, 1000);
 
@@ -380,7 +397,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
     };
     socket.on('game:action_result', onResult);
     return () => { clearInterval(iv); socket.off('game:action_result', onResult); };
-  }, [socket, sessionId, buildSample]);
+  }, [socket, sessionId]);
 
   return {
     granted, sample, heading, topEdgeHeadingDeg, geofence,

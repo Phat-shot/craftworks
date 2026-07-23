@@ -506,21 +506,27 @@ export default function LobbyScreen({
       <View style={st.topRow}>
         <View style={st.topLeft}>
           <Icon name="satellite" size={19} color={theme.accent} />
-          {/* GPS-Status — identisches Icon/Verhalten wie GameScreens
-              Crosshair-Fab oben links: grün = Fix da, rot = Grace-Zeit um und
-              immer noch kein Fix, grau = sucht noch. Gleiche Klick-Routine
-              (nur telemetry.retryPosition, kein separater Berechtigungs-Pfad),
-              keine zusätzliche Statuszeile/Badge daneben. */}
-          <TouchableOpacity style={st.iconBtnLg} onPress={telemetry.retryPosition}>
-            <Icon name="crosshair" size={19}
-              color={telemetry.sample ? '#80ff40' : initGraceOver ? theme.danger : theme.text2} />
+          {/* Kompass-Modus-Button verschmilzt jetzt mit dem GPS-Status: Icon
+              gelb (theme.accent) sobald Kompass-Modus aktiv UND ein Fix da
+              ist, rot (Icon + Rahmen) wenn Kompass-Modus aktiv ist aber kein
+              Fix (Grace-Zeit um), sonst grau wie jeder unausgewählte
+              Modus-Button. Für ALLE Lobby-Mitglieder sichtbar und antippbar
+              (GPS-Retry funktioniert für jeden), aber nur der Host kann den
+              Modus damit tatsächlich wechseln. */}
+          <TouchableOpacity
+            style={[
+              st.iconBtnLg,
+              hitTrackingMode !== 'ir' && st.smallBtnActive,
+              hitTrackingMode !== 'ir' && !telemetry.sample && initGraceOver && st.iconBtnDanger,
+            ]}
+            onPress={() => { if (isHost) emitUpdate({ hitTrackingMode: 'compass' }); telemetry.retryPosition(); }}>
+            <Icon name="compass" size={19}
+              color={hitTrackingMode === 'ir' ? theme.text2
+                : telemetry.sample ? theme.accent
+                : initGraceOver ? theme.danger : theme.text2} />
           </TouchableOpacity>
           {isHost && (
             <>
-              <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode !== 'ir' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-                <Icon name="compass" size={19} color={hitTrackingMode !== 'ir' ? theme.accent : theme.text2} />
-              </TouchableOpacity>
               <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode === 'ir' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'ir' })}>
                 <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? theme.accent : theme.text2} />
@@ -1106,6 +1112,9 @@ function makeStyles(theme: ThemeTokens) {
       width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
       backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     },
+    // Overrides smallBtnActive's border — GPS-status-merged compass button
+    // when there's no fix (see topLeft header row).
+    iconBtnDanger: { borderColor: theme.danger },
     smallTxt: { color: theme.text2, fontSize: 12, fontWeight: '700' },
     smallTxtActive: { color: theme.accent },
     wpCount: { color: theme.text3, fontSize: 11 },
