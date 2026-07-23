@@ -33,6 +33,7 @@ const GamePage = lazy(() => import('./pages/GamePage'));
 const Workshop = lazy(() => import('./pages/Workshop'));
 const WorkshopContent = lazy(() => import('./pages/WorkshopContent'));
 const MapEditor = lazy(() => import('./pages/MapEditor'));
+const HuntList = lazy(() => import('./pages/HuntList'));
 const HuntEditor = lazy(() => import('./pages/HuntEditor'));
 const HuntPlay = lazy(() => import('./pages/HuntPlay'));
 const LazyFallback = () => <div className="loading-screen">⏳</div>;
@@ -127,6 +128,7 @@ export default function App() {
             <Route path="play"                element={<MapSelect />} />
             <Route path="workshop/editor/:id"   element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><MapEditor /></Suspense></ErrorBoundary>} />
             <Route path="workshop/editor"        element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><MapEditor /></Suspense></ErrorBoundary>} />
+            <Route path="hunt"                   element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><HuntList /></Suspense></ErrorBoundary>} />
             <Route path="hunt/editor/:id"        element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><HuntEditor /></Suspense></ErrorBoundary>} />
             <Route path="hunt/editor"            element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><HuntEditor /></Suspense></ErrorBoundary>} />
             <Route path="hunt/play/:code"        element={<ErrorBoundary><Suspense fallback={<LazyFallback />}><HuntPlay /></Suspense></ErrorBoundary>} />

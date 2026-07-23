@@ -33,6 +33,12 @@ export default function Nav() {
     { to: '/workshop',    icon: '🔧', label: 'Workshop'         },
     { to: '/workshop/content', icon: '🔨', label: 'Inhalte' },
     { to: '/brands',           icon: '🏢', label: 'Brands'  },
+    // Only shown for is_creator OR is_admin accounts — admin is an implicit
+    // creator (see requireCreator in server/src/middleware/auth.js: it
+    // passes on is_admin OR is_creator). Same "hiding declutters, doesn't
+    // gate" note as Admin below — /hunt itself just 403s from the API for
+    // anyone without either flag.
+    ...(user?.is_admin || user?.is_creator ? [{ to: '/hunt', icon: '🗺️', label: 'Schnitzeljagd' }] : []),
     // Only shown for admin accounts — the route itself is reachable either
     // way (see App.jsx), it just renders a 403 fallback for anyone else, so
     // hiding the link isn't the actual access control, just declutters the
