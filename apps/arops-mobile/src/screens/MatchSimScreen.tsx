@@ -25,8 +25,9 @@ import type { SimScenario, SimShootBeat, SimCheckpoint } from '@craftworks/arops
 import { getSocket, getUser, createArLobby, getLastPosition, joinLobbyByCode } from '../api';
 import Icon from '../components/Icon';
 import ShockwaveEffect from '../components/ShockwaveEffect';
+import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { useTheme, ThemeTokens, THEMES } from '../theme';
-import { OSM_STYLE, OSM_STYLE_DARK } from '../mapStyle';
+import { OSM_STYLE, OSM_STYLE_DARK, blankMapStyle } from '../mapStyle';
 
 interface SimSnap {
   phase: string;
@@ -91,6 +92,55 @@ function resolveOrigin(passed: { lat: number; lon: number } | null): { lat: numb
   if (cached) return { lat: cached.lat, lon: cached.lon };
   const jitterDeg = (Math.random() - 0.5) * 0.2; // ± ~11km, plenty for a synthetic test field
   return { lat: FALLBACK_ORIGIN.lat + jitterDeg, lon: FALLBACK_ORIGIN.lon + jitterDeg };
+}
+
+// Biggest field tier used by any generated scenario (see simScript.ts's
+// FIELD_TIERS) — the pre-fetch polygon below is padded past this so the
+// server's own bbox comic-map cache (comic_map.js) already covers every
+// scenario's smaller field once this one lands, no per-scenario re-fetch.
+const SIM_COMIC_MAP_SIDE_M = 220;
+const SIM_COMIC_MAP_TIMEOUT_MS = 20_000;
+
+/**
+ * Best-effort, run-once comic-map fetch for the simulation's live map —
+ * "wenn vorhanden, sonst fallback": never blocks/delays the scenario loop
+ * (fire-and-forget from start(), not awaited), silently leaves the map on
+ * its existing plain-OSM fallback on any failure/timeout (same fallback
+ * GameScreen itself already has whenever no comic map exists for a real
+ * match). Uses its own disposable lobby purely as a vehicle for the
+ * existing lobby:generate_comic_map request — never joined/started.
+ */
+async function prefetchSimComicMap(origin: { lat: number; lon: number }): Promise<ComicFeature[] | null> {
+  try {
+    const lobby = await createArLobby('Sim: Comic-Map-Vorschau');
+    const polygon = squareFieldCorners(SIM_COMIC_MAP_SIDE_M).map(w => destinationPoint(origin, w.bearingDeg, w.distanceM));
+    const socket = getSocket();
+    const reqId = Math.random().toString(36).slice(2);
+    const result = await new Promise<ComicFeature[] | null>(resolve => {
+      const onReady = (r: { reqId: string; comicMap: { features: ComicFeature[] } }) => {
+        if (r.reqId !== reqId) return;
+        cleanup();
+        resolve(r.comicMap.features);
+      };
+      const onError = (r: { reqId: string }) => {
+        if (r.reqId !== reqId) return;
+        cleanup();
+        resolve(null);
+      };
+      const timer = setTimeout(() => { cleanup(); resolve(null); }, SIM_COMIC_MAP_TIMEOUT_MS);
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.off('lobby:comic_map_ready', onReady);
+        socket.off('lobby:comic_map_error', onError);
+      };
+      socket.on('lobby:comic_map_ready', onReady);
+      socket.on('lobby:comic_map_error', onError);
+      socket.emit('lobby:generate_comic_map', { lobbyId: lobby.lobbyId, reqId, polygon });
+    });
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 function checkCheckpoint(cp: SimCheckpoint, snap: SimSnap | null): { pass: boolean; detail: string } {
@@ -341,6 +391,10 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
   const [currentScenario, setCurrentScenario] = useState<SimScenario | null>(null);
   const [liveSnap, setLiveSnap] = useState<SimSnap | null>(null);
   const [mapOrigin, setMapOrigin] = useState<{ lat: number; lon: number } | null>(null);
+  // Best-effort comic-map features for the live map (see prefetchSimComicMap)
+  // — null until/unless it lands; the map falls back to plain OSM tiles
+  // exactly as before whenever this stays null.
+  const [simComicMap, setSimComicMap] = useState<ComicFeature[] | null>(null);
   // Bumped on every tester-fired shot (runScenario's onShot) — same
   // ShockwaveEffect convention as GameScreen.
   const [shotEffectKey, setShotEffectKey] = useState(0);
@@ -359,6 +413,12 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
     // chain (Lobby's live GPS → last cached fix → jittered default).
     const resolvedOrigin = resolveOrigin(origin);
     setMapOrigin(resolvedOrigin);
+    setSimComicMap(null);
+    // Fire-and-forget — never awaited, never blocks/delays the scenario
+    // loop below. Lands (or doesn't) in the background; the map re-renders
+    // with real comic-map features the moment it resolves, whichever
+    // scenario happens to be running by then.
+    prefetchSimComicMap(resolvedOrigin).then(setSimComicMap);
 
     // Sensor detection runs in the BACKGROUND — nothing here has a hard
     // dependency on it (every scenario uses scripted, not real, positions),
@@ -407,7 +467,10 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
   const total = results.length;
   const passCount = results.filter(r => r.pass).length;
   const myUserId = getUser()?.id;
-  const mapStyle = theme === THEMES.day ? OSM_STYLE : OSM_STYLE_DARK;
+  // Comic map once prefetchSimComicMap lands (see start()), plain OSM tiles
+  // as the fallback until/unless it does — same "comic map when available,
+  // OSM otherwise" convention GameScreen/LobbyScreen already use.
+  const mapStyle = simComicMap ? blankMapStyle(theme.bg) : (theme === THEMES.day ? OSM_STYLE : OSM_STYLE_DARK);
 
   // Live map data for the currently-running scenario — the field polygon
   // and any capture zones are static (computed once per scenario from its
@@ -534,6 +597,7 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
         <View style={st.mapBox}>
           <MapView key={currentScenario.key} style={{ flex: 1 }} mapStyle={mapStyle as any} scrollEnabled={false} zoomEnabled={false} rotateEnabled={false}>
             <Camera defaultSettings={{ centerCoordinate: [mapOrigin.lon, mapOrigin.lat], zoomLevel: 17.3 }} />
+            {simComicMap && <ComicMapLayers features={simComicMap} />}
             {fieldGeoJSON && (
               <ShapeSource id="simField" shape={fieldGeoJSON as any}>
                 <FillLayer id="simFieldFill" style={{ fillColor: theme.accent, fillOpacity: 0.08 }} />

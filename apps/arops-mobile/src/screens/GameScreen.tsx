@@ -84,8 +84,13 @@ interface Snap {
     // Team ping (map tap) — only ever the viewer's own team's pings, never
     // the opponents' (see server's getAropsSnapshot, me.teamPings).
     teamPings?: { lat: number; lon: number; byUserId: string; ts: number; expiresAt: number }[];
+    // A picked-up dropped-item — perkId only, no cooldown/timer (one-shot).
+    heldItem?: { perkId: 'cloak' | 'fake_marker' | 'reveal_trap' } | null;
   } | null;
   players: { userId: string; username: string; avatar_color?: string; team?: 'a'|'b'|null; frozen?: boolean; lat?: number; lon?: number; positionAgeMs?: number; exposed?: boolean; accuracyM?: number; status: string; score: number }[];
+  // Dropped perk-items — always visible to everyone (no fog-of-war, same as
+  // CTF flags), see arops.js's gs.items.
+  items?: { id: string; perkId: 'cloak' | 'fake_marker' | 'reveal_trap'; lat: number; lon: number }[];
   // Mode extras
   teamScore?: { a: number; b: number };
   // Domination ffa: per-player score instead of teamScore (userId -> score).
@@ -656,6 +661,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'fake_marker' } });
   const useRevealTrap = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'reveal_trap' } });
+  // Picked-up dropped item — its own action, deliberately not ar_use_perk
+  // (no cooldown/role check server-side, see actionArUseItem).
+  const useItem = () =>
+    socket.emit('game:action', { sessionId, action: 'ar_use_item', data: {} });
   // Team ping (map tap, see onMapPress) — silently no-op for teamless modes
   // (no me.team means no teammates to ping; the server would reject it with
   // 'no_team' anyway, but checking client-side avoids a pointless round-trip).
@@ -808,6 +817,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     }
     return { type: 'FeatureCollection' as const, features };
   }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies, snap?.me?.trapAlert, snap?.me?.status]);
+
+  // Dropped perk-items — always visible to everyone (snap.items has no
+  // fog-of-war, same as CTF flags), own layer/color so a pickup reads
+  // distinctly from a player dot rather than folded into actorsGeoJSON.
+  const itemsGeoJSON = useMemo(() => ({
+    type: 'FeatureCollection' as const,
+    features: (snap?.items || []).map(it => ({
+      type: 'Feature' as const, properties: {},
+      geometry: { type: 'Point' as const, coordinates: [it.lon, it.lat] },
+    })),
+  }), [JSON.stringify(snap?.items)]);
 
   // Team ping markers (map tap) — fade out as they approach expiry, same
   // convention as the age-based fades above. snap.me.teamPings is already
@@ -1496,6 +1516,14 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           }} />
         </ShapeSource>
       )}
+      {itemsGeoJSON.features.length > 0 && (
+        <ShapeSource id="items" shape={itemsGeoJSON as any}>
+          <CircleLayer id="itemDots" style={{
+            circleRadius: 9, circleColor: '#c0a0f0', circleOpacity: 0.85,
+            circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
+          }} />
+        </ShapeSource>
+      )}
     </MapView>
     {showRange && telemetry.sample && activeHeadingDeg !== null && (
       <ShotOverlay rotateDeg={shotOverlayRotateDeg} pitchDeg={mapPitch}
@@ -1799,8 +1827,23 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       </Text>
     </TouchableOpacity>
   );
+  // Picked-up dropped item — same icon each perk's own class button uses
+  // (cloak→ghost, fake_marker→mask, reveal_trap→trap), no cooldown ring
+  // (one-shot, no timer to show progress of). Empty slot shows a dim
+  // placeholder, not hidden entirely, so its position in the row stays
+  // predictable whether or not something's currently held.
+  const heldItem = snap?.me?.heldItem ?? null;
+  const ITEM_ICON: Record<string, IconName> = { cloak: 'ghost', fake_marker: 'mask', reveal_trap: 'trap' };
+  const itemSlotBtn = (
+    <TouchableOpacity key="item" style={[st.radarBtn, st.btnRow]} onPress={useItem}
+      disabled={!heldItem || !shootPhase}>
+      <Icon name={heldItem ? ITEM_ICON[heldItem.perkId] : 'checkboxBlank'} size={15}
+        color={heldItem ? '#c0a0f0' : theme.text3} />
+      <Text style={st.actTxt}>{heldItem ? 'Item' : '–'}</Text>
+    </TouchableOpacity>
+  );
   const perkLeft = [radarBtn];
-  const perkRight = [classPerkBtn];
+  const perkRight = [classPerkBtn, itemSlotBtn];
 
   // Status-bar center — priority: an active capture (continuous) > a fresh
   // hit/got-hit event (5s pulse) > revive prompt (toggles with the default
