@@ -18,7 +18,7 @@ exports.DEFAULT_HIT_CONFIG = {
 };
 exports.DEFAULT_POLYGON_OPTIONS = {
     minPoints: 3,
-    minAreaM2: 2000, // ~45×45 m — smallest sensible playfield
+    minAreaM2: 400, // 20×20 m — smallest sensible playfield
     maxAreaM2: Infinity, // no upper limit — scaleCoreConfig()/scaleTimings() adapt to any field size
 };
 exports.DEFAULT_PLAUSIBILITY = {

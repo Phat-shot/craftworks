@@ -230,8 +230,17 @@ function registerPlatformHandlers(io, socket, db) {
           if (['scout', 'sniper', 'bomber'].includes(cls)) next.classes[uid] = cls;
         }
       }
+      // Per-field ceilings: gameDurationMs up to 6h, radarCooldownMs up to
+      // 60min (both manual-only — auto-scaling never derives values this
+      // high, see scaleCoreConfig). hidingDurationMs/proximityRangeM keep no
+      // ceiling (unchanged from before).
+      const MS_CEILINGS = { gameDurationMs: 6 * 60 * 60_000, radarCooldownMs: 60 * 60_000 };
       for (const k of ['hidingDurationMs', 'gameDurationMs', 'radarCooldownMs', 'proximityRangeM']) {
-        if (Number.isFinite(arSettings?.[k])) next[k] = Math.max(0, +arSettings[k]);
+        if (Number.isFinite(arSettings?.[k])) {
+          const ceiling = MS_CEILINGS[k];
+          const v = Math.max(0, +arSettings[k]);
+          next[k] = ceiling ? Math.min(ceiling, v) : v;
+        }
       }
       // Mode selection + mode-specific settings. Whitelist MUST be kept in
       // sync with server/src/game/arops.js's MODES table and the DEFAULTS/
@@ -325,7 +334,7 @@ function registerPlatformHandlers(io, socket, db) {
       // from "no change", so unsetting needs its own explicit signal.
       if (arSettings?.timings && typeof arSettings.timings === 'object') {
         if (Number.isFinite(arSettings.timings.freezeMs)) {
-          next.timings = { freezeMs: Math.min(300_000, Math.max(5_000, Math.round(+arSettings.timings.freezeMs))) };
+          next.timings = { freezeMs: Math.min(300_000, Math.max(3_000, Math.round(+arSettings.timings.freezeMs))) };
         } else if (arSettings.timings.freezeMs === null) {
           delete next.timings;
         }

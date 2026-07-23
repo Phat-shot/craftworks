@@ -450,7 +450,7 @@ export default function LobbyScreen({
   // here like Reichweite/Breite/Versteckzeit/Spielzeit — hidden while Auto
   // is on (see !autoScale gate below), same convention as those.
   const FREEZE_OPTIONS: { l: string; ms: number }[] = [
-    { l: '3s', ms: 3_000 }, { l: '10s', ms: 10_000 }, { l: '20s', ms: 20_000 }, { l: '30s', ms: 30_000 },
+    { l: '3s', ms: 3_000 }, { l: '10s', ms: 10_000 }, { l: '30s', ms: 30_000 },
   ];
   const hitRangeM = ar.hitConfig?.maxRangeM || 75;
   const hitHalfAngleDeg = ar.hitConfig?.baseConeHalfAngleDeg;

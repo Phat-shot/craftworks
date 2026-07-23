@@ -38,7 +38,7 @@ function tel(gs, uid, pos, over = {}) {
 // starting directly in it — see MODES' initialPhase in arops.js. Same helper
 // as arops_modes.test.js.
 function skipWarmup(gs) {
-  gs.phaseStartTime = Date.now() - (gs.timings.baseSettingMs + 100);
+  gs.phaseStartTime = Date.now() - (gs.timings.warmupMs + 100);
   tick(gs, 100);
 }
 function shootAt(gs, uid, targetId, over = {}) {
@@ -52,7 +52,7 @@ const FAST = {
   captureDwellMs: 300, flagPickupDwellMs: 300, flagReturnMs: 800,
   plantDwellMs: 300, defuseDwellMs: 300, bombTimerMs: 2000,
   freezeMs: 1000, freezeExtensionMs: 500, freezeMoveToleranceM: 15,
-  baseSettingMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
+  baseSettingMs: 500, warmupMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
   revealTrapRadiusM: 20,
 };
 const Z1 = shared.destinationPoint(MUC, 90, 100);

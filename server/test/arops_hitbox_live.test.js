@@ -38,7 +38,7 @@ function tick(gs, advanceMs) {
   arops.tickArops(gs);
 }
 function skipWarmup(gs) {
-  gs.phaseStartTime = Date.now() - (gs.timings.baseSettingMs + 100);
+  gs.phaseStartTime = Date.now() - (gs.timings.warmupMs + 100);
   tick(gs, 100);
 }
 function tel(gs, uid, pos, over = {}) {
@@ -49,7 +49,7 @@ function tel(gs, uid, pos, over = {}) {
 }
 const FAST = {
   freezeMs: 1000, freezeExtensionMs: 500, freezeMoveToleranceM: 15,
-  baseSettingMs: 500, hitCooldownMs: 0,
+  baseSettingMs: 500, warmupMs: 500, hitCooldownMs: 0,
 };
 
 // Deathmatch + onHit:'freeze' reaches a shootable phase ('live') with NO

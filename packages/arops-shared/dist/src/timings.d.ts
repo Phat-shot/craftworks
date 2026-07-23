@@ -7,8 +7,14 @@ export interface ModeTimings {
     freezeMoveToleranceM: number;
     /** Extension applied per movement violation. */
     freezeExtensionMs: number;
-    /** CTF phase 1: time to place the team base. */
+    /** Base-placement phase (CTF always; Domination/S&D/Deathmatch when
+     *  cfg.onHit === 'respawn'): time to place the team base. Field-size-scaled. */
     baseSettingMs: number;
+    /** Warmup phase (Domination/S&D/Deathmatch when cfg.onHit === 'freeze' —
+     *  no base to place). Deliberately FIXED, never field-size-scaled, not even
+     *  in auto mode — a plain "get ready" pause doesn't need more time just
+     *  because the field is bigger. */
+    warmupMs: number;
     /** CTF: dwell time in enemy base / at dropped flag to pick it up. */
     flagPickupDwellMs: number;
     /** CTF: dropped flag auto-returns after this. */
@@ -54,6 +60,11 @@ export interface CoreScaledConfig {
     /** Scout class perk (any mode) — previously not auto-scaled at all (stuck
      *  at the fixed DEFAULTS value regardless of field/match size). */
     revealTrapCooldownMs: number;
+    /** How long a perk's effect/reveal actually lasts once triggered (radar
+     *  contacts staying visible, cloak active, fake marker shown, etc.) — same
+     *  scale3 anchor points as radarCooldownMs, shared by every perk that has
+     *  a duration. Previously fixed, non-field-scaled constants per perk. */
+    perkDurationMs: number;
     /** Combat modes' respawn variant (cfg.onHit === 'respawn'): lives before
      *  elimination. Longer matches can afford more lives before someone's
      *  permanently out — previously not auto-scaled at all (stuck at the

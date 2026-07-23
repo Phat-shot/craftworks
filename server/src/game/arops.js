@@ -38,6 +38,7 @@ const DEFAULTS = {
   gameDurationMs: 20 * 60_000,
   hitCooldownMs: 3_000,
   radarCooldownMs: 15 * 60_000,
+  radarDurationMs: 15_000,        // how long revealed radar contacts stay visible to the client
   proximityRangeM: 40,
   geofenceWarnM: 10,
   geofenceGraceMs: 30_000,
@@ -368,7 +369,8 @@ const MODES = {
     initialPhase: (cfg) => cfg.onHit === 'respawn' ? 'base_setup' : 'warmup',
     shootPhases: ['live'],
     phaseDurationMs(gs) {
-      return (gs.phase === 'base_setup' || gs.phase === 'warmup') ? gs.timings.baseSettingMs
+      return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
+        : gs.phase === 'warmup' ? gs.timings.warmupMs
         : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
     },
     initState(gs) {
@@ -400,7 +402,7 @@ const MODES = {
         return;
       }
       if (gs.phase === 'warmup') {
-        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) transitionFromWarmup(gs, t);
+        if (t - gs.phaseStartTime >= gs.timings.warmupMs) transitionFromWarmup(gs, t);
         return;
       }
       if (gs.phase !== 'live') return;
@@ -722,7 +724,8 @@ const MODES = {
     initialPhase: (cfg) => cfg.onHit === 'respawn' ? 'base_setup' : 'warmup',
     shootPhases: ['live'],
     phaseDurationMs(gs) {
-      return (gs.phase === 'base_setup' || gs.phase === 'warmup') ? gs.timings.baseSettingMs
+      return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
+        : gs.phase === 'warmup' ? gs.timings.warmupMs
         : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
     },
     initState(gs) {
@@ -783,7 +786,7 @@ const MODES = {
         return;
       }
       if (gs.phase === 'warmup') {
-        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) transitionFromWarmup(gs, t);
+        if (t - gs.phaseStartTime >= gs.timings.warmupMs) transitionFromWarmup(gs, t);
         return;
       }
       if (gs.phase !== 'live') return;
@@ -919,7 +922,8 @@ const MODES = {
     initialPhase: (cfg) => cfg.onHit === 'respawn' ? 'base_setup' : 'warmup',
     shootPhases: ['live'],
     phaseDurationMs(gs) {
-      return (gs.phase === 'base_setup' || gs.phase === 'warmup') ? gs.timings.baseSettingMs
+      return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
+        : gs.phase === 'warmup' ? gs.timings.warmupMs
         : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
     },
     initState(gs) {
@@ -973,7 +977,7 @@ const MODES = {
         return;
       }
       if (gs.phase === 'warmup') {
-        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) transitionFromWarmup(gs, t);
+        if (t - gs.phaseStartTime >= gs.timings.warmupMs) transitionFromWarmup(gs, t);
         return;
       }
       if (gs.phase !== 'live') return;
@@ -1213,6 +1217,14 @@ function createAropsGame(sessionId, players, workshopConfig) {
     // stuck at the fixed DEFAULTS value regardless of field/match size
     // while every other perk cooldown did scale.
     cfg.revealTrapCooldownMs = auto.revealTrapCooldownMs;
+    // Perk effect durations — previously fixed constants, never field-scaled
+    // regardless of match size. All share the same value ("Dauer ist analog
+    // Radar" — same anchor points as radarCooldownMs above).
+    cfg.radarDurationMs = auto.perkDurationMs;
+    cfg.cloakDurationMs = auto.perkDurationMs;
+    cfg.fakeMarkerDurationMs = auto.perkDurationMs;
+    cfg.aufscheuchenDurationMs = auto.perkDurationMs;
+    cfg.revealTrapDurationMs = auto.perkDurationMs;
     // Passive "opponent nearby" sensor (tickCore, sets me.proximityAlert
     // every tick for every player) — same "opponent within range" concept
     // the Drone perk's own alert already uses (see actionArUsePerk's
@@ -2176,6 +2188,7 @@ function getAropsSnapshot(gs, userId) {
       plantDwellMs: gs.timings.plantDwellMs,
       defuseDwellMs: gs.timings.defuseDwellMs,
       zoneRadiusM: gs.timings.zoneRadiusM,
+      radarDurationMs: gs.cfg.radarDurationMs,
     },
     me: me ? {
       role: me.role, team: me.team, class: me.class, status: me.status, score: me.score,

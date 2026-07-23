@@ -38,13 +38,13 @@
 //  instead of a flaky one.
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SIM_SCENARIOS = void 0;
-exports.squareFieldCorners = squareFieldCorners;
+exports.SIM_SCENARIOS = exports.squareFieldCorners = void 0;
 /** Square field corners (bearing+distance from the origin) for a given side length. */
 function squareFieldCorners(sideM) {
     const half = (sideM * Math.SQRT2) / 2;
     return [45, 135, 225, 315].map(bearingDeg => ({ tMs: 0, bearingDeg, distanceM: half }));
 }
+exports.squareFieldCorners = squareFieldCorners;
 // ── seeded PRNG (mulberry32) — deterministic, no external dependency ──
 function mulberry32(seed) {
     let s = seed | 0;

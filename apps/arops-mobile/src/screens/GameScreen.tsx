@@ -49,6 +49,7 @@ interface Snap {
   timings?: {
     freezeMs: number; captureDwellMs: number; flagPickupDwellMs: number;
     plantDwellMs: number; defuseDwellMs: number; zoneRadiusM: number;
+    radarDurationMs: number;
   };
   winner: string | null;
   hidersRemaining: number;
@@ -344,6 +345,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [snap, setSnap] = useState<Snap | null>(null);
   const telemetry = useTelemetry(socket, sessionId);
   const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
+  const radarDurationMsRef = useRef(15_000);
   // Action-bar cooldown/duration indicators (GlowBorder above): the server only
   // ever sends *RemainingMs, never each perk's total duration (which varies
   // by field-size auto-scaling and host overrides anyway) — so the ring's
@@ -495,6 +497,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       // Reichweite" toast below used to always show the match-wide default,
       // wrong for anyone with a non-default class.
       if (s.me?.hitRangeM ?? s.hitRangeM) hitRangeRef.current = (s.me?.hitRangeM ?? s.hitRangeM)!;
+      if (s.timings?.radarDurationMs) radarDurationMsRef.current = s.timings.radarDurationMs;
       setSnap(s);
     };
     const onResult = (r: any) => {
@@ -512,7 +515,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         setTimeout(() => setLastResult(null), 4500);
       } else if (r.action === 'ar_use_perk' && r.contacts) {
         setRadarContacts(r.contacts);
-        setTimeout(() => setRadarContacts([]), 15_000);
+        setTimeout(() => setRadarContacts([]), radarDurationMsRef.current);
       } else if (r.action === 'ar_use_perk' && typeof r.alert === 'boolean') {
         setLastResult({ icon: 'drone', text: r.alert ? 'Gegner in der Nähe!' : 'Nichts entdeckt' });
         setTimeout(() => setLastResult(null), 4000);

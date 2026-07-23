@@ -50,7 +50,7 @@ function tel(gs, uid, pos, over = {}) {
 // Deathmatch's base_setup is skipped elsewhere in this file: rewind
 // phaseStartTime past baseSettingMs and tick once.
 function skipWarmup(gs) {
-  gs.phaseStartTime = Date.now() - (gs.timings.baseSettingMs + 100);
+  gs.phaseStartTime = Date.now() - (gs.timings.warmupMs + 100);
   tick(gs, 100);
 }
 // Fast timings for tests (explicit override wins over scaling)
@@ -58,7 +58,7 @@ const FAST = {
   captureDwellMs: 300, flagPickupDwellMs: 300, flagReturnMs: 800,
   plantDwellMs: 300, defuseDwellMs: 300, bombTimerMs: 2000,
   freezeMs: 1000, freezeExtensionMs: 500, freezeMoveToleranceM: 15,
-  baseSettingMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
+  baseSettingMs: 500, warmupMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
 };
 
 const Z1 = shared.destinationPoint(MUC, 90, 100);
