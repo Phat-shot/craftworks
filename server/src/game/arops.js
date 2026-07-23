@@ -1313,7 +1313,8 @@ function applySimOverrides(ar, players) {
     ...(scenario.targetCaptures ? { targetCaptures: scenario.targetCaptures } : {}),
     ...(scenario.livesPerPlayer ? { livesPerPlayer: scenario.livesPerPlayer } : {}),
     ...(scenario.destroyVariant ? { destroyVariant: scenario.destroyVariant } : {}),
-    ...(scenario.foundMode ? { foundMode: scenario.foundMode } : {}),
+    ...(scenario.foundMode === 'freeze' ? { hiderCanFreeze: true }
+      : scenario.foundMode ? { foundMode: scenario.foundMode } : {}),
     ...(scenario.hsVariant ? { hsVariant: scenario.hsVariant } : {}),
     debugMode: true, // ground-truth visibility — the tester must see real bot positions
   };
@@ -1384,7 +1385,12 @@ function createAropsGame(sessionId, players, workshopConfig) {
     if (typeof ar[k] === 'number') cfg[k] = ar[k];
   }
   cfg.autoScale = autoScale;
-  cfg.foundMode = ['seeker', 'freeze'].includes(ar.foundMode) ? ar.foundMode : 'spectator';
+  // Host-facing as 2 independent toggles (Lobby UI): ar.foundMode is now
+  // strictly 'seeker'|'spectator' (what a found hider becomes when NOT
+  // frozen), ar.hiderCanFreeze is a separate bool that, when on, wins
+  // regardless of the other toggle — internally still the same tri-state
+  // cfg.foundMode ('seeker'|'spectator'|'freeze') foundHider() always read.
+  cfg.foundMode = ar.hiderCanFreeze === true ? 'freeze' : (ar.foundMode === 'seeker' ? 'seeker' : 'spectator');
   cfg.debugMode = ar.debugMode === true;
   cfg.simulation = ar.simulation === true;
   // Hide & Seek variant: 'classic' (default, seeker/hider roles), 'ffa'

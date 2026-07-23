@@ -1584,12 +1584,12 @@ console.log('\n═══ FOUND-HIDER FATE ═══');
   const posH1 = shared.destinationPoint(MUC, 0, 50);
   const posH2 = shared.destinationPoint(MUC, 90, 30);
 
-  const mkFound = (foundMode) => {
+  const mkFound = (foundMode, over = {}) => {
     const gs = createGame('found' + Math.random(),
       [{ userId: 'S', username: 'S' }, { userId: 'H1', username: 'H1' }, { userId: 'H2', username: 'H2' }],
       { ar_settings: { polygon: FIELD, subMode: 'hide_and_seek',
         roles: { S: 'seeker', H1: 'hider', H2: 'hider' },
-        hidingDurationMs: 0, gameDurationMs: 600_000, hitCooldownMs: 50, foundMode } });
+        hidingDurationMs: 0, gameDurationMs: 600_000, hitCooldownMs: 50, foundMode, ...over } });
     tick(gs, 10); // → seeking
     return gs;
   };
@@ -1633,6 +1633,24 @@ console.log('\n═══ FOUND-HIDER FATE ═══');
     assert.equal(r.hit, true, JSON.stringify(r));
     assert.equal(gs.players.H1.role, 'hider', 'role unchanged in spectator mode');
     assert.equal(gs.players.H1.status, 'found', 'sidelined as before');
+  });
+
+  check("hiderCanFreeze=true overrides foundMode='seeker' — found hider freezes instead of flipping role", () => {
+    // 2 independent Lobby toggles now (ar.foundMode 'seeker'/'spectator' +
+    // a separate ar.hiderCanFreeze bool) instead of one lossy tri-state —
+    // freeze always wins regardless of what the other toggle is set to.
+    const gs = mkFound('seeker', { hiderCanFreeze: true, timings: { freezeMs: 5000 } });
+    const t0 = Date.now();
+    arops.actionArTelemetry(gs, 'S', { sample: { lat: posS.lat, lon: posS.lon, ts: t0, accuracyM: 5 } });
+    arops.actionArTelemetry(gs, 'H1', { sample: { lat: posH1.lat, lon: posH1.lon, ts: t0, accuracyM: 5 } });
+
+    const r = arops.actionArHitAttempt(gs, 'S', {
+      sample: { lat: posS.lat, lon: posS.lon, ts: t0 + 1100, accuracyM: 5, headingDeg: 0 },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.H1.role, 'hider', 'role untouched — freeze wins over the seeker toggle');
+    assert.equal(gs.players.H1.status, 'alive', 'frozen, not sidelined');
+    assert.ok(gs.players.H1.frozenUntil > Date.now(), 'actually frozen');
   });
 }
 

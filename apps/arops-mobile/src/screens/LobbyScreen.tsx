@@ -35,7 +35,12 @@ interface ArSettings {
   cloakCooldownMs?: number;
   fakeMarkerCooldownMs?: number;
   aufscheuchenCooldownMs?: number;
-  foundMode?: 'spectator' | 'seeker' | 'freeze';
+  // 2 independent toggles now: what a found hider becomes when NOT frozen
+  // (seeker/spectator), and whether freeze is even an option — freeze
+  // always wins over foundMode when on (see server's cfg.foundMode
+  // derivation in arops.js).
+  foundMode?: 'spectator' | 'seeker';
+  hiderCanFreeze?: boolean;
   // Hide & Seek variant: 'classic' (default, seeker/hider), 'ffa' (Jeder
   // gegen jeden — no roles/teams) or 'the_ship' (secret assassin-chain, no
   // roles) — see server's MODES.hide_and_seek.
@@ -316,7 +321,8 @@ export default function LobbyScreen({
   // role/team assignment UI only makes sense for the classic variant.
   const rolesApply = subMode === 'hide_and_seek' && hsVariant === 'classic';
   const teamVariant = teamMode && ar.teamVariant === 'ffa' ? 'ffa' : 'team';
-  const foundMode = ar.foundMode || 'spectator';
+  const foundMode = ar.foundMode === 'seeker' ? 'seeker' : 'spectator';
+  const hiderCanFreeze = ar.hiderCanFreeze === true;
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   // 'freeze' is every combat mode's original, pre-toggle default (only
   // Deathmatch defaulted to 'respawn') — mirrors arops.js createAropsGame's
@@ -565,7 +571,7 @@ export default function LobbyScreen({
   // variant, or Hide & Seek's foundMode==='freeze'.
   const showLivesInPreview = teamMode && onHit === 'respawn';
   const showFreezeInPreview = (teamMode && onHit === 'freeze')
-    || (subMode === 'hide_and_seek' && foundMode === 'freeze');
+    || (subMode === 'hide_and_seek' && hiderCanFreeze);
   // Base-Setup-Zeit only matters where a base actually gets placed — CTF
   // always, the other 3 team-capable modes only in the respawn variant
   // (see MODES' initialPhase in arops.js: onHit==='respawn' → 'base_setup',
@@ -682,19 +688,32 @@ export default function LobbyScreen({
             <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
           </TouchableOpacity>
-          {/* Gefunden-Konsequenz — jetzt hier in der Submode-Zeile statt in
-              der Modus-Zeile oben. Freeze AN gewinnt immer (unabhängig vom
-              anderen Toggle); Freeze AUS liest den Weiterspielen/
-              Zuschauer-Toggle. Nur bei classic sichtbar (rolesApply) — ffa/
-              The Ship haben keine Rollen, also nichts "Gefundenes". */}
+          {/* Toggle 2 + Toggle 3 — 2 unabhängige Schalter statt eines
+              verschmolzenen 3-Wege-Werts: was ein gefundener Hider wird,
+              WENN er nicht einfriert (Sucher/Zuschauer), und getrennt davon
+              ob Freeze für Hider überhaupt aktiv ist — Freeze AN gewinnt
+              immer, unabhängig vom Sucher/Zuschauer-Toggle (siehe
+              arops.js's cfg.foundMode-Herleitung). Nur bei classic sichtbar
+              (rolesApply) — ffa/The Ship haben keine Rollen, also nichts
+              "Gefundenes". */}
           {isHost && rolesApply && (
-            <IconToggleGroup theme={theme} st={st} value={foundMode}
-              onChange={v => emitUpdate({ foundMode: v })}
-              options={[
-                { value: 'seeker', icon: 'magnify', title: 'Weiterspielen (Sucher)', body: 'Gefundene Hider spielen sofort als Sucher weiter.' },
-                { value: 'spectator', icon: 'binoculars', title: 'Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu.' },
-                { value: 'freeze', icon: 'snowflake', title: 'Freeze für Hider', body: 'Gefundene Hider frieren kurz ein statt auszuscheiden — überstimmt Weiterspielen/Zuschauer.' },
-              ]} />
+            <>
+              <IconToggleGroup theme={theme} st={st} value={foundMode}
+                onChange={v => emitUpdate({ foundMode: v })}
+                options={[
+                  { value: 'seeker', icon: 'magnify', title: 'Weiterspielen (Sucher)', body: 'Gefundene Hider spielen sofort als Sucher weiter (falls nicht eingefroren).' },
+                  { value: 'spectator', icon: 'binoculars', title: 'Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu (falls nicht eingefroren).' },
+                ]} />
+              <TouchableOpacity style={[st.smallBtnRow, hiderCanFreeze && st.toggleOn]}
+                onPress={() => emitUpdate({ hiderCanFreeze: !hiderCanFreeze })}
+                onLongPress={() => Alert.alert('Hider kann Freezen',
+                  'AN: Gefundene Hider frieren kurz ein statt auszuscheiden — überstimmt Weiterspielen/Zuschauer. AUS: der andere Toggle entscheidet direkt.')}>
+                <Icon name="snowflake" size={13} color={hiderCanFreeze ? theme.onAccent : theme.text2} />
+                <Text style={[st.smallTxt, hiderCanFreeze && st.toggleOnTxt]}>
+                  Hider kann Freezen: {hiderCanFreeze ? 'AN' : 'AUS'}
+                </Text>
+              </TouchableOpacity>
+            </>
           )}
         </View>
       )}
@@ -742,52 +761,29 @@ export default function LobbyScreen({
           )}
         </View>
       )}
-      {/* Symmetrisch reaktiviert Ziele immer nach vollständiger Zerstörung
-          ("mit Restore") — Entschärfen (Angriff & Verteidigung) nie, ein
-          erfolgreicher Angriff ohne Verteidiger entscheidet das Match sofort.
-          Kein separater "Ziele reaktivieren"-Schalter mehr — die Wahl der
-          Variante entscheidet das jetzt fest mit (host requirement). */}
-      {isHost && subMode === 'seek_destroy' && (
+      {/* Toggle 3 (Domination/CTF/Bomb): was passiert, wenn ein
+          ungefreezter Gegner während der Einnahme/des Diebstahls/des
+          Scharfmachens auftaucht (z.B. weil der Einnehmende erst hätte
+          gefreezt werden müssen) — pausiert (Standard, Fortschritt bleibt
+          erhalten) oder bricht komplett ab (Fortschritt auf 0). */}
+      {isHost && (subMode === 'domination' || subMode === 'seek_destroy' || subMode === 'ctf') && (
         <View style={st.rowBtns}>
-          <Text style={st.wpCount}>Zerstören:</Text>
-          <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ destroyVariant: 'instant' })}
-            onLongPress={() => Alert.alert('Symmetrisch (mit Restore)', 'Beide Teams können jedes Ziel einnehmen. Sind alle zerstört, reaktivieren sie sich automatisch — das Match läuft bis zum Zeitlimit weiter.')}>
-            <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch (Restore)</Text>
-          </TouchableOpacity>
-          {teamVariant === 'team' && (
-            <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
-              onPress={() => emitUpdate({ destroyVariant: 'defuse' })}
-              onLongPress={() => Alert.alert('Angriff & Verteidigung', 'Team A scharf machen, Team B entschärfen. Explodiert ein Ziel ohne Verteidiger, endet das Match sofort — keine Reaktivierung.')}>
-              <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Angriff & Verteidigung</Text>
-            </TouchableOpacity>
-          )}
+          <IconToggleGroup theme={theme} st={st} value={ar.contestResets ? 'breaks' : 'pauses'}
+            onChange={v => emitUpdate({ contestResets: v === 'breaks' })}
+            options={[
+              { value: 'pauses', icon: 'snowflake', title: 'Freeze pausiert Capture', body: 'Ein ungefreezter Gegner pausiert die Einnahme nur — Fortschritt bleibt erhalten, sobald er weg ist geht es weiter.' },
+              { value: 'breaks', icon: 'close', title: 'Freeze bricht Capture', body: 'Ein ungefreezter Gegner bricht den Versuch komplett ab — Fortschritt auf 0, von vorn beginnen.' },
+            ]} />
         </View>
       )}
-      {/* Was passiert, wenn ein ungefreezter Gegner während der Einnahme/des
-          Scharfmachens im Ziel auftaucht: standardmäßig pausiert das nur
-          (Fortschritt bleibt erhalten), mit diesem Toggle bricht es den
-          Versuch stattdessen komplett ab (Fortschritt auf 0). Gilt für
-          Domination-Zonen und Zerstören-Ziele (instant-Variante). */}
-      {isHost && (subMode === 'domination' || subMode === 'seek_destroy') && (
-        <View style={st.rowBtns}>
-          <TouchableOpacity style={[st.smallBtnRow, ar.contestResets && st.toggleOn]}
-            onPress={() => emitUpdate({ contestResets: !ar.contestResets })}
-            onLongPress={() => Alert.alert('Einnahme bei Kontakt',
-              'AUS (Standard): ein ungefreezter Gegner im Ziel pausiert die Einnahme nur, Fortschritt bleibt erhalten. AN: bricht den Versuch komplett ab.')}>
-            <Icon name="close" size={13} color={ar.contestResets ? theme.onAccent : theme.text2} />
-            <Text style={[st.smallTxt, ar.contestResets && st.toggleOnTxt]}>
-              Kontakt bricht Einnahme ab: {ar.contestResets ? 'AN' : 'AUS'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {/* Team Capture: mehrere Teammitglieder müssen gleichzeitig im Ziel
-          stehen, um es einzunehmen — Standard AUS (jede/r Einzelne kann
-          einnehmen). Nur bei echten Teams (nicht ffa) und nur, wo Domination/
-          Zerstören's symmetrische Einnahme überhaupt gilt (Zerstören-
-          "Entschärfen" ist bereits zweiseitig angelegt, davon unabhängig). */}
-      {isHost && teamVariant === 'team' && (subMode === 'domination' || (subMode === 'seek_destroy' && destroyVariant === 'instant')) && (
+      {/* Toggle 4 (Domination/CTF/Bomb-Symmetrisch): mehrere Teammitglieder
+          müssen gleichzeitig im Ziel stehen, um es einzunehmen — Standard
+          AUS (jede/r Einzelne kann einnehmen). Nur bei echten Teams (nicht
+          ffa) und nur, wo die symmetrische Einnahme gilt (Zerstören-
+          "Angriff & Verteidigung" ist bereits zweiseitig angelegt, davon
+          unabhängig). Anzahl-Picker nur sichtbar, wenn der Toggle an ist —
+          selbe "nur zeigen wenn relevant"-Regel wie bei Leben unten. */}
+      {isHost && teamVariant === 'team' && (subMode === 'domination' || subMode === 'ctf' || (subMode === 'seek_destroy' && destroyVariant === 'instant')) && (
         <View style={st.rowBtns}>
           <TouchableOpacity style={[st.smallBtnRow, ar.teamCaptureEnabled && st.toggleOn]}
             onPress={() => emitUpdate({ teamCaptureEnabled: !ar.teamCaptureEnabled })}
@@ -805,6 +801,29 @@ export default function LobbyScreen({
               </Text>
             </TouchableOpacity>
           ))}
+        </View>
+      )}
+      {/* Toggle 5 (nur Bomb): Symmetrisch reaktiviert Ziele immer nach
+          vollständiger Zerstörung ("mit Restore") — Angriff & Verteidigung
+          nie, ein erfolgreicher Angriff ohne Verteidiger entscheidet das
+          Match sofort. Kein separater "Ziele reaktivieren"-Schalter mehr —
+          die Wahl der Variante entscheidet das jetzt fest mit (host
+          requirement). */}
+      {isHost && subMode === 'seek_destroy' && (
+        <View style={st.rowBtns}>
+          <Text style={st.wpCount}>Zerstören:</Text>
+          <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ destroyVariant: 'instant' })}
+            onLongPress={() => Alert.alert('Symmetrisch (mit Restore)', 'Beide Teams können jedes Ziel einnehmen. Sind alle zerstört, reaktivieren sie sich automatisch — das Match läuft bis zum Zeitlimit weiter.')}>
+            <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch (Restore)</Text>
+          </TouchableOpacity>
+          {teamVariant === 'team' && (
+            <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
+              onPress={() => emitUpdate({ destroyVariant: 'defuse' })}
+              onLongPress={() => Alert.alert('Angriff & Verteidigung', 'Team A scharf machen, Team B entschärfen. Explodiert ein Ziel ohne Verteidiger, endet das Match sofort — keine Reaktivierung.')}>
+              <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Angriff & Verteidigung</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
       {isHost && teamMode && onHit === 'respawn' && !autoScale && (
