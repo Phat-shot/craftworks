@@ -81,6 +81,7 @@ function handleAction({ action, userId, data, reqId }) {
     case 'ar_telemetry':    result = arops.actionArTelemetry(gs, userId, data); break;
     case 'ar_hit_attempt':  result = arops.actionArHitAttempt(gs, userId, data); break;
     case 'ar_use_perk':     result = arops.actionArUsePerk(gs, userId, data); break;
+    case 'ar_use_item':     result = arops.actionArUseItem(gs, userId); break;
     case 'ar_set_base':     result = arops.actionArSetBase(gs, userId, data); break;
     default: result = { ok:false, err:'unknown_action' };
   }

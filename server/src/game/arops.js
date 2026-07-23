@@ -111,6 +111,7 @@ function resolveCombatHit(gs, target, byUserId, t) {
     ms.lives[target.userId] = remaining;
     if (remaining <= 0) {
       target.status = 'found'; // eliminated — out for the rest of the match
+      dropEliminatedPerkItem(gs, target, t);
       pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId });
       return 'eliminated';
     }
@@ -121,6 +122,34 @@ function resolveCombatHit(gs, target, byUserId, t) {
   }
   applyFreeze(gs, target, byUserId, t);
   return 'frozen';
+}
+
+// Item pickup radius (meters) — same convention as the flag's own instant
+// pickup-on-presence zone (CTF, dropFlag/tick loop), not a dwell.
+const ITEM_PICKUP_RADIUS_M = 10;
+
+/**
+ * A final (permanent) elimination drops the victim's class perk — scout's
+ * reveal_trap, sniper's fake_marker, bomber's cloak (see
+ * PLAYER_TYPE_PROFILES[cls].uniquePerks[0], the exact 1:1 class->perk
+ * mapping already used everywhere else) — as a one-time pickup at their
+ * last known position. Hider/seeker ROLE perks (radar/drone/aufscheuchen)
+ * never drop — only a CLASS grants exactly one perk, so classless players
+ * (uniquePerks: [] on 'team_member') simply drop nothing. No position, no
+ * drop (nothing to place it at). Called at every site that sets a
+ * player's status to the permanent 'found' state — see this session's
+ * plan/research for the full enumeration (resolveCombatHit's eliminated
+ * branch, foundHider's spectator branch, H&S ffa/the_ship's kill + geofence
+ * branches).
+ */
+function dropEliminatedPerkItem(gs, target, t) {
+  const perkId = shared.PLAYER_TYPE_PROFILES[target.class]?.uniquePerks?.[0];
+  if (!perkId || !target.lastAccepted) return;
+  gs.items.push({
+    id: `item_${++gs._itemSeq}`, perkId,
+    lat: target.lastAccepted.lat, lon: target.lastAccepted.lon,
+    droppedAt: t,
+  });
 }
 
 /**
@@ -142,6 +171,7 @@ function foundHider(gs, target, t, byUserId) {
     applyFreeze(gs, target, byUserId, t);
   } else {
     target.status = 'found';
+    dropEliminatedPerkItem(gs, target, t);
   }
 }
 
@@ -257,6 +287,7 @@ const MODES = {
         const ms = gs.modeState;
         const inherited = ms.targets[target.userId];
         target.status = 'found'; // eliminated — permanently out
+        dropEliminatedPerkItem(gs, target, t);
         ms.targets[target.userId] = null;
         // Guards the only case a cycle splice could self-target: exactly 2
         // players left (A→B→A) — hitting B would otherwise assign A as A's
@@ -270,6 +301,7 @@ const MODES = {
       if (gs.cfg.hsVariant === 'ffa') {
         shooter.score += 10;
         target.status = 'found'; // eliminated — permanent, no freeze/respawn
+        dropEliminatedPerkItem(gs, target, t);
         pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
         this.checkWin(gs);
         return;
@@ -333,6 +365,7 @@ const MODES = {
           const hunter = Object.values(gs.players).find(h => ms.targets[h.userId] === p.userId);
           const inherited = ms.targets[p.userId];
           p.status = 'found';
+          dropEliminatedPerkItem(gs, p, t);
           ms.targets[p.userId] = null;
           if (hunter) ms.targets[hunter.userId] = (inherited && inherited !== hunter.userId) ? inherited : null;
           pushEvent(gs, 'player_eliminated', { userId: p.userId, byUserId: null, reason: 'left_field' });
@@ -340,6 +373,7 @@ const MODES = {
           if (gs.gameOver) return;
         } else if (gs.cfg.hsVariant === 'ffa') {
           p.status = 'found';
+          dropEliminatedPerkItem(gs, p, t);
           pushEvent(gs, 'player_eliminated', { userId: p.userId, byUserId: null, reason: 'left_field' });
           this.checkWin(gs);
           if (gs.gameOver) return;
@@ -1374,6 +1408,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
       trap: null, trapAlert: null, // Scout's Reveal-Trap perk state
       spawnDwellMs: 0, // Base/respawn checkpoint (CTF, Deathmatch)
       lastPingAt: 0, // team ping cooldown (map tap)
+      heldItem: null, // { perkId, pickedUpAt } — a dropped class-perk item, see gs.items
     };
   });
   // Every normal (classic) Hide & Seek match needs at least one seeker —
@@ -1402,6 +1437,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
     phaseStartTime: now(),
     gameOver: false, _gameOverWin: false, winner: null,
     events: [], _eventSeq: 0,
+    // A final kill drops the victim's class perk as a one-time pickup —
+    // mode-agnostic like events/modeState, not tucked into modeState since
+    // every mode (not just the current one's own state shape) can produce
+    // one. See dropEliminatedPerkItem/tickArops's pickup loop.
+    items: [], _itemSeq: 0,
     modeState: {},
     // Team ping (map tap): mode-agnostic, like events/modeState above — any
     // team mode gets this for free. Per-team so a viewer only ever reads
@@ -1908,6 +1948,54 @@ function actionArUsePerk(gs, userId, data) {
   return { ok: false, err: 'unknown_perk' };
 }
 
+/**
+ * Use a picked-up dropped-perk item (see gs.items / tickArops's pickup
+ * loop / dropEliminatedPerkItem) — deliberately NOT actionArUsePerk: no
+ * cooldown check, no role/class gate (the item itself, not the player's
+ * own class, is what earns the effect here), one-shot consumption instead
+ * of a cooldown timer — never touches gs.players[x].perks.*LastUsed, so it
+ * can never affect (or be affected by) the player's own perk cooldowns.
+ * Mirrors the exact same effect application as the matching branch in
+ * actionArUsePerk (cloak/fake_marker/reveal_trap are the only 3 possible
+ * drops — one perk per class, see PLAYER_TYPE_PROFILES.uniquePerks) so a
+ * picked-up item behaves identically to the class's own use of it.
+ */
+function actionArUseItem(gs, userId) {
+  const mode = MODES[gs.subMode];
+  const p = gs.players[userId];
+  if (!p) return { ok: false, err: 'not_in_game' };
+  if (gs.gameOver) return { ok: false, err: 'game_over' };
+  if (p.status === 'downed') return { ok: false, err: 'downed' };
+  if (!mode.shootPhases.includes(gs.phase)) return { ok: false, err: 'wrong_phase' };
+  if (!p.heldItem) return { ok: false, err: 'no_item' };
+  const t = now();
+  const perkId = p.heldItem.perkId;
+
+  if (perkId === 'cloak') {
+    p.heldItem = null;
+    p.cloakUntil = t + gs.cfg.cloakDurationMs;
+    pushEvent(gs, 'item_used', { userId, perkId });
+    return { ok: true };
+  }
+  if (perkId === 'fake_marker') {
+    p.heldItem = null;
+    const fallback = p.lastAccepted ? { lat: p.lastAccepted.lat, lon: p.lastAccepted.lon } : null;
+    p.fakeMarkers = [randomPointInPolygon(gs.polygon) || fallback, randomPointInPolygon(gs.polygon) || fallback]
+      .filter(Boolean);
+    p.fakeMarkerUntil = t + gs.cfg.fakeMarkerDurationMs;
+    pushEvent(gs, 'item_used', { userId, perkId });
+    return { ok: true };
+  }
+  if (perkId === 'reveal_trap') {
+    if (!p.lastAccepted) return { ok: false, err: 'no_position' };
+    p.heldItem = null;
+    p.trap = { lat: p.lastAccepted.lat, lon: p.lastAccepted.lon, armedUntil: t + gs.cfg.revealTrapDurationMs };
+    pushEvent(gs, 'item_used', { userId, perkId });
+    return { ok: true };
+  }
+  return { ok: false, err: 'unknown_item' };
+}
+
 // ═══════════════════════════════════════════════════════════
 //  BOTS (debug/testing only — added via LobbyScreen's "+ Bot" button,
 //  never persisted to the users table; see socket.js lobby:ar_update).
@@ -2045,6 +2133,35 @@ function tickSimBots(gs, t) {
 // ═══════════════════════════════════════════════════════════
 //  TICK (core: geofence exposure + proximity, then mode logic)
 // ═══════════════════════════════════════════════════════════
+// Elimination-based win check for the respawn variant (onHit==='respawn')
+// — Domination/CTF/Seek&Destroy have no checkWin at all (only Deathmatch
+// and Hide&Seek do, see MODES.deathmatch.checkWin/MODES.hide_and_seek.
+// checkWin), so if every player on one side reached 0 lives (permanently
+// 'found') before the mode's own objective/time-limit ending happened to
+// fire, the match previously just continued indefinitely with a side that
+// had no active players left — reported live: a Seek&Destroy match with
+// destroyReactivate off appeared to "hang" near the end. Deathmatch is
+// deliberately excluded here — it already has its own tested checkWin for
+// exactly this, a second parallel path would be redundant.
+function checkEliminationWin(gs) {
+  if (gs.gameOver || gs.cfg.onHit !== 'respawn') return;
+  if (!['domination', 'ctf', 'seek_destroy'].includes(gs.subMode)) return;
+  if (Object.keys(gs.players).length < 2) return; // solo debug session — no opponent to eliminate
+  if (gs.cfg.teamVariant === 'ffa') {
+    const alive = Object.values(gs.players).filter(p => p.status !== 'found');
+    if (alive.length <= 1) endGame(gs, alive.length === 1 ? 'player_' + alive[0].userId : 'draw');
+    return;
+  }
+  const teamAPlayers = Object.values(gs.players).filter(p => p.team === 'a');
+  const teamBPlayers = Object.values(gs.players).filter(p => p.team === 'b');
+  if (!teamAPlayers.length || !teamBPlayers.length) return; // no real opponent side (e.g. solo debug)
+  const aAlive = teamAPlayers.some(p => p.status !== 'found');
+  const bAlive = teamBPlayers.some(p => p.status !== 'found');
+  if (aAlive && bAlive) return;
+  if (!aAlive && !bAlive) endGame(gs, 'draw');
+  else endGame(gs, aAlive ? 'team_a' : 'team_b');
+}
+
 function tickArops(gs) {
   if (gs.gameOver) return;
   const mode = MODES[gs.subMode];
@@ -2066,6 +2183,9 @@ function tickArops(gs) {
   tickSpawnRespawn(gs, t, dtMs);
 
   mode.tick(gs, t, dtMs);
+  if (gs.gameOver) return;
+
+  checkEliminationWin(gs);
   if (gs.gameOver) return;
 
   if (gs.cfg.simulation) tickSimBots(gs, t); else tickBots(gs, t);
@@ -2116,6 +2236,23 @@ function tickArops(gs) {
         pushEvent(gs, 'reveal_trap_triggered', { userId: p.userId, byUserId: o.userId });
         break;
       }
+    }
+  }
+
+  // Dropped-item pickup — instant on presence, same convention as CTF's
+  // dropped-flag pickup (no dwell). Any alive player without an item
+  // already in their slot picks up the first item they're close enough to;
+  // capacity is exactly 1, so a player already holding one walks past
+  // untouched items until they use or (match end) lose their current one.
+  if (gs.items.length) {
+    for (const p of Object.values(gs.players)) {
+      if (p.status !== 'alive' || p.heldItem || !p.lastAccepted) continue;
+      const idx = gs.items.findIndex(it => shared.haversineMeters(p.lastAccepted, it) <= ITEM_PICKUP_RADIUS_M);
+      if (idx === -1) continue;
+      const item = gs.items[idx];
+      gs.items.splice(idx, 1);
+      p.heldItem = { perkId: item.perkId, pickedUpAt: t };
+      pushEvent(gs, 'item_picked_up', { userId: p.userId, perkId: item.perkId });
     }
   }
 }
@@ -2239,6 +2376,9 @@ function getAropsSnapshot(gs, userId) {
       // Only ever populated for the trap's own owner — never leaks who
       // triggered someone else's trap to anyone but that trap's owner.
       trapAlert: me.trapAlert ? { ...me.trapAlert } : null,
+      // A picked-up dropped-item — perkId only (no cooldown/timer state,
+      // it's one-shot). See actionArUseItem/tickArops's pickup loop.
+      heldItem: me.heldItem ? { perkId: me.heldItem.perkId } : null,
       // Base/respawn checkpoint (CTF, Deathmatch) — lets the client
       // highlight the player's own base prominently when they need to
       // reach it, per the AR-Ops modes plan (mobile UI, later phase).
@@ -2258,6 +2398,10 @@ function getAropsSnapshot(gs, userId) {
         : [],
     } : null,
     players: roster,
+    // Dropped perk-items — always visible to everyone, no fog-of-war
+    // gating, same "physical object on the ground" precedent as CTF's
+    // flags (see MODES.ctf.snapshotExtras' flagPos).
+    items: gs.items,
     events: gs.events.slice(-15),
     ...(mode.snapshotExtras ? mode.snapshotExtras(gs, me, t) : {}),
   };
@@ -2265,6 +2409,6 @@ function getAropsSnapshot(gs, userId) {
 
 module.exports = {
   createAropsGame, tickArops, getAropsSnapshot,
-  actionArTelemetry, actionArHitAttempt, actionArUsePerk, actionArSetBase,
+  actionArTelemetry, actionArHitAttempt, actionArUsePerk, actionArUseItem, actionArSetBase,
   ARO_DEFAULTS: DEFAULTS,
 };

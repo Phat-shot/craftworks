@@ -665,6 +665,53 @@ console.log('\n═══ ON-HIT: FREEZE VS RESPAWN ═══');
     assert.equal(gs.players.B1.status, 'found', 'eliminated at 0 lives, same as deathmatch');
   });
 
+  check('seek_destroy respawn: eliminating the last player of a team ends the match (was previously a hang — Domination/CTF/S&D had no elimination win-check at all)', () => {
+    const gs = createGame('snd_respawn_elim',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1],
+        timings: FAST, onHit: 'respawn', livesPerPlayer: 1, gameDurationMs: 600_000 } });
+    const baseA = shared.destinationPoint(MUC, 270, 100);
+    const baseB = shared.destinationPoint(MUC, 90, 100);
+    arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: baseB.lat, lon: baseB.lon });
+    tel(gs, 'A1', baseA); tel(gs, 'B1', baseB);
+    skipWarmup(gs);
+    const targetPos = shared.destinationPoint(baseA, 0, 5);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(baseA, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA.lat, lon: baseA.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.gameOver, false, 'not yet — checkEliminationWin only runs on the next tick');
+    tick(gs, 100);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'team_a');
+  });
+
+  check('domination respawn ffa: last player standing ends the match', () => {
+    const gs = createGame('dom_respawn_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2], teamVariant: 'ffa',
+        timings: FAST, onHit: 'respawn', livesPerPlayer: 1, gameDurationMs: 600_000 } });
+    arops.actionArSetBase(gs, 'A1', { lat: MUC.lat, lon: MUC.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: MUC.lat, lon: MUC.lon });
+    tel(gs, 'A1', MUC); tel(gs, 'B1', MUC);
+    skipWarmup(gs);
+    const targetPos = shared.destinationPoint(MUC, 0, 5);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(MUC, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: MUC.lat, lon: MUC.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    tick(gs, 100);
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'player_A1');
+  });
+
   check('deathmatch freeze: Warmup phase 1 (no base_setup), nobody wrongly downed at the checkpoint', () => {
     const gs = createGame('dm_freeze_warmup',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
