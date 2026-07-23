@@ -616,8 +616,14 @@ const MODES = {
             // No thief present this tick: pause (kept), don't reset — same
             // fix as Seek&Destroy's defuse-variant plant/defuse progress
             // above (see its comment for why the reset-on-empty was a bug).
+            // contestResets (host toggle, e.g. the thief getting frozen mid-
+            // steal): reset to 0 instead of pausing — ffa never reaches
+            // teamCaptureEnabled (always false there, see createAropsGame),
+            // so only the pause-vs-reset half of this toggle applies here.
             if (thieves.length) {
               flag.pickupProg = advanceDwell(flag.pickupProg, thieves, dtMs);
+            } else if (gs.cfg.contestResets && flag.pickupProg) {
+              flag.pickupProg = null;
             }
             if (flag.pickupProg && flag.pickupProg.ms >= gs.timings.flagPickupDwellMs) {
               flag.state = 'carried';
@@ -674,17 +680,25 @@ const MODES = {
         const enemyTeam = tm === 'a' ? 'b' : 'a';
 
         if (flag.state === 'home') {
-          // Enemies dwell in this base to steal the flag
+          // Enemies dwell in this base to steal the flag — team-keyed
+          // progress (like Domination's capProgress), not per-uid: any
+          // enemy teammate can pick up where another left off, and Team
+          // Capture (teamCaptureEnabled) can require several of them
+          // present at once without an uid-anchor-switch resetting
+          // progress the way advanceDwell's per-uid tracking would.
           const pres = zonePresence(gs, baseZone(tm), t);
           const enemies = pres.byTeam[enemyTeam];
-          // Pause (kept) on an empty zone instead of resetting — see the
-          // Seek&Destroy defuse-variant fix above for why.
-          if (enemies.length) {
-            flag.pickupProg = advanceDwell(flag.pickupProg, enemies, dtMs);
+          if (enemies.length && teamHasEnoughForCapture(gs, enemyTeam, pres)) {
+            const prog = flag.pickupProg && flag.pickupProg.team === enemyTeam ? flag.pickupProg : null;
+            flag.pickupProg = { team: enemyTeam, ms: (prog ? prog.ms : 0) + dtMs };
+          } else if (gs.cfg.contestResets && flag.pickupProg) {
+            // Pause (kept) is the default when contestResets is off — no
+            // enemy present, or not enough of them for Team Capture.
+            flag.pickupProg = null;
           }
           if (flag.pickupProg && flag.pickupProg.ms >= gs.timings.flagPickupDwellMs) {
             flag.state = 'carried';
-            flag.carrier = flag.pickupProg.uid;
+            flag.carrier = enemies[0];
             flag.pickupProg = null;
             pushEvent(gs, 'flag_taken', { flagTeam: tm, byUserId: flag.carrier });
           }
@@ -745,6 +759,7 @@ const MODES = {
         bases: ms.bases,
         zoneRadiusM: gs.timings.zoneRadiusM,
         onHit: gs.cfg.onHit,
+        ...(gs.cfg.teamCaptureEnabled ? { teamCaptureSize: gs.cfg.teamCaptureSize } : {}),
         ...(gs.cfg.onHit === 'respawn' ? { lives: ms.lives, livesPerPlayer: gs.cfg.livesPerPlayer } : {}),
         flags: Object.keys(ms.flags).map(key => {
           const f = ms.flags[key];

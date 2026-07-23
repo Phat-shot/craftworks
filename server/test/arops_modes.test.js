@@ -1199,6 +1199,58 @@ console.log('\n═══ SEEK & DESTROY ═══');
     assert.deepEqual(gs.modeState.flags.a.pickupProg, progBefore, 'pickup progress paused, not reset');
   });
 
+  check('CTF: contestResets=true cancels flag-pickup progress instead of pausing it', () => {
+    const gs = createGame('ctf_contest',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf', timings: FAST, gameDurationMs: 600_000, contestResets: true } });
+    arops.actionArSetBase(gs, 'A1', { lat: Z1.lat, lon: Z1.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: Z2.lat, lon: Z2.lon });
+    tel(gs, 'A1', Z1);
+    tel(gs, 'B1', Z2);
+    gs.phaseStartTime = Date.now() - (gs.timings.baseSettingMs + 100);
+    tick(gs, 100);
+    tel(gs, 'B1', Z1);
+    tick(gs, 200);
+    assert.ok(gs.modeState.flags.a.pickupProg, 'accumulated some pickup progress');
+    tel(gs, 'B1', shared.destinationPoint(Z1, 90, 500));
+    tick(gs, 200);
+    assert.equal(gs.modeState.flags.a.pickupProg, null, 'contest cancelled the attempt (contestResets=true)');
+  });
+
+  check('CTF: teamCaptureEnabled requires N teammates present to steal, not just 1', () => {
+    const gs = createGame('ctf_teamcap',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }, { userId: 'B2', username: 'B2' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf', teams: { A1: 'a', B1: 'b', B2: 'b' },
+        timings: FAST, gameDurationMs: 600_000, teamCaptureEnabled: true, teamCaptureSize: 2 } });
+    arops.actionArSetBase(gs, 'A1', { lat: Z1.lat, lon: Z1.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: Z2.lat, lon: Z2.lon });
+    // Everyone (including B2) in their own team's base right as base_setup
+    // ends, otherwise the spawn/respawn checkpoint marks them 'downed' and
+    // zonePresence excludes them from the flag-pickup check below.
+    tel(gs, 'A1', Z1);
+    tel(gs, 'B1', Z2);
+    tel(gs, 'B2', Z2);
+    gs.phaseStartTime = Date.now() - (gs.timings.baseSettingMs + 100);
+    tick(gs, 100);
+    // Gradual steps, not a single jump — a one-sample teleport across the
+    // field gets rejected as implausible movement (see the CTF suite's own
+    // "enemy dwell in base steals the flag" test for the same pattern).
+    const walkTo = (uid, from, to) => {
+      let pos = from;
+      const brg = shared.bearingDeg(from, to);
+      for (let i = 0; i < 22 && shared.haversineMeters(pos, to) > 8; i++) {
+        pos = shared.destinationPoint(pos, brg, 12);
+        tel(gs, uid, pos);
+      }
+    };
+    walkTo('B1', Z2, Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.flags.a.state, 'home', 'solo B1 cannot steal — needs 2 teammates present');
+    walkTo('B2', Z2, Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.flags.a.state, 'carried', 'both B1 and B2 present together — steals it');
+  });
+
   check('time limit: higher score wins, tie is a draw', () => {
     const gs = mk();
     gs.players.A1.score = 20;

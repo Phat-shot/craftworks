@@ -130,7 +130,15 @@ function checkArrival(run, key, sample) {
     if (!ps.arrivedAt) {
       ps.arrivedAt = now();
       pushEvent(run, 'poi_arrived', { key, poiId: poi.id });
-      if (poi.poi_type === 'base') completePoiForTrack(run, track, poi);
+      // Arrival-only types — reaching them IS the objective, no separate
+      // task to complete: 'base' (finish/checkpoint), and the 2 halves of
+      // a "carry from A to B" action (carry_from = pick up at A, carry_to
+      // = arrive at B with it — modeled as a plain sequential pair of
+      // arrival POIs, same "reaching it is the objective" idea as walking
+      // a dropped flag onto a base in CTF, no separate carry state needed
+      // since the engine already enforces A must be completed before B
+      // becomes current).
+      if (AUTO_COMPLETE_TYPES.has(poi.poi_type)) completePoiForTrack(run, track, poi);
     }
   }
   return anyArrived;
@@ -163,17 +171,29 @@ function submitPuzzleAnswer(run, key, poiId, answer) {
   return { ok: true, correct: true };
 }
 
-/** Completes a 'target' POI's task — an explicit "destroyed" confirmation. */
-function confirmTargetDestroyed(run, key, poiId) {
+// POI types where reaching the radius alone completes the task (see
+// checkArrival above) vs. types needing an explicit follow-up action
+// (submitPuzzleAnswer for 'puzzle', confirmTask below for 'target'/
+// 'capture' — kept as 2 separate type strings for the editor's action
+// picker ("Zerstören" vs "Capture") even though they're mechanically
+// identical: arrive, then explicitly confirm).
+const AUTO_COMPLETE_TYPES = new Set(['base', 'carry_from', 'carry_to']);
+const CONFIRM_TYPES = new Set(['target', 'capture']);
+
+/** Completes a 'target'/'capture' POI's task — an explicit confirmation after arrival. */
+function confirmTask(run, key, poiId) {
   const track = run.progress[key];
   if (!track || track.completedAt) return { ok: false, err: 'no_active_progress' };
   const poi = currentPois(run, track).find(p => p.id === poiId);
-  if (!poi || poi.poi_type !== 'target') return { ok: false, err: 'not_a_target' };
+  if (!poi || !CONFIRM_TYPES.has(poi.poi_type)) return { ok: false, err: 'not_confirmable' };
   if (track.completedPoiIds.includes(poi.id)) return { ok: false, err: 'already_completed' };
   if (!track.poiState[poi.id]?.arrivedAt) return { ok: false, err: 'not_at_poi' };
   completePoiForTrack(run, track, poi);
   return { ok: true };
 }
+// Back-compat alias — 'target' was the only confirm-type before 'capture'
+// existed, keep the old name working for any existing call site.
+const confirmTargetDestroyed = confirmTask;
 
 /**
  * Marks one POI done for this track. Once every POI in the current group
@@ -354,6 +374,12 @@ function joinHuntRun(run, userId, mode, opts = {}) {
 }
 
 module.exports = {
-  createHuntRun, checkArrival, submitPuzzleAnswer, confirmTargetDestroyed,
+  createHuntRun, checkArrival, submitPuzzleAnswer, confirmTask, confirmTargetDestroyed,
   tickHunt, joinHuntRun, distanceToPolylineM,
+  // Exported for the live (DB-backed, multi-socket) socket layer to
+  // bootstrap a 'teams' track lazily the first time either side actually
+  // gets a player — joinHuntRun's 'shared' mode (the only late-join path
+  // that targets a team key) requires the team's track to already exist,
+  // which doesn't hold for a real run built up one joiner at a time.
+  startProgressTrack,
 };

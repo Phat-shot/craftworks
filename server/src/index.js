@@ -105,6 +105,7 @@ const brandsRouter    = require('./routes/brands');
 const adminRouter     = require('./routes/admin');
 const workshopRouter  = require('./routes/workshop');
 const workshopContentRouter = require('./routes/workshop_content');
+const huntRouter      = require('./routes/hunt');
 const injectDb = (req, res, next) => { req.db = db; next(); };
 
 for (const prefix of ['/api', '/api/v1']) {
@@ -119,6 +120,7 @@ for (const prefix of ['/api', '/api/v1']) {
   app.use(`${prefix}/admin`, adminRouter);
   app.use(`${prefix}/workshop`, injectDb, workshopRouter);
   app.use(`${prefix}/workshop`, injectDb, workshopContentRouter);
+  app.use(`${prefix}/hunt`, injectDb, huntRouter);
   app.get(`${prefix}/health`, (_, res) => {
     const v = require('fs').readFileSync(require('path').join(__dirname,'VERSION'),'utf8').trim();
     res.json({ ok: true, version: v, ts: Date.now() });
@@ -126,6 +128,7 @@ for (const prefix of ['/api', '/api/v1']) {
 }
 // Serve uploaded brand assets
 app.use('/uploads/brands', require('express').static(require('path').join(__dirname,'../../uploads/brands')));
+app.use('/uploads/hunt', require('express').static(require('path').join(__dirname,'../../uploads/hunt')));
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/build')));

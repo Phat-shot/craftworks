@@ -6,7 +6,7 @@
 // calls in their respective routes for now.
 const db = require('../db/pool');
 
-const PROFILE_FIELDS = 'id, email, username, language, avatar_color, email_verified, is_guest, is_admin';
+const PROFILE_FIELDS = 'id, email, username, language, avatar_color, email_verified, is_guest, is_admin, is_creator';
 
 async function findById(id) {
   const { rows } = await db.query(`SELECT ${PROFILE_FIELDS} FROM users WHERE id=$1`, [id]);

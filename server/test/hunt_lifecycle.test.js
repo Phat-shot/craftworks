@@ -85,6 +85,25 @@ console.log('\n═══ ARRIVAL + TASK COMPLETION ═══');
     assert.ok(run.endedAt, 'sole track finished -> run ends');
     assert.ok(run.events.some(e => e.type === 'run_ended'));
   });
+
+  check('"capture" behaves like "target" (arrival + explicit confirm), confirmTask works for both', () => {
+    const run = makeRun([], [{}, { poi_type: 'capture' }]);
+    hunt.checkArrival(run, 'A1', P0);
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm');
+    hunt.checkArrival(run, 'A1', P1);
+    assert.equal(run.progress.A1.groupIdx, 1, 'capture needs an explicit confirm, not just arrival');
+    const bad = hunt.confirmTask(run, 'A1', 'poi_1');
+    assert.equal(bad.ok, true);
+    assert.equal(run.progress.A1.groupIdx, 2, 'advanced past the capture');
+  });
+
+  check('"carry_from"/"carry_to" both auto-complete on arrival, same as "base"', () => {
+    const run = makeRun([], [{ poi_type: 'carry_from' }, { poi_type: 'carry_to' }, {}]);
+    hunt.checkArrival(run, 'A1', P0);
+    assert.equal(run.progress.A1.groupIdx, 1, 'carry_from completed on arrival alone');
+    hunt.checkArrival(run, 'A1', P1);
+    assert.equal(run.progress.A1.groupIdx, 2, 'carry_to completed on arrival alone');
+  });
 }
 
 console.log('\n═══ PARALLEL POI GROUPS ═══');

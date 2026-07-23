@@ -39,6 +39,6 @@ module.exports = function setupSocket(io, db) {
 
     registerPlatformHandlers(io, socket, db);
     registerGameHandlers(io, socket, db);
-    registerHuntSandboxHandlers(io, socket);
+    registerHuntSandboxHandlers(io, socket, db);
   });
 };

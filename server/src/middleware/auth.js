@@ -53,6 +53,17 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// Schnitzeljagd scenario-creator gate (users.is_creator) — distinct from
+// requireAdmin: an admin can grant this to a non-admin account (e.g. an
+// event organizer) without full platform-admin rights, see schema.sql's
+// comment on users.is_creator. An admin always passes too.
+/** @type {import('express').RequestHandler} */
+function requireCreator(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+  if (!req.user.is_admin && !req.user.is_creator) return res.status(403).json({ error: 'creator_only' });
+  next();
+}
+
 // Attaches req.user if a valid token is present, but never rejects the
 // request — used by routes that behave differently for logged-in vs.
 // anonymous callers (e.g. workshop content listing "mine" vs. public).
@@ -68,4 +79,4 @@ async function optionalAuth(req, res, next) {
   return next();
 }
 
-module.exports = { requireAuth, requireVerified, requireAdmin, optionalAuth };
+module.exports = { requireAuth, requireVerified, requireAdmin, requireCreator, optionalAuth };
