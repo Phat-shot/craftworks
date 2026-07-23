@@ -7,8 +7,13 @@ const node_test_1 = require("node:test");
 const strict_1 = __importDefault(require("node:assert/strict"));
 const simScript_1 = require("../src/simScript");
 const geo_1 = require("../src/geo");
-(0, node_test_1.test)('simScript: generates roughly 50 scenarios', () => {
-    strict_1.default.ok(simScript_1.SIM_SCENARIOS.length >= 40 && simScript_1.SIM_SCENARIOS.length <= 60, `got ${simScript_1.SIM_SCENARIOS.length}`);
+(0, node_test_1.test)('simScript: generates roughly 50 scenarios per category (basis/szenario/kondition)', () => {
+    const byCategory = { basis: 0, szenario: 0, kondition: 0 };
+    for (const s of simScript_1.SIM_SCENARIOS)
+        byCategory[s.category]++;
+    for (const cat of ['basis', 'szenario', 'kondition']) {
+        strict_1.default.ok(byCategory[cat] >= 30 && byCategory[cat] <= 65, `${cat}: got ${byCategory[cat]}`);
+    }
 });
 (0, node_test_1.test)('simScript: every scenario has a unique key', () => {
     const keys = simScript_1.SIM_SCENARIOS.map(s => s.key);

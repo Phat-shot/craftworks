@@ -16,13 +16,13 @@
 //  No configurable options anywhere — a fixed script, not a game mode.
 // ═══════════════════════════════════════════════════════════
 import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet, Platform, Dimensions } from 'react-native';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import * as Location from 'expo-location';
 import { Magnetometer } from 'expo-sensors';
 import { destinationPoint, squareFieldCorners, SIM_SCENARIOS } from '@craftworks/arops-shared';
 import type { SimScenario, SimShootBeat, SimCheckpoint } from '@craftworks/arops-shared';
-import { getSocket, getUser, createArLobby, getLastPosition, joinLobbyByCode } from '../api';
+import { getSocket, getUser, createArLobby, getLastPosition, joinLobbyByCode, getAccessTokenTTL } from '../api';
 import Icon from '../components/Icon';
 import ShockwaveEffect from '../components/ShockwaveEffect';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
@@ -31,6 +31,7 @@ import { OSM_STYLE, OSM_STYLE_DARK, blankMapStyle } from '../mapStyle';
 
 interface SimSnap {
   phase: string;
+  winner?: string | null;
   me: { status: string } | null;
   zones?: { owner?: string | null }[];
   events: { type: string; userId?: string; byUserId?: string }[];
@@ -143,8 +144,15 @@ async function prefetchSimComicMap(origin: { lat: number; lon: number }): Promis
   }
 }
 
-function checkCheckpoint(cp: SimCheckpoint, snap: SimSnap | null): { pass: boolean; detail: string } {
+function checkCheckpoint(cp: SimCheckpoint, snap: SimSnap | null, myUserId: string): { pass: boolean; detail: string } {
   if (!snap) return { pass: false, detail: 'kein Snapshot empfangen' };
+  if (cp.check === 'gameOver') {
+    // 'player_tester' — runtime-resolved sentinel, see simScript.ts's own
+    // doc comment on generateActionWinScenarios' ffa elimination cases.
+    const expected = cp.expected === 'player_tester' ? `player_${myUserId}` : cp.expected;
+    const pass = snap.phase === 'ended' && (snap.winner ?? null) === expected;
+    return { pass, detail: `phase=${snap.phase} winner=${snap.winner} (erwartet ${expected})` };
+  }
   const owner = snap.zones?.[cp.targetIndex]?.owner ?? null;
   return { pass: owner === cp.expected, detail: `Zone[${cp.targetIndex}].owner = ${owner} (erwartet ${cp.expected})` };
 }
@@ -252,7 +260,7 @@ async function runScenario(
       })),
       ...scenario.checkpoints.map(cp => new Promise<void>(resolve => {
         setTimeout(() => {
-          const r = checkCheckpoint(cp, latestSnap);
+          const r = checkCheckpoint(cp, latestSnap, myUserId);
           results.push({ snippetKey: scenario.key, label: `${scenario.label}: ${cp.check}`, pass: r.pass, detail: r.detail });
           resolve();
         }, cp.tMs + CHECK_MARGIN_MS);
@@ -375,6 +383,134 @@ async function runCodeJoinTest(onProgress: (text: string) => void): Promise<Chec
   return results;
 }
 
+// ── PERFORMANCE: Ping, Gerät, Server-Verarbeitung, Token-TTL, Input-Lag ──
+// Metric selection is this screen's own call (delegated explicitly by the
+// person who asked for this phase) — see this session's plan for the
+// reasoning behind each one. All 5 report as normal CheckResult rows with
+// the actual numbers in `detail`, generous pass thresholds (visibility,
+// not a hard gate).
+const PING_SAMPLES = 10;
+const PING_INTERVAL_MS = 150;
+const PING_TIMEOUT_MS = 3_000;
+const RTT_SAMPLES = 5;
+
+function pingOnce(socket: ReturnType<typeof getSocket>): Promise<number> {
+  return new Promise(resolve => {
+    const t0 = Date.now();
+    const onPong = () => { socket.off('debug:pong', onPong); resolve(Date.now() - t0); };
+    socket.on('debug:pong', onPong);
+    socket.emit('debug:ping', { t: t0 });
+    setTimeout(() => { socket.off('debug:pong', onPong); resolve(-1); }, PING_TIMEOUT_MS);
+  });
+}
+
+function summarize(samples: number[]): string {
+  if (!samples.length) return 'keine Antwort';
+  const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+  return `avg=${avg.toFixed(0)}ms min=${Math.min(...samples)}ms max=${Math.max(...samples)}ms (${samples.length} Samples)`;
+}
+
+async function runPerformanceTest(origin: { lat: number; lon: number }, onProgress: (text: string) => void): Promise<CheckResult[]> {
+  const label = 'Performance';
+  const results: CheckResult[] = [];
+  const socket = getSocket();
+
+  onProgress('Ping…');
+  const pings: number[] = [];
+  for (let n = 0; n < PING_SAMPLES; n++) {
+    const ms = await pingOnce(socket);
+    if (ms >= 0) pings.push(ms);
+    await sleep(PING_INTERVAL_MS);
+  }
+  const pingAvg = pings.length ? pings.reduce((a, b) => a + b, 0) / pings.length : Infinity;
+  results.push({ snippetKey: 'performance', label: `${label}: Ping`, pass: pingAvg < 500, detail: summarize(pings) });
+
+  onProgress('Gerät…');
+  const { width, height } = Dimensions.get('window');
+  const lagSamples: number[] = [];
+  for (let n = 0; n < 5; n++) {
+    const t0 = Date.now();
+    await new Promise<void>(r => setTimeout(r, 0));
+    lagSamples.push(Date.now() - t0);
+  }
+  const avgLag = lagSamples.reduce((a, b) => a + b, 0) / lagSamples.length;
+  results.push({
+    snippetKey: 'performance', label: `${label}: Gerät`, pass: avgLag < 100,
+    detail: `${Platform.OS} ${Platform.Version} · ${Math.round(width)}×${Math.round(height)} · JS-Thread-Drift avg=${avgLag.toFixed(1)}ms`,
+  });
+
+  const ttl = getAccessTokenTTL();
+  results.push({
+    snippetKey: 'performance', label: `${label}: Token-TTL`, pass: ttl !== null && ttl > 60,
+    detail: ttl === null ? 'nicht ermittelbar (kein/ungültiger Token)' : `${ttl}s verbleibend`,
+  });
+
+  // Server-Verarbeitung + Input-Lag both need a live session — one
+  // throwaway lobby, same setup sequence runScenario itself uses, built on
+  // SIM_SCENARIOS[0] (a guaranteed scout hit) purely as a vehicle for real
+  // ar_telemetry/ar_hit_attempt round trips with the exact timing kept
+  // (not just pass/fail, unlike a normal Logik-phase scenario check).
+  onProgress('Session für Server-/Input-Lag-Messung wird aufgebaut…');
+  const scenario = SIM_SCENARIOS[0]!;
+  try {
+    const lobby = await createArLobby('Sim: Performance-Messung');
+    const polygon = squareFieldCorners(scenario.fieldSideM).map(w => destinationPoint(origin, w.bearingDeg, w.distanceM));
+    const arUpdated = waitForEvent(socket, 'lobby:ar_updated', 3_000);
+    socket.emit('lobby:ar_update', { lobbyId: lobby.lobbyId, arSettings: { polygon, simulation: true, simSnippetKey: scenario.key, debugMode: true } });
+    await arUpdated;
+
+    const sessionId = await new Promise<string | null>(resolve => {
+      const onStart = ({ sessionId }: { sessionId: string }) => resolve(sessionId);
+      socket.once('game:start', onStart);
+      socket.once('error', () => resolve(null));
+      socket.emit('lobby:start', { lobbyId: lobby.lobbyId });
+      setTimeout(() => resolve(null), 10_000);
+    });
+    if (!sessionId) throw new Error('lobby:start lieferte kein game:start');
+    socket.emit('game:join', { sessionId });
+
+    const sample = () => ({ lat: origin.lat, lon: origin.lon, ts: Date.now(), accuracyM: 3, headingDeg: scenario.testerHeadingDeg });
+
+    onProgress('Server-Verarbeitung wird gemessen…');
+    const serverSamples: number[] = [];
+    for (let n = 0; n < RTT_SAMPLES; n++) {
+      const t0 = Date.now();
+      const ms = await new Promise<number>(resolve => {
+        const onResult = (r: any) => { if (r.action === 'ar_telemetry') { socket.off('game:action_result', onResult); resolve(Date.now() - t0); } };
+        socket.on('game:action_result', onResult);
+        socket.emit('game:action', { sessionId, action: 'ar_telemetry', data: { sample: sample() } });
+        setTimeout(() => { socket.off('game:action_result', onResult); resolve(-1); }, 3_000);
+      });
+      if (ms >= 0) serverSamples.push(ms);
+      await sleep(200);
+    }
+    const serverAvg = serverSamples.length ? serverSamples.reduce((a, b) => a + b, 0) / serverSamples.length : Infinity;
+    results.push({ snippetKey: 'performance', label: `${label}: Server-Verarbeitung`, pass: serverAvg < 500, detail: summarize(serverSamples) });
+
+    onProgress('Input-Lag wird gemessen…');
+    const beat = scenario.shoots.find(b => b.shooterId === 'tester')!;
+    const t0 = Date.now();
+    const inputLagMs = await new Promise<number>(resolve => {
+      const onResult = (r: any) => { if (r.action === 'ar_hit_attempt') { socket.off('game:action_result', onResult); resolve(Date.now() - t0); } };
+      socket.on('game:action_result', onResult);
+      socket.emit('game:action', { sessionId, action: 'ar_hit_attempt', data: { sample: sample(), targetId: beat.targetId } });
+      setTimeout(() => { socket.off('game:action_result', onResult); resolve(-1); }, 5_000);
+    });
+    results.push({
+      snippetKey: 'performance', label: `${label}: Input-Lag`, pass: inputLagMs >= 0 && inputLagMs < 1_500,
+      detail: inputLagMs >= 0 ? `${inputLagMs}ms (Tap bis Server-Bestätigung)` : 'keine Antwort',
+    });
+
+    const ended = waitForEvent(socket, 'game:sim_end_result', 3_000);
+    socket.emit('game:sim_end', { sessionId });
+    await ended;
+  } catch (e: any) {
+    results.push({ snippetKey: 'performance', label: `${label}: Server-Verarbeitung/Input-Lag`, pass: false, detail: e?.message || String(e) });
+  }
+
+  return results;
+}
+
 export default function MatchSimScreen({ origin, onExit }: { origin: { lat: number; lon: number } | null; onExit: () => void }) {
   const theme = useTheme();
   const st = useMemo(() => makeStyles(theme), [theme]);
@@ -400,7 +536,13 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
   const [shotEffectKey, setShotEffectKey] = useState(0);
   const cancelRef = useRef(false);
 
-  const start = async () => {
+  // Phase categories match simScript.ts's own SimScenario.category values
+  // for the Logik bucket, plus 'preflight'/'performance' for the other two
+  // phases — one Set of which phases to run per call, so "Vollständiger
+  // Test" and each individually-selectable phase button share the exact
+  // same start() path (no separate code paths to keep in sync).
+  type SimPhase = 'preflight' | 'performance' | 'logic';
+  const start = async (phases: Set<SimPhase>) => {
     setRunning(true);
     setDone(false);
     setResults([]);
@@ -420,44 +562,70 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
     // scenario happens to be running by then.
     prefetchSimComicMap(resolvedOrigin).then(setSimComicMap);
 
-    // Sensor detection runs in the BACKGROUND — nothing here has a hard
-    // dependency on it (every scenario uses scripted, not real, positions),
-    // so it must never block the rest of the run. A hard 90s deadline
-    // ensures it always reports SOMETHING even if the underlying
-    // expo-location call itself hangs (no built-in timeout there — see
-    // LobbyScreen.tsx's own hardened GPS code for the same documented
-    // risk). Results are merged in whenever they actually land.
-    const sensorPromise = withHardTimeout(
-      runSensorTest(setSensorProgress),
-      SENSOR_HARD_TIMEOUT_MS,
-      () => [{
-        snippetKey: 'preflight', label: 'Vorflug: Sensoren', pass: false,
-        detail: `Zeitüberschreitung nach ${SENSOR_HARD_TIMEOUT_MS / 1000}s — lief im Hintergrund weiter, hat den restlichen Testlauf nicht blockiert`,
-      }],
-    );
-    sensorPromise.then(r => { setResults(prev => [...prev, ...r]); setSensorProgress(''); });
+    if (phases.has('preflight')) {
+      setCurrentLabel('Phase 1: Preflight');
+      // Sensor detection runs in the BACKGROUND — nothing here has a hard
+      // dependency on it (every scenario uses scripted, not real, positions),
+      // so it must never block the rest of the run. A hard 90s deadline
+      // ensures it always reports SOMETHING even if the underlying
+      // expo-location call itself hangs (no built-in timeout there — see
+      // LobbyScreen.tsx's own hardened GPS code for the same documented
+      // risk). Results are merged in whenever they actually land.
+      const sensorPromise = withHardTimeout(
+        runSensorTest(setSensorProgress),
+        SENSOR_HARD_TIMEOUT_MS,
+        () => [{
+          snippetKey: 'preflight', label: 'Vorflug: Sensoren', pass: false,
+          detail: `Zeitüberschreitung nach ${SENSOR_HARD_TIMEOUT_MS / 1000}s — lief im Hintergrund weiter, hat den restlichen Testlauf nicht blockiert`,
+        }],
+      );
+      sensorPromise.then(r => { setResults(prev => [...prev, ...r]); setSensorProgress(''); });
 
-    setCurrentLabel('Vorflug: Code/Beitritt');
-    const joinResults = await runCodeJoinTest(setProgress);
-    setResults(prev => [...prev, ...joinResults]);
-    setProgress('');
-
-    for (let i = 0; i < SIM_SCENARIOS.length; i++) {
-      if (cancelRef.current) break;
-      const scenario = SIM_SCENARIOS[i]!;
-      setCurrentLabel(scenario.label);
-      setProgress(`Szenario ${i + 1}/${SIM_SCENARIOS.length}`);
-      setCurrentScenario(scenario);
-      setLiveSnap(null);
-      const r = await runScenario(scenario, myUserId, resolvedOrigin, setLiveSnap, () => setShotEffectKey(k => k + 1));
-      setResults(prev => [...prev, ...r]);
+      setProgress('Vorflug: Code/Beitritt');
+      const joinResults = await runCodeJoinTest(setProgress);
+      setResults(prev => [...prev, ...joinResults]);
+      setProgress('');
+      // Only wait for the background sensor check here if nothing else is
+      // about to run — otherwise it keeps reporting into `results`
+      // whenever it finishes, same as before, without holding up phase 2/3.
+      if (!phases.has('performance') && !phases.has('logic')) await sensorPromise;
     }
-    setCurrentScenario(null);
-    setLiveSnap(null);
-    // Everything else is done — the sensor test almost certainly finished
-    // (or timed out) long before this point, but wait for it explicitly so
-    // "done" always reflects the FULL result set, never a partial one.
-    await sensorPromise;
+
+    if (cancelRef.current) { setRunning(false); setDone(true); setCurrentLabel(''); setProgress(''); return; }
+
+    if (phases.has('performance')) {
+      setCurrentLabel('Phase 2: Performance');
+      setProgress('');
+      const perfResults = await runPerformanceTest(resolvedOrigin, setProgress);
+      setResults(prev => [...prev, ...perfResults]);
+      setProgress('');
+    }
+
+    if (cancelRef.current) { setRunning(false); setDone(true); setCurrentLabel(''); setProgress(''); return; }
+
+    if (phases.has('logic')) {
+      setCurrentLabel('Phase 3: Logik');
+      const categoryLabel: Record<SimScenario['category'], string> = { basis: 'Basis', szenario: 'Szenario', kondition: 'Kondition' };
+      // Per-category counters for the "Logik: Basis 3/50" progress display
+      // (see the plan) — computed once, not per-scenario.
+      const totalByCategory: Record<string, number> = {};
+      for (const s of SIM_SCENARIOS) totalByCategory[s.category] = (totalByCategory[s.category] ?? 0) + 1;
+      const seenByCategory: Record<string, number> = {};
+      for (let i = 0; i < SIM_SCENARIOS.length; i++) {
+        if (cancelRef.current) break;
+        const scenario = SIM_SCENARIOS[i]!;
+        seenByCategory[scenario.category] = (seenByCategory[scenario.category] ?? 0) + 1;
+        setCurrentLabel(scenario.label);
+        setProgress(`Logik: ${categoryLabel[scenario.category]} ${seenByCategory[scenario.category]}/${totalByCategory[scenario.category]} (gesamt ${i + 1}/${SIM_SCENARIOS.length})`);
+        setCurrentScenario(scenario);
+        setLiveSnap(null);
+        const r = await runScenario(scenario, myUserId, resolvedOrigin, setLiveSnap, () => setShotEffectKey(k => k + 1));
+        setResults(prev => [...prev, ...r]);
+      }
+      setCurrentScenario(null);
+      setLiveSnap(null);
+    }
+
     setRunning(false);
     setDone(true);
     setCurrentLabel('');
@@ -549,15 +717,34 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
         <Text style={st.title}>Match-Simulation</Text>
       </View>
       <Text style={st.hint}>
-        Fest verdrahtete Kurz-Szenarien (1-10s, Klassen-Grenzwerte, Bot-Beschuss, Pod-Capture) über
-        die echte Lobby-/Match-Pipeline — keine Optionen, kein manuelles Setup.
+        3 Phasen: Preflight (Sensoren/Lobby/Code) → Performance (Ping/Gerät/
+        Server/Token-TTL/Input-Lag) → Logik ({SIM_SCENARIOS.length}
+        Szenarien: Basis/Szenarien/Konditionen) — einzeln oder als
+        vollständiger Test, immer über die echte Lobby-/Match-Pipeline.
       </Text>
 
       {!running && !done && (
-        <TouchableOpacity style={st.startBtn} onPress={start}>
-          <Icon name="target" size={16} color="#80ff40" />
-          <Text style={st.startTxt}>{SIM_SCENARIOS.length} Szenarien starten</Text>
-        </TouchableOpacity>
+        <View style={st.testSection}>
+          <Text style={st.testHeading}>Test</Text>
+          <TouchableOpacity style={st.startBtn} onPress={() => start(new Set(['preflight', 'performance', 'logic']))}>
+            <Icon name="target" size={16} color="#80ff40" />
+            <Text style={st.startTxt}>Vollständiger Test</Text>
+          </TouchableOpacity>
+          <View style={st.phaseBtnRow}>
+            <TouchableOpacity style={st.phaseBtn} onPress={() => start(new Set(['preflight']))}>
+              <Icon name="satellite" size={14} color={theme.accent} />
+              <Text style={st.phaseBtnTxt}>Nur Preflight</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={st.phaseBtn} onPress={() => start(new Set(['performance']))}>
+              <Icon name="clock" size={14} color={theme.accent} />
+              <Text style={st.phaseBtnTxt}>Nur Performance</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={st.phaseBtn} onPress={() => start(new Set(['logic']))}>
+              <Icon name="checkCircle" size={14} color={theme.accent} />
+              <Text style={st.phaseBtnTxt}>Nur Logik</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       )}
 
       {running && (
@@ -656,12 +843,21 @@ function makeStyles(theme: ThemeTokens) {
     header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
     title: { color: theme.text, fontSize: 18, fontWeight: '900' },
     hint: { color: theme.text3, fontSize: 12, marginBottom: 16 },
+    testSection: { marginBottom: 16 },
+    testHeading: { color: theme.text2, fontSize: 12, fontWeight: '800', marginBottom: 6 },
     startBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: '#3a8020',
-      borderRadius: 12, padding: 16, marginBottom: 16,
+      borderRadius: 12, padding: 16, marginBottom: 8,
     },
     startTxt: { color: '#80ff40', fontSize: 15, fontWeight: '800' },
+    phaseBtnRow: { flexDirection: 'row', gap: 8 },
+    phaseBtn: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+      backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
+      borderRadius: 9, paddingVertical: 10,
+    },
+    phaseBtnTxt: { color: theme.text2, fontSize: 11, fontWeight: '700' },
     runningBox: { marginBottom: 16 },
     runningRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     runningTxt: { color: theme.text2, fontSize: 13 },

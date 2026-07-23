@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import { SIM_SCENARIOS, squareFieldCorners } from '../src/simScript';
 import { haversineMeters, destinationPoint } from '../src/geo';
 
-test('simScript: generates roughly 50 scenarios', () => {
-  assert.ok(SIM_SCENARIOS.length >= 40 && SIM_SCENARIOS.length <= 60, `got ${SIM_SCENARIOS.length}`);
+test('simScript: generates roughly 50 scenarios per category (basis/szenario/kondition)', () => {
+  const byCategory = { basis: 0, szenario: 0, kondition: 0 };
+  for (const s of SIM_SCENARIOS) byCategory[s.category]++;
+  for (const cat of ['basis', 'szenario', 'kondition'] as const) {
+    assert.ok(byCategory[cat] >= 30 && byCategory[cat] <= 65, `${cat}: got ${byCategory[cat]}`);
+  }
 });
 
 test('simScript: every scenario has a unique key', () => {

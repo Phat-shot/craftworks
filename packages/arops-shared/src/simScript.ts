@@ -72,23 +72,32 @@ export interface SimShootBeat {
 
 export interface SimCheckpoint {
   tMs: number;
-  check: 'zoneOwner';
-  /** Zone index (0-based) within the scenario's own zones array. */
+  check: 'zoneOwner' | 'gameOver';
+  /** Zone index (0-based) within the scenario's own zones array. Unused
+   *  (-1) for 'gameOver' checkpoints. */
   targetIndex: number;
-  /** Expected owning team ('a'|'b'). */
-  expected: string;
+  /** 'zoneOwner': expected owning team ('a'|'b'), or null if the zone
+   *  should still be uncaptured (e.g. contested by both teams at once —
+   *  see generateContestedAndBoundaryScenarios). 'gameOver': the expected
+   *  gs.winner / snap.winner string once the match has ended. */
+  expected: string | null;
 }
 
 export interface SimScenario {
   key: string;
+  /** Which of the 3 phase-3 ("Logik") buckets this belongs to — purely for
+   *  grouping in MatchSimScreen's progress display, doesn't affect how a
+   *  scenario runs. 'basis': the original shot/capture/miss checks.
+   *  'szenario': contested captures + boundary conditions. 'kondition':
+   *  win/end-condition coverage across every mode. */
+  category: 'basis' | 'szenario' | 'kondition';
   label: string;
-  subMode: 'deathmatch' | 'domination';
+  subMode: 'deathmatch' | 'domination' | 'ctf' | 'seek_destroy' | 'hide_and_seek';
   testerClass: SimClass;
-  /** Only set where it matters (domination — a bot needs the tester on a
-   *  different team, or default alternation could put them on the SAME
-   *  team, since the tester is always the first non-bot player). Omitted
-   *  for deathmatch scenarios, where team assignment never affects the
-   *  outcome (only opponent-vs-opponent, and there's exactly one bot). */
+  /** Only set where it matters (team-capable modes — a bot needs the
+   *  tester on a specific team, or default alternation could put them on
+   *  the wrong one, since the tester is always the first non-bot player).
+   *  Omitted where team assignment never affects the outcome. */
   testerTeam?: 'a' | 'b';
   /** Square field side length in meters — corners computed from this. */
   fieldSideM: number;
@@ -103,15 +112,26 @@ export interface SimScenario {
    *  socket whitelist; createAropsGame's own internal parsing has no such
    *  floor), so a whole freeze/capture cycle fits inside a short scenario. */
   timings?: Record<string, number>;
-  /** Zone center offsets from the origin (domination only). Domination
-   *  needs at least 2 — the 2nd is a far-away, uninteracted-with filler to
-   *  satisfy that minimum, same convention the original hand-written
-   *  domination snippet used. */
+  /** Zone center offsets from the origin (domination/seek_destroy only).
+   *  Domination needs at least 2 — a 2nd, far-away, uninteracted-with
+   *  filler satisfies that minimum where only one zone is actually used. */
   zones?: SimWaypoint[];
   bots: SimBotScript[];
   testerHeadingDeg: number;
   shoots: SimShootBeat[];
   checkpoints: SimCheckpoint[];
+  // ── Win-condition scenario fields (generateWinConditionScenarios) —
+  // each is just an ordinary ar_settings field, passed straight through by
+  // applySimOverrides (arops.js) same as onHit/hitConfig/timings above.
+  teamVariant?: 'team' | 'ffa';
+  gameDurationMs?: number;
+  hidingDurationMs?: number;
+  targetScore?: number;
+  targetCaptures?: number;
+  livesPerPlayer?: number;
+  destroyReactivate?: boolean;
+  foundMode?: 'spectator' | 'seeker' | 'freeze';
+  hsVariant?: 'classic' | 'ffa' | 'the_ship';
 }
 
 /** Square field corners (bearing+distance from the origin) for a given side length. */
@@ -143,6 +163,19 @@ function randRange(rand: () => number, min: number, max: number): number {
 const HIT_CONFIG = { maxRangeM: 35, baseConeHalfAngleDeg: 15 };
 const SNIPER_LATERAL_TOLERANCE_M = Math.tan((15 * Math.PI) / 180) * 10;
 
+// squareFieldCorners places corners at bearings 45/135/225/315 — meaning
+// the SQUARE'S OWN EDGES run along bearings 0/90/180/270, at only
+// fieldSideM/2 from center (not the half-diagonal every FIELD_TIERS entry
+// safely clears at 45°-ish bearings). Any zone/filler placed at a bearing
+// near 0/90/180/270 — which random 0-360 bearings and the fixed-axis zones
+// below both do — must stay under fieldSideM/2, not the more generous
+// half-diagonal. Rather than special-casing every such placement's exact
+// bearing, scenarios that place a zone (needs a filler well outside it too,
+// see the domination-zone-minimum comment elsewhere in this file) use this
+// single deliberately-oversized, fixed field instead of cycling FIELD_TIERS —
+// size VARIETY doesn't matter for what these specific scenarios check.
+const SAFE_ZONE_FIELD_M = 220;
+
 // Every hit compresses a freeze onto the target — kept short so it can
 // never bleed into the NEXT scenario's own (separate, freshly-created)
 // session, but still long enough to be a meaningful check on its own.
@@ -158,9 +191,10 @@ const FIELD_TIERS = [90, 130, 180];
 function generateShootingScenarios(rand: () => number, startIndex: number): SimScenario[] {
   const scenarios: SimScenario[] = [];
   let i = startIndex;
-  const push = (s: Omit<SimScenario, 'key' | 'subMode' | 'onHit' | 'hitConfig' | 'timings' | 'fieldSideM'> & { fieldSideM?: number }) => {
+  const push = (s: Omit<SimScenario, 'key' | 'category' | 'subMode' | 'onHit' | 'hitConfig' | 'timings' | 'fieldSideM'> & { fieldSideM?: number }) => {
     scenarios.push({
       key: `scenario_${i}`,
+      category: 'basis',
       subMode: 'deathmatch',
       onHit: 'freeze',
       hitConfig: HIT_CONFIG,
@@ -279,6 +313,7 @@ function generateCaptureScenarios(rand: () => number, startIndex: number): SimSc
     const captureDwellMs = COMPRESSED_TIMINGS.captureDwellMs;
     scenarios.push({
       key: `scenario_${i}`,
+      category: 'basis',
       label: `Pod einnehmen #${n + 1}`,
       subMode: 'domination',
       onHit: 'freeze', // no base concept for domination — skips straight to (instantly-skipped) warmup
@@ -304,13 +339,379 @@ function generateCaptureScenarios(rand: () => number, startIndex: number): SimSc
   return scenarios;
 }
 
+// Freeze must comfortably outlast the capture dwell in the "contest clears"
+// sub-category below — otherwise the frozen contester unfreezes (still
+// standing right where it was) and re-contests the zone before the dwell
+// even finishes. Domination's own zone-presence check excludes frozen
+// players entirely (see zonePresence/isFrozen in arops.js), so freezing is
+// a reliable, already-proven way to make a contester "clear" without
+// needing it to physically walk anywhere (which — at tickSimBots' fixed
+// ~1.3 m/s walking pace — would take far longer than a short scenario
+// budgets for).
+const CONTEST_TIMINGS = { freezeMs: 2500, freezeExtensionMs: 500, captureDwellMs: 700 };
+
+/**
+ * "Szenarien" bucket — contested-zone behavior (does the pod correctly
+ * stay uncaptured while both teams are present, and correctly resume once
+ * one side clears) plus boundary conditions right at the edge of shot
+ * range/cone/lateral-tolerance/capture-dwell, where the existing "basis"
+ * scenarios deliberately stay comfortably clear of the edge instead.
+ */
+function generateContestedAndBoundaryScenarios(rand: () => number, startIndex: number): SimScenario[] {
+  const scenarios: SimScenario[] = [];
+  let i = startIndex;
+  const push = (s: Omit<SimScenario, 'key' | 'category'>) => {
+    scenarios.push({ key: `scenario_${i}`, category: 'szenario', ...s });
+    i++;
+  };
+
+  // Both teams present in the zone from t=0 the whole time — never a lone
+  // occupant, so capture progress must stay at 0 (paused, never reset —
+  // see domination's own tick comment) and the zone must stay unowned.
+  for (let n = 0; n < 15; n++) {
+    const fieldSideM = SAFE_ZONE_FIELD_M;
+    const zoneDistance = randRange(rand, fieldSideM * 0.15, fieldSideM * 0.3);
+    const zoneBearing = randRange(rand, 0, 360);
+    const fillerBearing = (zoneBearing + 180) % 360;
+    push({
+      label: `Kontest: Zone bleibt uneingenommen #${n + 1}`,
+      subMode: 'domination', onHit: 'freeze', testerClass: 'scout', testerTeam: 'a',
+      fieldSideM, durationMs: 2_000, timings: COMPRESSED_TIMINGS,
+      zones: [
+        { tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance },
+        { tMs: 0, bearingDeg: fillerBearing, distanceM: zoneDistance + 30 },
+      ],
+      bots: [
+        { id: `bot_${i}_a`, username: 'SimA', class: 'scout', team: 'a', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] },
+        { id: `bot_${i}_b`, username: 'SimB', class: 'scout', team: 'b', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] },
+      ],
+      testerHeadingDeg: 0, shoots: [],
+      checkpoints: [{ tMs: 1_500, check: 'zoneOwner', targetIndex: 0, expected: null }],
+    });
+  }
+
+  // Tester freezes the team-b contester (within scout's 45° cone/35m range
+  // from the origin, same as every "basis" scout-hit scenario) — once
+  // frozen, team-a's bot has the zone alone and the dwell completes.
+  for (let n = 0; n < 10; n++) {
+    const fieldSideM = SAFE_ZONE_FIELD_M;
+    const zoneDistance = randRange(rand, 10, 25); // inside 35m range
+    const zoneBearing = randRange(rand, -25, 25); // inside the 45° scout cone
+    const fillerBearing = (zoneBearing + 180) % 360;
+    const shotAtMs = 300;
+    push({
+      label: `Kontest löst sich durch Freeze, Pod wird danach erobert #${n + 1}`,
+      subMode: 'domination', onHit: 'freeze', testerClass: 'scout', testerTeam: 'a',
+      fieldSideM, durationMs: shotAtMs + CONTEST_TIMINGS.captureDwellMs + 1_000,
+      hitConfig: HIT_CONFIG, timings: CONTEST_TIMINGS,
+      zones: [
+        { tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance },
+        // +70 (not the usual +30) — validateZones' minimum separation is
+        // (r1+r2)*1.5 = zoneRadiusM*3 (≈82.5m at SAFE_ZONE_FIELD_M's
+        // L=220), and this zone's own opposite-bearing placement only
+        // contributes 2×zoneDistance (as low as 20m at zoneDistance's own
+        // 10m floor) toward that — the filler needs the extra distance to
+        // still clear it even in that worst case.
+        { tMs: 0, bearingDeg: fillerBearing, distanceM: zoneDistance + 70 },
+      ],
+      bots: [
+        { id: `bot_${i}_a`, username: 'SimA', class: 'scout', team: 'a', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] },
+        { id: `bot_${i}_b`, username: 'SimB', class: 'scout', team: 'b', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] },
+      ],
+      testerHeadingDeg: 0,
+      shoots: [{ tMs: shotAtMs, shooterId: 'tester', targetId: `bot_${i}_b`, expectedHit: true }],
+      checkpoints: [{ tMs: shotAtMs + CONTEST_TIMINGS.captureDwellMs + 400, check: 'zoneOwner', targetIndex: 0, expected: 'a' }],
+    });
+  }
+
+  // Shot-range boundary — distance right at maxRangeM (35m), both sides.
+  for (let n = 0; n < 10; n++) {
+    const inside = n % 2 === 0;
+    const distance = inside ? HIT_CONFIG.maxRangeM - randRange(rand, 0.05, 0.3) : HIT_CONFIG.maxRangeM + randRange(rand, 0.05, 0.3);
+    const bearing = randRange(rand, -10, 10); // dead ahead, isolates range from cone
+    push({
+      label: `Grenze Reichweite (${inside ? 'knapp innerhalb' : 'knapp außerhalb'}) #${n + 1}`,
+      subMode: 'deathmatch', onHit: 'freeze', testerClass: 'scout', hitConfig: HIT_CONFIG,
+      fieldSideM: FIELD_TIERS[i % FIELD_TIERS.length]!, durationMs: 2_000, timings: COMPRESSED_TIMINGS,
+      bots: [{ id: `bot_${i}`, username: 'SimTarget', class: 'scout', team: null, route: [{ tMs: 0, bearingDeg: bearing, distanceM: distance }] }],
+      testerHeadingDeg: 0,
+      shoots: [{ tMs: 500, shooterId: 'tester', targetId: `bot_${i}`, expectedHit: inside, expectedReason: inside ? undefined : 'out_of_range' }],
+      checkpoints: [],
+    });
+  }
+
+  // Scout cone boundary — bearing right at the 45° effective half-angle.
+  for (let n = 0; n < 8; n++) {
+    const inside = n % 2 === 0;
+    const edge = 45 + (inside ? -randRange(rand, 0.1, 0.5) : randRange(rand, 0.1, 0.5));
+    const bearing = edge * (rand() < 0.5 ? 1 : -1);
+    push({
+      label: `Grenze Scout-Kegel (${inside ? 'knapp innerhalb' : 'knapp außerhalb'}) #${n + 1}`,
+      subMode: 'deathmatch', onHit: 'freeze', testerClass: 'scout', hitConfig: HIT_CONFIG,
+      fieldSideM: FIELD_TIERS[i % FIELD_TIERS.length]!, durationMs: 2_000, timings: COMPRESSED_TIMINGS,
+      bots: [{ id: `bot_${i}`, username: 'SimTarget', class: 'scout', team: null, route: [{ tMs: 0, bearingDeg: bearing, distanceM: 15 }] }],
+      testerHeadingDeg: 0,
+      shoots: [{ tMs: 500, shooterId: 'tester', targetId: `bot_${i}`, expectedHit: inside, expectedReason: inside ? undefined : 'outside_cone' }],
+      checkpoints: [],
+    });
+  }
+
+  // Sniper lateral-tolerance boundary.
+  for (let n = 0; n < 7; n++) {
+    const inside = n % 2 === 0;
+    const distance = randRange(rand, 15, 30);
+    const edgeLateral = SNIPER_LATERAL_TOLERANCE_M + (inside ? -randRange(rand, 0.02, 0.1) : randRange(rand, 0.02, 0.1));
+    const bearing = (Math.asin(Math.min(0.99, edgeLateral / distance)) * 180) / Math.PI * (rand() < 0.5 ? 1 : -1);
+    push({
+      label: `Grenze Sniper-Toleranz (${inside ? 'knapp innerhalb' : 'knapp außerhalb'}) #${n + 1}`,
+      subMode: 'deathmatch', onHit: 'freeze', testerClass: 'sniper', hitConfig: HIT_CONFIG,
+      fieldSideM: FIELD_TIERS[i % FIELD_TIERS.length]!, durationMs: 2_000, timings: COMPRESSED_TIMINGS,
+      bots: [{ id: `bot_${i}`, username: 'SimTarget', class: 'scout', team: null, route: [{ tMs: 0, bearingDeg: bearing, distanceM: distance }] }],
+      testerHeadingDeg: 0,
+      shoots: [{ tMs: 500, shooterId: 'tester', targetId: `bot_${i}`, expectedHit: inside, expectedReason: inside ? undefined : 'outside_lateral' }],
+      checkpoints: [],
+    });
+  }
+
+  // Capture-dwell boundary — same zone, TWO checkpoints in one scenario:
+  // still uncaptured just before captureDwellMs, captured just after.
+  for (let n = 0; n < 7; n++) {
+    const fieldSideM = SAFE_ZONE_FIELD_M;
+    const zoneDistance = randRange(rand, fieldSideM * 0.15, fieldSideM * 0.3);
+    const zoneBearing = randRange(rand, 0, 360);
+    const fillerBearing = (zoneBearing + 180) % 360;
+    const dwellMs = COMPRESSED_TIMINGS.captureDwellMs;
+    push({
+      label: `Grenze Capture-Dwell (kurz vor/nach ${dwellMs}ms) #${n + 1}`,
+      subMode: 'domination', onHit: 'freeze', testerClass: 'scout', testerTeam: 'b',
+      fieldSideM, durationMs: dwellMs + 1_500, timings: COMPRESSED_TIMINGS,
+      zones: [
+        { tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance },
+        { tMs: 0, bearingDeg: fillerBearing, distanceM: zoneDistance + 30 },
+      ],
+      bots: [{ id: `bot_${i}`, username: 'SimCapturer', class: 'scout', team: 'a', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] }],
+      testerHeadingDeg: 0, shoots: [],
+      // Only the post-dwell "captured" checkpoint — arops_sim.test.js's
+      // harness (server/test/arops_sim.test.js) evaluates every checkpoint
+      // against the FINAL state after driveScenario's whole loop finishes,
+      // not a live snapshot at each one's own tMs (that's the mobile
+      // client's own runScenario, via real setTimeout) — a "not captured
+      // YET" assertion earlier in the same short scenario has nothing
+      // distinct left to check by then, both would just see the same
+      // already-finished result. The real value of "was it still
+      // uncaptured right up until the boundary" gets exercised live on
+      // device instead.
+      checkpoints: [
+        { tMs: dwellMs + 400, check: 'zoneOwner', targetIndex: 0, expected: 'a' },
+      ],
+    });
+  }
+
+  return scenarios;
+}
+
+// Combos of {mode, teamVariant, onHit/hsVariant} whose match, left to just
+// run its clock out with nobody scoring, has an UNAMBIGUOUS, mode-agnostic
+// winner string — 'draw' for every team-capable mode (symmetric 0-0) and
+// every ffa/the_ship H&S variant, 'hiders' for classic H&s specifically
+// (its time-limit branch has no draw case at all, see MODES.hide_and_seek.
+// tick). Deliberately the CHEAPEST possible win-condition check — no
+// scripted action needed at all, just field/mode setup plus a tiny
+// gameDurationMs — so a wide combinatorial sweep is affordable.
+const TEAM_CAPABLE_MODES: SimScenario['subMode'][] = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
+
+function generateTimeLimitDrawScenarios(rand: () => number, startIndex: number): SimScenario[] {
+  const scenarios: SimScenario[] = [];
+  let i = startIndex;
+  const push = (s: Omit<SimScenario, 'key' | 'category'>) => {
+    scenarios.push({ key: `scenario_${i}`, category: 'kondition', ...s });
+    i++;
+  };
+  const gameDurationMs = 700;
+  const hidingDurationMs = 50;
+
+  for (const subMode of TEAM_CAPABLE_MODES) {
+    for (const teamVariant of ['team', 'ffa'] as const) {
+      for (const onHit of ['freeze', 'respawn'] as const) {
+        const fieldSideM = SAFE_ZONE_FIELD_M;
+        push({
+          label: `Zeitlimit -> Unentschieden: ${subMode}/${teamVariant}/${onHit}`,
+          subMode, onHit, teamVariant, testerClass: 'scout', testerTeam: 'a',
+          fieldSideM, durationMs: gameDurationMs + 1_500, gameDurationMs,
+          timings: COMPRESSED_TIMINGS,
+          livesPerPlayer: onHit === 'respawn' ? 3 : undefined,
+          zones: (subMode === 'domination' || subMode === 'seek_destroy')
+            ? [{ tMs: 0, bearingDeg: 0, distanceM: fieldSideM * 0.3 }, { tMs: 0, bearingDeg: 180, distanceM: fieldSideM * 0.3 + 30 }]
+            : undefined,
+          // One idle, non-interacting opponent — checkEliminationWin/H&S's
+          // own checkWin both deliberately never end a solo (<2 player)
+          // session (see arops.js), and a bare tester alone would also
+          // make "team b" itself literally not exist for team-mode combos.
+          bots: [{ id: `bot_${i}`, username: 'SimIdle', class: 'scout', team: 'b', route: [{ tMs: 0, bearingDeg: 90, distanceM: fieldSideM * 0.45 }] }],
+          testerHeadingDeg: 0, shoots: [],
+          checkpoints: [{ tMs: gameDurationMs + 1_000, check: 'gameOver', targetIndex: -1, expected: 'draw' }],
+        });
+      }
+    }
+  }
+
+  // Hide & Seek: classic's time-limit branch always awards 'hiders' (no
+  // draw case exists there at all); ffa/the_ship fall back to highest
+  // score, 'draw' on a tie — 0-0 here is always a tie.
+  for (const hsVariant of ['classic', 'ffa', 'the_ship'] as const) {
+    const fieldSideM = SAFE_ZONE_FIELD_M;
+    push({
+      label: `Zeitlimit H&S/${hsVariant}`,
+      subMode: 'hide_and_seek', hsVariant, testerClass: 'scout',
+      fieldSideM, durationMs: gameDurationMs + 1_500, gameDurationMs, hidingDurationMs,
+      timings: COMPRESSED_TIMINGS,
+      bots: [{ id: `bot_${i}`, username: 'SimIdle', class: 'scout', team: null, route: [{ tMs: 0, bearingDeg: 90, distanceM: fieldSideM * 0.45 }] }],
+      testerHeadingDeg: 0, shoots: [],
+      checkpoints: [{ tMs: gameDurationMs + 1_000, check: 'gameOver', targetIndex: -1, expected: hsVariant === 'classic' ? 'hiders' : 'draw' }],
+    });
+  }
+
+  return scenarios;
+}
+
+/**
+ * "Konditionen" bucket, part 2 — an actual scripted action reaches (or
+ * decides) the win condition, instead of just letting the clock run out at
+ * 0-0. Covers: target score/captures reached, all Zerstören-targets
+ * destroyed without reactivation, and — the specific bug this generator
+ * exists to guard against — the respawn-variant ELIMINATION win that
+ * Domination/CTF/Seek&Destroy previously never had at all (see
+ * checkEliminationWin, arops.js).
+ */
+function generateActionWinScenarios(rand: () => number, startIndex: number): SimScenario[] {
+  const scenarios: SimScenario[] = [];
+  let i = startIndex;
+  const push = (s: Omit<SimScenario, 'key' | 'category'>) => {
+    scenarios.push({ key: `scenario_${i}`, category: 'kondition', ...s });
+    i++;
+  };
+
+  // Domination: target score reached via one capture + a little held time
+  // (teamScore accrues 1pt/sec per owned zone — see arops.js tick).
+  for (let n = 0; n < 4; n++) {
+    const fieldSideM = SAFE_ZONE_FIELD_M;
+    const zoneDistance = randRange(rand, fieldSideM * 0.15, fieldSideM * 0.25);
+    const zoneBearing = randRange(rand, 0, 360);
+    const dwellMs = COMPRESSED_TIMINGS.captureDwellMs;
+    const holdForScoreMs = 1_300; // >1s held after capture -> teamScore >= 1
+    push({
+      label: `Ziel-Score erreicht: Domination #${n + 1}`,
+      subMode: 'domination', onHit: 'freeze', testerClass: 'scout', testerTeam: 'b',
+      fieldSideM, durationMs: dwellMs + holdForScoreMs + 1_500,
+      gameDurationMs: 600_000, targetScore: 1, timings: COMPRESSED_TIMINGS,
+      zones: [
+        { tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance },
+        { tMs: 0, bearingDeg: (zoneBearing + 180) % 360, distanceM: zoneDistance + 30 },
+      ],
+      bots: [{ id: `bot_${i}`, username: 'SimCapturer', class: 'scout', team: 'a', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] }],
+      testerHeadingDeg: 0, shoots: [],
+      checkpoints: [{ tMs: dwellMs + holdForScoreMs + 1_000, check: 'gameOver', targetIndex: -1, expected: 'team_a' }],
+    });
+  }
+
+  // Seek&Destroy: destroying the only target without reactivation ends it.
+  for (let n = 0; n < 4; n++) {
+    const fieldSideM = SAFE_ZONE_FIELD_M;
+    const zoneDistance = randRange(rand, fieldSideM * 0.15, fieldSideM * 0.25);
+    const zoneBearing = randRange(rand, 0, 360);
+    const dwellMs = COMPRESSED_TIMINGS.captureDwellMs;
+    push({
+      label: `Alle Ziele zerstört ohne Reaktivierung: Zerstören #${n + 1}`,
+      subMode: 'seek_destroy', onHit: 'freeze', testerClass: 'scout', testerTeam: 'b',
+      fieldSideM, durationMs: dwellMs + 1_500,
+      gameDurationMs: 600_000, destroyReactivate: false, timings: COMPRESSED_TIMINGS,
+      zones: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }],
+      bots: [{ id: `bot_${i}`, username: 'SimCapturer', class: 'scout', team: 'a', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] }],
+      testerHeadingDeg: 0, shoots: [],
+      checkpoints: [{ tMs: dwellMs + 1_000, check: 'gameOver', targetIndex: -1, expected: 'team_a' }],
+    });
+  }
+
+  // The fixed bug: respawn-variant elimination win for Domination/CTF/
+  // Seek&Destroy (both team and ffa) — a single life each, one shot wipes
+  // the whole opposing side.
+  for (const subMode of ['domination', 'ctf', 'seek_destroy'] as const) {
+    for (const teamVariant of ['team', 'ffa'] as const) {
+      const bearing = randRange(rand, -10, 10);
+      const distance = randRange(rand, 5, 20);
+      push({
+        label: `Eliminierungs-Sieg (respawn): ${subMode}/${teamVariant}`,
+        subMode, onHit: 'respawn', teamVariant, testerClass: 'scout', testerTeam: 'a',
+        hitConfig: HIT_CONFIG,
+        fieldSideM: SAFE_ZONE_FIELD_M, durationMs: 2_000,
+        gameDurationMs: 600_000, livesPerPlayer: 1, timings: COMPRESSED_TIMINGS,
+        // Diametrically opposite -> separation is 2×distanceM; needs to
+        // clear validateZones' (r1+r2)*1.5 = zoneRadiusM*3 minimum (≈82.5m
+        // at SAFE_ZONE_FIELD_M's L=220) — 45m each clears it with margin.
+        zones: (subMode === 'domination' || subMode === 'seek_destroy')
+          ? [{ tMs: 0, bearingDeg: 90, distanceM: 45 }, { tMs: 0, bearingDeg: 270, distanceM: 45 }] : undefined,
+        bots: [{ id: `bot_${i}`, username: 'SimTarget', class: 'scout', team: 'b', route: [{ tMs: 0, bearingDeg: bearing, distanceM: distance }] }],
+        testerHeadingDeg: 0,
+        shoots: [{ tMs: 500, shooterId: 'tester', targetId: `bot_${i}`, expectedHit: true }],
+        checkpoints: [{
+          // 'player_tester' — same runtime-resolved-sentinel convention
+          // shoots[].targetId==='tester' already uses (the tester's real
+          // userId differs between the server test harness and an actual
+          // device run) — both checkCheckpoints (arops_sim.test.js) and
+          // MatchSimScreen's own checker substitute the real id before comparing.
+          tMs: 1_500, check: 'gameOver', targetIndex: -1,
+          expected: teamVariant === 'ffa' ? 'player_tester' : 'team_a',
+        }],
+      });
+    }
+  }
+
+  // Deathmatch (already had its own checkWin — regression coverage, not
+  // new behavior) + classic H&S found-all-hiders.
+  {
+    const bearing = randRange(rand, -10, 10);
+    const distance = randRange(rand, 5, 20);
+    push({
+      label: 'Eliminierungs-Sieg: Deathmatch (bestehender Pfad, Regressionsschutz)',
+      subMode: 'deathmatch', onHit: 'respawn', testerClass: 'scout', testerTeam: 'a',
+      hitConfig: HIT_CONFIG,
+      fieldSideM: FIELD_TIERS[i % FIELD_TIERS.length]!, durationMs: 2_000,
+      gameDurationMs: 600_000, livesPerPlayer: 1, timings: COMPRESSED_TIMINGS,
+      bots: [{ id: `bot_${i}`, username: 'SimTarget', class: 'scout', team: 'b', route: [{ tMs: 0, bearingDeg: bearing, distanceM: distance }] }],
+      testerHeadingDeg: 0,
+      shoots: [{ tMs: 500, shooterId: 'tester', targetId: `bot_${i}`, expectedHit: true }],
+      checkpoints: [{ tMs: 1_500, check: 'gameOver', targetIndex: -1, expected: 'team_a' }],
+    });
+  }
+  {
+    const bearing = randRange(rand, -10, 10);
+    const distance = randRange(rand, 5, 20);
+    push({
+      label: 'Sieg durch alle Hider gefunden: klassisches H&S',
+      subMode: 'hide_and_seek', hsVariant: 'classic', testerClass: 'scout',
+      hitConfig: HIT_CONFIG, hidingDurationMs: 50,
+      fieldSideM: FIELD_TIERS[i % FIELD_TIERS.length]!, durationMs: 2_000,
+      gameDurationMs: 600_000, foundMode: 'spectator', timings: COMPRESSED_TIMINGS,
+      bots: [{ id: `bot_${i}`, username: 'SimHider', class: 'scout', team: null, route: [{ tMs: 0, bearingDeg: bearing, distanceM: distance }] }],
+      testerHeadingDeg: 0,
+      shoots: [{ tMs: 500, shooterId: 'tester', targetId: `bot_${i}`, expectedHit: true }],
+      checkpoints: [{ tMs: 1_500, check: 'gameOver', targetIndex: -1, expected: 'seekers' }],
+    });
+  }
+
+  return scenarios;
+}
+
 const SIM_SCENARIOS_SEED = 20260722;
 
 function generateSimScenarios(seed: number): SimScenario[] {
   const rand = mulberry32(seed);
   const shooting = generateShootingScenarios(rand, 0);
   const capture = generateCaptureScenarios(rand, shooting.length);
-  return [...shooting, ...capture];
+  const contestAndBoundary = generateContestedAndBoundaryScenarios(rand, shooting.length + capture.length);
+  const timeLimit = generateTimeLimitDrawScenarios(rand, shooting.length + capture.length + contestAndBoundary.length);
+  const actionWin = generateActionWinScenarios(rand, shooting.length + capture.length + contestAndBoundary.length + timeLimit.length);
+  return [...shooting, ...capture, ...contestAndBoundary, ...timeLimit, ...actionWin];
 }
 
 /** ~50 fixed, seeded-random short scenarios — see file header. Regenerating

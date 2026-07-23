@@ -27,6 +27,48 @@ let lastPosition: LastPosition | null = null;
 
 export function getUser(): User | null { return currentUser; }
 
+// Minimal, dependency-free base64 decoder — deliberately NOT using the
+// global `atob` (unreliable across Hermes/React Native versions, no
+// existing usage/polyfill anywhere else in this app to lean on) or
+// Buffer (Node-only, not present in the RN runtime at all).
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function base64Decode(input: string): string {
+  const clean = input.replace(/=+$/, '');
+  let bits = 0, value = 0, out = '';
+  for (const ch of clean) {
+    const idx = BASE64_ALPHABET.indexOf(ch);
+    if (idx === -1) continue;
+    value = (value << 6) | idx;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode((value >> bits) & 0xff);
+    }
+  }
+  return out;
+}
+
+/**
+ * Remaining seconds of validity on the current access token (decoded
+ * `exp` claim, pure base64url parsing — no JWT library, no network call).
+ * `accessToken` itself stays private to this module (see below) — only
+ * this derived, harmless number is exposed. Used by MatchSimScreen's
+ * Performance phase; null if there's no token or it doesn't parse as a JWT.
+ */
+export function getAccessTokenTTL(): number | null {
+  if (!accessToken) return null;
+  try {
+    const payload = accessToken.split('.')[1];
+    if (!payload) return null;
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const { exp } = JSON.parse(base64Decode(base64));
+    if (typeof exp !== 'number') return null;
+    return Math.round(exp - Date.now() / 1000);
+  } catch {
+    return null;
+  }
+}
+
 /** Last real (device-reported, not IP-guessed) GPS fix, persisted locally
  *  across app restarts — purely a map-convenience default (never sent to
  *  the server), so the lobby map can center on roughly the right area

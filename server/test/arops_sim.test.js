@@ -114,6 +114,13 @@ function checkCheckpoints(gs, scenario) {
       if (cp.check === 'zoneOwner') {
         const zoneId = 'z' + (cp.targetIndex + 1);
         assert.equal(gs.modeState.owners[zoneId], cp.expected);
+      } else if (cp.check === 'gameOver') {
+        // 'player_tester' — runtime-resolved sentinel (the tester's real
+        // userId is this harness's own fixed 'TESTER', see createSimGame;
+        // a real device run substitutes its own logged-in user's id).
+        const expected = cp.expected === 'player_tester' ? 'player_TESTER' : cp.expected;
+        assert.equal(gs.gameOver, true, `expected the match to have ended by t=${cp.tMs}`);
+        assert.equal(gs.winner, expected);
       } else {
         throw new Error('unknown checkpoint kind: ' + cp.check);
       }

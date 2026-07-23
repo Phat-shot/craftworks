@@ -1112,7 +1112,18 @@ function transitionFromBaseSetup(gs, t) {
   gs.phase = 'live';
   gs.phaseStartTime = t;
   pushEvent(gs, 'phase_change', { phase: 'live' });
-  applySpawnCheckpoint(gs, t);
+  // Simulation sessions already skip the whole base_setup WAIT (see
+  // createAropsGame's instant-skip for cfg.simulation, right after
+  // mode.initState) on the premise that a scripted 1-10s scenario has no
+  // time to pay for realistic prep-phase logistics — the same reasoning
+  // applies here: a scripted tester/bot has no route mechanism to "walk to
+  // its own base" at all (it's always exactly where the scenario places
+  // it), so applySpawnCheckpoint's normal "not physically in your base yet
+  // -> downed" would immediately down everyone, permanently blocking any
+  // respawn-variant scenario from ever attempting a shot. Never applies
+  // outside cfg.simulation — a real match still needs its captain/players
+  // to actually reach the base like normal.
+  if (!gs.cfg.simulation) applySpawnCheckpoint(gs, t);
 }
 
 // Shared 'warmup' -> 'live' transition (Domination/Seek&Destroy/Deathmatch
@@ -1215,7 +1226,7 @@ function applySimOverrides(ar, players) {
     ...ar,
     subMode: scenario.subMode,
     classes, teams, zones,
-    teamVariant: 'team',
+    teamVariant: scenario.teamVariant || 'team',
     ...(scenario.onHit ? { onHit: scenario.onHit } : {}),
     ...(scenario.hitConfig ? { hitConfig: scenario.hitConfig } : {}),
     // Bypasses platform.js's 5s floor on client-sent timings entirely (this
@@ -1223,6 +1234,26 @@ function applySimOverrides(ar, players) {
     // own parsing, which has no such floor) — lets a whole freeze/capture
     // cycle fit inside a scenario that's only 1-10s long in total.
     ...(scenario.timings ? { timings: scenario.timings } : {}),
+    // Win-condition scenarios (generateWinConditionScenarios) — same
+    // "already a normal ar_settings field, just not previously part of the
+    // sim override passthrough" as onHit/hitConfig/timings above. Lets a
+    // scenario set a tiny targetScore/targetCaptures/livesPerPlayer/
+    // gameDurationMs so one scripted shot/capture reaches (or the clock
+    // reaches) the win condition almost immediately, no separate
+    // preset-injection mechanism needed — the real scoring path still runs.
+    ...(scenario.gameDurationMs ? { gameDurationMs: scenario.gameDurationMs } : {}),
+    // Classic H&S's 'hiding' phase isn't covered by createAropsGame's
+    // instant warmup/base_setup skip for cfg.simulation (only those two
+    // phases) — ffa/the_ship already always skip 'hiding' regardless (see
+    // MODES.hide_and_seek.tick), classic scenarios instead just override
+    // it to near-zero directly.
+    ...(scenario.hidingDurationMs ? { hidingDurationMs: scenario.hidingDurationMs } : {}),
+    ...(scenario.targetScore ? { targetScore: scenario.targetScore } : {}),
+    ...(scenario.targetCaptures ? { targetCaptures: scenario.targetCaptures } : {}),
+    ...(scenario.livesPerPlayer ? { livesPerPlayer: scenario.livesPerPlayer } : {}),
+    ...(scenario.destroyReactivate !== undefined ? { destroyReactivate: scenario.destroyReactivate } : {}),
+    ...(scenario.foundMode ? { foundMode: scenario.foundMode } : {}),
+    ...(scenario.hsVariant ? { hsVariant: scenario.hsVariant } : {}),
     debugMode: true, // ground-truth visibility — the tester must see real bot positions
   };
 }
@@ -2096,7 +2127,17 @@ function tickSimBots(gs, t) {
 
   for (const botScript of snippet.bots) {
     const p = gs.players[botScript.id];
-    if (!p || p.status !== 'alive') continue;
+    // 'found' (permanently eliminated) bots stay wherever they died — no
+    // more positioning. 'downed' (respawn variant, not yet reached its
+    // base) still gets placed, same as a real player's own device keeps
+    // sending telemetry while downed (only hit ATTEMPTS are blocked by
+    // status, not telemetry itself, see actionArTelemetry/
+    // actionArHitAttempt) — a scenario testing the respawn-variant
+    // elimination win otherwise never gets telemetry for a bot that starts
+    // 'downed' the instant base_setup ends without it ever having reached
+    // a base (see applySpawnCheckpoint), since it has no route step aimed
+    // at walking there.
+    if (!p || p.status === 'found') continue;
     const wp = activeSimWaypoint(botScript.route, elapsed);
     const dest = shared.destinationPoint(gs._simOrigin, wp.bearingDeg, wp.distanceM);
     if (!p.lastAccepted) {

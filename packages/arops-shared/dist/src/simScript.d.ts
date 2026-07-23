@@ -29,22 +29,31 @@ export interface SimShootBeat {
 }
 export interface SimCheckpoint {
     tMs: number;
-    check: 'zoneOwner';
-    /** Zone index (0-based) within the scenario's own zones array. */
+    check: 'zoneOwner' | 'gameOver';
+    /** Zone index (0-based) within the scenario's own zones array. Unused
+     *  (-1) for 'gameOver' checkpoints. */
     targetIndex: number;
-    /** Expected owning team ('a'|'b'). */
-    expected: string;
+    /** 'zoneOwner': expected owning team ('a'|'b'), or null if the zone
+     *  should still be uncaptured (e.g. contested by both teams at once —
+     *  see generateContestedAndBoundaryScenarios). 'gameOver': the expected
+     *  gs.winner / snap.winner string once the match has ended. */
+    expected: string | null;
 }
 export interface SimScenario {
     key: string;
+    /** Which of the 3 phase-3 ("Logik") buckets this belongs to — purely for
+     *  grouping in MatchSimScreen's progress display, doesn't affect how a
+     *  scenario runs. 'basis': the original shot/capture/miss checks.
+     *  'szenario': contested captures + boundary conditions. 'kondition':
+     *  win/end-condition coverage across every mode. */
+    category: 'basis' | 'szenario' | 'kondition';
     label: string;
-    subMode: 'deathmatch' | 'domination';
+    subMode: 'deathmatch' | 'domination' | 'ctf' | 'seek_destroy' | 'hide_and_seek';
     testerClass: SimClass;
-    /** Only set where it matters (domination — a bot needs the tester on a
-     *  different team, or default alternation could put them on the SAME
-     *  team, since the tester is always the first non-bot player). Omitted
-     *  for deathmatch scenarios, where team assignment never affects the
-     *  outcome (only opponent-vs-opponent, and there's exactly one bot). */
+    /** Only set where it matters (team-capable modes — a bot needs the
+     *  tester on a specific team, or default alternation could put them on
+     *  the wrong one, since the tester is always the first non-bot player).
+     *  Omitted where team assignment never affects the outcome. */
     testerTeam?: 'a' | 'b';
     /** Square field side length in meters — corners computed from this. */
     fieldSideM: number;
@@ -62,15 +71,23 @@ export interface SimScenario {
      *  socket whitelist; createAropsGame's own internal parsing has no such
      *  floor), so a whole freeze/capture cycle fits inside a short scenario. */
     timings?: Record<string, number>;
-    /** Zone center offsets from the origin (domination only). Domination
-     *  needs at least 2 — the 2nd is a far-away, uninteracted-with filler to
-     *  satisfy that minimum, same convention the original hand-written
-     *  domination snippet used. */
+    /** Zone center offsets from the origin (domination/seek_destroy only).
+     *  Domination needs at least 2 — a 2nd, far-away, uninteracted-with
+     *  filler satisfies that minimum where only one zone is actually used. */
     zones?: SimWaypoint[];
     bots: SimBotScript[];
     testerHeadingDeg: number;
     shoots: SimShootBeat[];
     checkpoints: SimCheckpoint[];
+    teamVariant?: 'team' | 'ffa';
+    gameDurationMs?: number;
+    hidingDurationMs?: number;
+    targetScore?: number;
+    targetCaptures?: number;
+    livesPerPlayer?: number;
+    destroyReactivate?: boolean;
+    foundMode?: 'spectator' | 'seeker' | 'freeze';
+    hsVariant?: 'classic' | 'ffa' | 'the_ship';
 }
 /** Square field corners (bearing+distance from the origin) for a given side length. */
 export declare function squareFieldCorners(sideM: number): SimWaypoint[];
