@@ -145,7 +145,17 @@ function AppShell({ themeName, setThemeName }: {
     Promise.all([restoreSession(), loadLastPosition(), loadHeadingSettings(), loadTheme(), loadDebugEnabled()])
       .then(([u]) => {
         setThemeName(getTheme());
-        setDebugEnabled(getDebugEnabled());
+        // Debug-Modus ist jetzt admin-only (siehe Entwickler-Settings unten)
+        // — ein aus einer früheren Session noch gespeichertes `true` bei
+        // einem Nicht-Admin-Account (Rollenwechsel, Account-Wechsel auf
+        // demselben Gerät) wird beim Boot bereinigt statt nur unsichtbar zu
+        // bleiben.
+        if (u?.is_admin) {
+          setDebugEnabled(getDebugEnabled());
+        } else {
+          saveDebugEnabled(false);
+          setDebugEnabled(false);
+        }
         setRoute(u ? { name: 'menu' } : { name: 'login' });
       })
       .catch(() => setRoute({ name: 'login' }));
@@ -375,16 +385,23 @@ function AppShell({ themeName, setThemeName }: {
             </View>
             {/* Match-Simulation menu entry gate — device-wide, independent
                 of any lobby's own ar_settings.debugMode (see api.ts's
-                getDebugEnabled doc). */}
-            <Text style={[st.modalLine, { marginTop: 8 }]}>Entwickler</Text>
-            <View style={st.settingsRow}>
-              <TouchableOpacity
-                style={[st.settingsBtn, debugEnabled && st.settingsBtnActive]}
-                onPress={() => { const v = !debugEnabled; saveDebugEnabled(v); setDebugEnabled(v); }}>
-                <Icon name="bug" size={16} color={debugEnabled ? theme.accent : theme.text2} />
-                <Text style={st.settingsBtnTxt}>Debug-Modus</Text>
-              </TouchableOpacity>
-            </View>
+                getDebugEnabled doc). Nur Admins dürfen den Debug-Modus
+                überhaupt aktivieren — für alle anderen bleibt der ganze
+                Abschnitt unsichtbar, kein Weg mehr, ihn über die UI zu
+                setzen. */}
+            {getUser()?.is_admin && (
+              <>
+                <Text style={[st.modalLine, { marginTop: 8 }]}>Entwickler</Text>
+                <View style={st.settingsRow}>
+                  <TouchableOpacity
+                    style={[st.settingsBtn, debugEnabled && st.settingsBtnActive]}
+                    onPress={() => { const v = !debugEnabled; saveDebugEnabled(v); setDebugEnabled(v); }}>
+                    <Icon name="bug" size={16} color={debugEnabled ? theme.accent : theme.text2} />
+                    <Text style={st.settingsBtnTxt}>Debug-Modus</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
             <TouchableOpacity style={st.logoutBtn} onPress={async () => {
               await logout();
               setSettingsOpen(false);

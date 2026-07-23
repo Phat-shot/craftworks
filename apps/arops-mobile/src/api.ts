@@ -15,7 +15,7 @@ export type { ThemeName } from './theme';
 // stuck", not just one failed request.
 const FETCH_TIMEOUT_MS = 10_000;
 
-export interface User { id: string; username: string; avatar_color?: string; }
+export interface User { id: string; username: string; avatar_color?: string; is_admin?: boolean; }
 export interface LastPosition { lat: number; lon: number; ts: number; }
 
 let accessToken: string | null = null;
