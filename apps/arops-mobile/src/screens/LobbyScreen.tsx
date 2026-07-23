@@ -59,22 +59,13 @@ interface ArSettings {
   // mode, optional (unset = classless, unchanged combat stats).
   classes?: Record<string, 'scout' | 'sniper' | 'bomber'>;
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
-  // Freeze-time override (host-adjustable, see the Lobby's freeze-time row)
-  // — the rest of ModeTimings stays test-only, not host-facing.
-  timings?: { freezeMs?: number | null };
+  // Freeze-time/Basis-Setup-Zeit overrides (host-adjustable, see the
+  // Lobby's freeze-time/Vorbereitung rows) — the rest of ModeTimings stays
+  // test-only, not host-facing.
+  timings?: { freezeMs?: number | null; baseSettingMs?: number | null };
   autoScale?: boolean;
 }
 
-// Half-angle presets expressed to the host as an approximate width at a 10m
-// reference distance (halfWidthM = 10 * tan(halfAngleDeg)) — the actual
-// validation stays angle-based (packages/arops-shared hit.ts, untouched),
-// this is just an intuitive framing for the setting.
-const REF_DIST_M = 10;
-const WIDTH_PRESETS = [
-  { halfWidthM: 0.5, label: 'Eng (1m)' },
-  { halfWidthM: 1, label: 'Normal (2m)' },
-  { halfWidthM: 2, label: 'Weit (4m)' },
-];
 const RANGE_PRESETS = [30, 50, 75, 100];
 
 // Short labels — 5 modes need to fit on one line (host screen real estate).
@@ -93,7 +84,7 @@ const TEAM_MODES = ['domination', 'ctf', 'seek_destroy', 'deathmatch'];
 const POLY_ERR_DE: Record<string, string> = {
   too_few_points: 'Mind. 3 Wegpunkte setzen',
   self_intersecting: 'Fläche überschneidet sich — Punkte der Reihe nach im Kreis setzen',
-  area_too_small: 'Fläche zu klein (min. 2.000 m²)',
+  area_too_small: 'Fläche zu klein (min. 400 m² / 20×20m)',
   area_too_large: 'Fläche zu groß (max. 3 km²)',
 };
 // Was missing several codes the server actually emits on this same 'error'
@@ -453,20 +444,28 @@ export default function LobbyScreen({
   const hid = ar.hidingDurationMs || 120_000;
   const dur = ar.gameDurationMs || 1_200_000;
   const HIDING = [{ l: '1m', ms: 60_000 }, { l: '2m', ms: 120_000 }, { l: '3m', ms: 180_000 }];
-  const DURATION = [{ l: '10m', ms: 600_000 }, { l: '15m', ms: 900_000 }, { l: '20m', ms: 1_200_000 }, { l: '30m', ms: 1_800_000 }];
+  // Phase 2 (gameDurationMs): 5/15/30min auto-scale range, plus 3h/6h for
+  // very large fields — manual ceiling (platform.js) allows up to 6h even
+  // though auto-scale itself never derives past 60min.
+  const DURATION = [
+    { l: '5m', ms: 300_000 }, { l: '15m', ms: 900_000 }, { l: '30m', ms: 1_800_000 },
+    { l: '3h', ms: 10_800_000 }, { l: '6h', ms: 21_600_000 },
+  ];
+  // Phase 1 (baseSettingMs — CTF always, Domination/S&D/Deathmatch only
+  // with onHit==='respawn'): 1/2/5min auto-scale range, plus 15min manual.
+  const BASE_SETTING_OPTIONS = [
+    { l: '1m', ms: 60_000 }, { l: '2m', ms: 120_000 }, { l: '5m', ms: 300_000 }, { l: '15m', ms: 900_000 },
+  ];
+  const baseSettingMs: number | null = ar.timings?.baseSettingMs ?? null;
   // Freeze duration is always field-size-scaled by default (server's
   // scaleTimings, 3-30s range, independent of autoScale) but host-adjustable
-  // here like Reichweite/Breite/Versteckzeit/Spielzeit — hidden while Auto
-  // is on (see !autoScale gate below), same convention as those.
+  // here like Reichweite/Versteckzeit/Spielzeit — hidden while Auto is on
+  // (see !autoScale gate below), same convention as those.
   const FREEZE_OPTIONS: { l: string; ms: number }[] = [
     { l: '3s', ms: 3_000 }, { l: '10s', ms: 10_000 }, { l: '30s', ms: 30_000 },
   ];
   const hitRangeM = ar.hitConfig?.maxRangeM || 75;
-  const hitHalfAngleDeg = ar.hitConfig?.baseConeHalfAngleDeg;
   const setHitRange = (maxRangeM: number) => emitUpdate({ hitConfig: { ...ar.hitConfig, maxRangeM } });
-  const setHitWidth = (halfWidthM: number) => emitUpdate({
-    hitConfig: { ...ar.hitConfig, baseConeHalfAngleDeg: Math.atan(halfWidthM / REF_DIST_M) * (180 / Math.PI) },
-  });
 
   // "Auto": derive hiding/game duration, shot range/width and perk cooldowns
   // from the field size instead of manual presets — the field has no upper
@@ -498,6 +497,11 @@ export default function LobbyScreen({
   const showLivesInPreview = teamMode && onHit === 'respawn';
   const showFreezeInPreview = (teamMode && onHit === 'freeze')
     || (subMode === 'hide_and_seek' && foundMode === 'freeze');
+  // Base-Setup-Zeit only matters where a base actually gets placed — CTF
+  // always, the other 3 team-capable modes only in the respawn variant
+  // (see MODES' initialPhase in arops.js: onHit==='respawn' → 'base_setup',
+  // onHit==='freeze' → the base-less 'warmup' phase instead).
+  const showBaseSettingInPreview = teamMode && (subMode === 'ctf' || onHit === 'respawn');
   const freezeMs: number | null = ar.timings?.freezeMs ?? null;
 
   const header = (
@@ -571,15 +575,58 @@ export default function LobbyScreen({
       </View>
 
       {isHost && (
-        <View style={st.modeRowTight}>
-          {SUB_MODES.map(m => (
-            <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
-              onPress={() => emitUpdate({ subMode: m.id })}
-              onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
-              <Icon name={m.icon} size={13} color={subMode === m.id ? theme.accent : theme.text2} />
-              <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
-            </TouchableOpacity>
-          ))}
+        <View style={st.modeRowOuter}>
+          <View style={st.modeRowTight}>
+            {SUB_MODES.map(m => (
+              <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
+                onPress={() => emitUpdate({ subMode: m.id })}
+                onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
+                <Icon name={m.icon} size={13} color={subMode === m.id ? theme.accent : theme.text2} />
+                <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {/* Treffer-Konsequenz — ganz rechts in der Modus-Reihe, icon-only
+              (Leben verlieren vs. Einfrieren), statt einer eigenen Zeile mit
+              Text weiter unten. */}
+          {teamMode && (
+            <View style={st.modeRowToggle}>
+              <TouchableOpacity style={[st.iconBtnLg, onHit === 'respawn' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ onHit: 'respawn' })}
+                onLongPress={() => Alert.alert('Leben verlieren', 'Treffer kostet ein Leben statt einzufrieren.')}>
+                <Icon name="heart" size={17} color={onHit === 'respawn' ? theme.accent : theme.text2} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.iconBtnLg, onHit === 'freeze' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ onHit: 'freeze' })}
+                onLongPress={() => Alert.alert('Einfrieren', 'Treffer friert kurz ein statt ein Leben zu kosten.')}>
+                <Icon name="snowflake" size={17} color={onHit === 'freeze' ? theme.accent : theme.text2} />
+              </TouchableOpacity>
+            </View>
+          )}
+          {/* Hide & Seek — ganz rechts: Freeze für Hider an/aus, links davon
+              Weiterspielen (Sucher)/Zuschauer. Ersetzt den bisherigen
+              3-Wege-"Gefunden"-Picker (spectator/seeker/freeze) unten:
+              Freeze AN gewinnt immer (unabhängig vom anderen Toggle);
+              Freeze AUS liest den Weiterspielen/Zuschauer-Toggle. */}
+          {rolesApply && (
+            <View style={st.modeRowToggle}>
+              <TouchableOpacity style={[st.iconBtnLg, foundMode === 'seeker' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: 'seeker' })}
+                onLongPress={() => Alert.alert('Weiterspielen (Sucher)', 'Gefundene Hider spielen sofort als Sucher weiter.')}>
+                <Icon name="magnify" size={17} color={foundMode === 'seeker' ? theme.accent : theme.text2} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.iconBtnLg, foundMode !== 'seeker' && foundMode !== 'freeze' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: 'spectator' })}
+                onLongPress={() => Alert.alert('Zuschauer', 'Gefundene Hider scheiden aus und schauen zu.')}>
+                <Icon name="binoculars" size={17} color={foundMode !== 'seeker' && foundMode !== 'freeze' ? theme.accent : theme.text2} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.iconBtnLg, foundMode === 'freeze' && st.smallBtnActive]}
+                onPress={() => emitUpdate({ foundMode: foundMode === 'freeze' ? 'spectator' : 'freeze' })}
+                onLongPress={() => Alert.alert('Freeze für Hider', 'Gefundene Hider frieren kurz ein statt auszuscheiden — überstimmt Weiterspielen/Zuschauer.')}>
+                <Icon name="snowflake" size={17} color={foundMode === 'freeze' ? theme.accent : theme.text2} />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       )}
       {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
@@ -643,26 +690,6 @@ export default function LobbyScreen({
           )}
         </View>
       )}
-      {isHost && rolesApply && (
-        <View style={st.rowBtns}>
-          <Text style={st.wpCount}>Gefunden:</Text>
-          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ foundMode: 'spectator' })}>
-            <Icon name="ghost" size={13} color={foundMode === 'spectator' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ foundMode: 'seeker' })}>
-            <Icon name="loop" size={13} color={foundMode === 'seeker' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ foundMode: 'freeze' })}>
-            <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Freeze für Hider</Text>
-          </TouchableOpacity>
-        </View>
-      )}
       {isHost && subMode === 'seek_destroy' && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Zerstören:</Text>
@@ -682,20 +709,6 @@ export default function LobbyScreen({
             <Text style={[st.smallTxt, ar.destroyReactivate && st.toggleOnTxt]}>
               Ziele reaktivieren: {ar.destroyReactivate ? 'AN' : 'AUS'}
             </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {isHost && teamMode && (
-        <View style={st.rowBtns}>
-          <Text style={st.wpCount}>Treffer:</Text>
-          <TouchableOpacity style={[st.smallBtnRow, onHit === 'respawn' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ onHit: 'respawn' })}>
-            <Text style={[st.smallTxt, onHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, onHit === 'freeze' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ onHit: 'freeze' })}>
-            <Icon name="snowflake" size={13} color={onHit === 'freeze' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, onHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -854,37 +867,22 @@ export default function LobbyScreen({
             <View style={st.rowBtns}>
               <Text style={st.wpCount}>
                 {autoPreview
-                  ? `Reichweite ~${fmtM(autoPreview.hitRangeM)} · Breite ~${fmtM(autoPreview.hitHalfWidthM * 2)} · Versteckzeit ${fmtMin(autoPreview.hidingDurationMs)} · Spielzeit ${fmtMin(autoPreview.gameDurationMs)}`
+                  ? `Reichweite ~${fmtM(autoPreview.hitRangeM)} · Versteckzeit ${fmtMin(autoPreview.hidingDurationMs)} · Spielzeit ${fmtMin(autoPreview.gameDurationMs)}`
                     + (showLivesInPreview ? ` · Leben ${autoPreview.livesPerPlayer}` : '')
                     + (showFreezeInPreview && autoFreezeMs != null ? ` · Freeze ${fmtSec(autoFreezeMs)}` : '')
                   : 'Erst das Spielfeld zeichnen, um die Auto-Werte zu sehen'}
               </Text>
             </View>
           ) : (
-            <>
-              <View style={st.rowBtns}>
-                <Text style={st.wpCount}>Reichweite:</Text>
-                {RANGE_PRESETS.map(m => (
-                  <TouchableOpacity key={m} style={[st.smallBtn, hitRangeM === m && st.smallBtnActive]}
-                    onPress={() => setHitRange(m)}>
-                    <Text style={[st.smallTxt, hitRangeM === m && st.smallTxtActive]}>{m}m</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <View style={st.rowBtns}>
-                <Text style={st.wpCount}>Breite:</Text>
-                {WIDTH_PRESETS.map(w => {
-                  const active = hitHalfAngleDeg !== undefined
-                    && Math.abs(hitHalfAngleDeg - Math.atan(w.halfWidthM / REF_DIST_M) * (180 / Math.PI)) < 0.5;
-                  return (
-                    <TouchableOpacity key={w.label} style={[st.smallBtn, active && st.smallBtnActive]}
-                      onPress={() => setHitWidth(w.halfWidthM)}>
-                      <Text style={[st.smallTxt, active && st.smallTxtActive]}>{w.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </>
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Reichweite:</Text>
+              {RANGE_PRESETS.map(m => (
+                <TouchableOpacity key={m} style={[st.smallBtn, hitRangeM === m && st.smallBtnActive]}
+                  onPress={() => setHitRange(m)}>
+                  <Text style={[st.smallTxt, hitRangeM === m && st.smallTxtActive]}>{m}m</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
           <View style={st.divider} />
           {!autoScale && (
@@ -907,6 +905,17 @@ export default function LobbyScreen({
                   </TouchableOpacity>
                 ))}
               </View>
+              {showBaseSettingInPreview && (
+                <View style={st.rowBtns}>
+                  <Text style={st.wpCount}>Vorbereitung:</Text>
+                  {BASE_SETTING_OPTIONS.map(o => (
+                    <TouchableOpacity key={o.ms} style={[st.smallBtn, baseSettingMs === o.ms && st.smallBtnActive]}
+                      onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), baseSettingMs: o.ms } })}>
+                      <Text style={[st.smallTxt, baseSettingMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </>
           )}
           {showFreezeInPreview && !autoScale && (
@@ -1074,7 +1083,12 @@ function makeStyles(theme: ThemeTokens) {
     wrap: { flex: 1, backgroundColor: theme.bg, padding: 16, paddingTop: 52 },
     topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 },
     topLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
-    modeRowTight: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+    // Outer row: the 5 mode buttons (modeRowTight, flex:1) pinned left, an
+    // icon-only mode-specific toggle group (modeRowToggle) pinned right —
+    // same space-between convention as topRow/topLeft above.
+    modeRowOuter: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+    modeRowTight: { flex: 1, flexDirection: 'row', gap: 6 },
+    modeRowToggle: { flexDirection: 'row', gap: 6 },
     smallBtnTight: {
       flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
       backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
