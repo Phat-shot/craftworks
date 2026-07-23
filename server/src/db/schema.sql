@@ -481,7 +481,7 @@ ALTER TABLE brand_maps ADD COLUMN IF NOT EXISTS game_config JSONB DEFAULT NULL;
 -- Platform-wide admin flag (distinct from brand_members.role, which is
 -- scoped to a single brand) — gates platform-level actions like creating
 -- new brands. No user has this by default; set manually after deploy:
---   UPDATE users SET is_admin=true WHERE email='...';
+--   UPDATE users SET is_admin=true WHERE email='...'
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Schnitzeljagd scenario-creator permission — distinct from is_admin: an
@@ -490,7 +490,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FAL
 -- full platform-admin rights. No user has this by default either; an admin
 -- grants it manually (future admin-panel UI, same idea as the existing
 -- account-management screen) or directly:
---   UPDATE users SET is_creator=true WHERE email='...';
+--   UPDATE users SET is_creator=true WHERE email='...'
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_creator BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ═══════════════════════════════════════════════════════════════
@@ -516,7 +516,7 @@ CREATE INDEX IF NOT EXISTS idx_comic_map_cache_bounds ON comic_map_cache(south, 
 -- played via reusable, time-limited scan codes. Foundation only (schema +
 -- minimal server-side state machine, see server/src/game/hunt.js) — no
 -- web editor, mobile play UI, photo upload, or PDF generation yet (those
--- are separate follow-up milestones; hunt_photos/hunt_reports below are
+-- are separate follow-up milestones — hunt_photos/hunt_reports below are
 -- schema-only placeholders for them).
 -- ═══════════════════════════════════════════════════════════════
 
@@ -525,7 +525,7 @@ CREATE INDEX IF NOT EXISTS idx_comic_map_cache_bounds ON comic_map_cache(south, 
 -- scenario (and generating its hunt_sessions codes) is restricted to
 -- is_admin OR is_creator accounts (see the ALTER TABLE users below) — an
 -- ordinary account cannot create or reach the future web editor at all.
--- Enforcement itself belongs to the (not-yet-built) API-routes milestone;
+-- Enforcement itself belongs to the (not-yet-built) API-routes milestone —
 -- this FK/comment is the schema-level groundwork for it.
 CREATE TABLE IF NOT EXISTS hunt_scenarios (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -553,8 +553,9 @@ CREATE TABLE IF NOT EXISTS hunt_pois (
   lon              DOUBLE PRECISION NOT NULL,
   radius_m         DOUBLE PRECISION NOT NULL DEFAULT 15,
   poi_type         VARCHAR(16) NOT NULL DEFAULT 'target', -- 'puzzle'|'target'|'base'
-  -- puzzle: {question, answerType, answer/choices}; target/base: currently
-  -- unused, reserved for a future destroy/flag-carry-specific config.
+  -- puzzle: {type, answer, choices, correctIndex, tolerance} (see hunt.js's
+  -- checkPuzzleAnswer) -- target/base/capture/carry_from/carry_to: currently
+  -- unused, reserved for future action-specific config.
   puzzle_config    JSONB NOT NULL DEFAULT '{}',
   task_time_limit_ms   INTEGER,           -- NULL = no per-task time limit
   -- {type:'skip'|'fail'|'time_penalty', ...} — dispatched by hunt.js on timeout
