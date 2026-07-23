@@ -484,6 +484,15 @@ ALTER TABLE brand_maps ADD COLUMN IF NOT EXISTS game_config JSONB DEFAULT NULL;
 --   UPDATE users SET is_admin=true WHERE email='...';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- Schnitzeljagd scenario-creator permission — distinct from is_admin: an
+-- admin can grant this to a non-admin account (e.g. an event organizer) so
+-- they can build hunt_scenarios and generate hunt_sessions codes without
+-- full platform-admin rights. No user has this by default either; an admin
+-- grants it manually (future admin-panel UI, same idea as the existing
+-- account-management screen) or directly:
+--   UPDATE users SET is_creator=true WHERE email='...';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_creator BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- ═══════════════════════════════════════════════════════════════
 -- AR OPS: server-side comic-map area cache (see server/src/game/comic_map.js)
 -- Each row is one Overpass fetch, deliberately covering a LARGER bbox than
@@ -512,7 +521,12 @@ CREATE INDEX IF NOT EXISTS idx_comic_map_cache_bounds ON comic_map_cache(south, 
 -- ═══════════════════════════════════════════════════════════════
 
 -- A scenario template — the reusable "level", built once on the web,
--- played any number of times via its hunt_sessions codes below.
+-- played any number of times via its hunt_sessions codes below. Creating a
+-- scenario (and generating its hunt_sessions codes) is restricted to
+-- is_admin OR is_creator accounts (see the ALTER TABLE users below) — an
+-- ordinary account cannot create or reach the future web editor at all.
+-- Enforcement itself belongs to the (not-yet-built) API-routes milestone;
+-- this FK/comment is the schema-level groundwork for it.
 CREATE TABLE IF NOT EXISTS hunt_scenarios (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   creator_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -568,13 +582,18 @@ CREATE TABLE IF NOT EXISTS hunt_routes (
   created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
--- A reusable, scannable code for a scenario — every scan starts a fresh
--- hunt_runs row (or joins an existing one, see hunt.js's joinHuntRun),
--- the code itself never expires until expires_at.
+-- A reusable, scannable code for ONE scenario — every scan starts a fresh
+-- hunt_runs row (or joins an existing one, see hunt.js's joinHuntRun), the
+-- code itself never expires until expires_at. Generating a code ALWAYS
+-- inserts a brand-new hunt_sessions row with a brand-new code — clicking
+-- "generate" again on the same scenario never updates/replaces this row,
+-- the old code (and any runs already started against it) keeps working
+-- independently until its own expires_at.
 CREATE TABLE IF NOT EXISTS hunt_sessions (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   scenario_id UUID NOT NULL REFERENCES hunt_scenarios(id) ON DELETE CASCADE,
   code        VARCHAR(8) UNIQUE NOT NULL, -- nanoid(8), same convention as lobbies.code
+  max_users   INTEGER,                    -- "für x User" — NULL = unlimited
   expires_at  TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '300 days'),
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
