@@ -15,10 +15,6 @@ const assert = require('assert');
 const { registerHuntSandboxHandlers } = require('../src/socket/hunt');
 
 let passed = 0, failed = 0;
-function check(name, fn) {
-  try { fn(); passed++; console.log('  ✓ ' + name); }
-  catch (e) { failed++; console.error('  ✗ ' + name + ' — ' + e.message); }
-}
 async function acheck(name, fn) {
   try { await fn(); passed++; console.log('  ✓ ' + name); }
   catch (e) { failed++; console.error('  ✗ ' + name + ' — ' + (e.stack || e.message)); }
@@ -207,7 +203,7 @@ function twoPoiScenario() {
   console.log('\n═══ TELEMETRY / ACTIONS / PERSISTENCE ═══');
   await acheck('telemetry + puzzle answer advance the run and persist progress to the fake DB', async () => {
     const db = makeFakeDb();
-    const { sessionId } = db.seedScenario({ code: 'PLAY0001', config: { progressMode: 'individual' }, poiList: twoPoiScenario() });
+    db.seedScenario({ code: 'PLAY0001', config: { progressMode: 'individual' }, poiList: twoPoiScenario() });
     const socket = makeFakeSocket('u1');
     registerHuntSandboxHandlers({}, socket, db);
     socket._fire('hunt:join_by_code', { code: 'PLAY0001' });

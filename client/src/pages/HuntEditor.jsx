@@ -52,8 +52,6 @@ export default function HuntEditor() {
   const layersRef = useRef({ markers: [], radius: null, lines: [] });
   const poisRef = useRef(pois);
   poisRef.current = pois;
-  const selectedRef = useRef(selectedId);
-  selectedRef.current = selectedId;
 
   const poiKey = p => p.id ?? p.tempId;
 
@@ -294,7 +292,7 @@ export default function HuntEditor() {
           {placing ? '📍 Klicke auf die Karte, um POIs zu setzen' : '📍 POI-Platzierung pausiert'}
         </button>
         <div style={{ fontSize: 11, color: 'var(--text2)' }}>
-          Reihenfolge von oben nach unten. "Parallel" macht ein POI zusammen mit dem vorherigen zu einer Gruppe,
+          Reihenfolge von oben nach unten. &quot;Parallel&quot; macht ein POI zusammen mit dem vorherigen zu einer Gruppe,
           die in beliebiger Reihenfolge erledigt werden kann.
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
