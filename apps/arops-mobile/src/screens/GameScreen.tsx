@@ -9,6 +9,7 @@ import { getSocket, getUser, getHeadingSettings } from '../api';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { useWatchSync } from '../hooks/useWatchSync';
 import CameraLayer from '../components/CameraLayer';
+import ShockwaveEffect from '../components/ShockwaveEffect';
 import { useIrScan } from '../hooks/useIrScan';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
@@ -367,6 +368,9 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     return totalRef.current > 0 ? remainingMs / totalRef.current : 0;
   };
   const [lastResult, setLastResult] = useState<Toast | null>(null);
+  // Bumped once per fired shot — ShockwaveEffect replays its animation
+  // whenever this changes (see its own doc comment). 0 = "never fired yet".
+  const [shotEffectKey, setShotEffectKey] = useState(0);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
@@ -548,6 +552,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       data.irScan = { deviceId: irScan.lastScan.deviceId, ts: irScan.lastScan.ts };
     }
     socket.emit('game:action', { sessionId, action: 'ar_hit_attempt', data });
+    setShotEffectKey(k => k + 1);
   };
   const useRadar = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_perk', data: { perk: 'radar' } });
@@ -1627,6 +1632,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
 
   return (
     <View style={st.wrap}>
+      {/* Schuss-Feedback — screen-center-anchoriert (wie ShotOverlay), löst
+          bei JEDEM abgesetzten Schuss aus (shoot()), unabhängig vom
+          Reichweiten-Anzeige-Toggle. */}
+      <ShockwaveEffect triggerKey={shotEffectKey} color={classAccentColor} />
       {/* Status bar — single row: timer | phase (centered) | mode indicator
           (tappable for the ranked roster). Used to be phase/timer/indicator
           on one row plus a second row (statusScoreRow) folding in the

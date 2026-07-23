@@ -24,6 +24,7 @@ import { destinationPoint, squareFieldCorners, SIM_SCENARIOS } from '@craftworks
 import type { SimScenario, SimShootBeat, SimCheckpoint } from '@craftworks/arops-shared';
 import { getSocket, getUser, createArLobby, getLastPosition, joinLobbyByCode } from '../api';
 import Icon from '../components/Icon';
+import ShockwaveEffect from '../components/ShockwaveEffect';
 import { useTheme, ThemeTokens, THEMES } from '../theme';
 import { OSM_STYLE, OSM_STYLE_DARK } from '../mapStyle';
 
@@ -112,7 +113,7 @@ function checkBotShot(beat: SimShootBeat, myUserId: string, snap: SimSnap | null
 // scenario doesn't abort the whole run.
 async function runScenario(
   scenario: SimScenario, myUserId: string, origin: { lat: number; lon: number },
-  onSnapshot: (snap: SimSnap) => void,
+  onSnapshot: (snap: SimSnap) => void, onShot: () => void,
 ): Promise<CheckResult[]> {
   const fail = (detail: string): CheckResult[] => [{ snippetKey: scenario.key, label: scenario.label, pass: false, detail }];
 
@@ -187,6 +188,7 @@ async function runScenario(
         socket.emit('game:action', {
           sessionId, action: 'ar_hit_attempt', data: { sample: sample(), targetId: beat.targetId },
         });
+        onShot();
       }, beat.tMs);
     }));
 
@@ -339,6 +341,9 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
   const [currentScenario, setCurrentScenario] = useState<SimScenario | null>(null);
   const [liveSnap, setLiveSnap] = useState<SimSnap | null>(null);
   const [mapOrigin, setMapOrigin] = useState<{ lat: number; lon: number } | null>(null);
+  // Bumped on every tester-fired shot (runScenario's onShot) — same
+  // ShockwaveEffect convention as GameScreen.
+  const [shotEffectKey, setShotEffectKey] = useState(0);
   const cancelRef = useRef(false);
 
   const start = async () => {
@@ -384,7 +389,7 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
       setProgress(`Szenario ${i + 1}/${SIM_SCENARIOS.length}`);
       setCurrentScenario(scenario);
       setLiveSnap(null);
-      const r = await runScenario(scenario, myUserId, resolvedOrigin, setLiveSnap);
+      const r = await runScenario(scenario, myUserId, resolvedOrigin, setLiveSnap, () => setShotEffectKey(k => k + 1));
       setResults(prev => [...prev, ...r]);
     }
     setCurrentScenario(null);
@@ -446,6 +451,32 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
     }
     return { type: 'FeatureCollection' as const, features };
   }, [liveSnap, mapOrigin, myUserId]);
+
+  // Schuss-Kegel des Testers — orientiert am SIMULIERTEN Kompass
+  // (scenario.testerHeadingDeg, dem exakten Wert, der auch als
+  // telemetry.sample.headingDeg an den Server geht, s. runScenario's
+  // sample()), nicht am echten Gerätekompass. Nur für Szenarien mit
+  // mindestens einem Tester-eigenen Schuss (Bot-schießt-zurück-Szenarien
+  // haben keinen sinnvollen "eigenen" Kegel zu zeigen).
+  const shotConeGeoJSON = useMemo(() => {
+    if (!currentScenario || !mapOrigin) return null;
+    if (!currentScenario.shoots.some(b => b.shooterId === 'tester')) return null;
+    const maxRangeM = currentScenario.hitConfig?.maxRangeM ?? 35;
+    const halfAngleDeg = currentScenario.hitConfig?.baseConeHalfAngleDeg ?? 15;
+    const heading = currentScenario.testerHeadingDeg;
+    const left = destinationPoint(mapOrigin, heading - halfAngleDeg, maxRangeM);
+    const right = destinationPoint(mapOrigin, heading + halfAngleDeg, maxRangeM);
+    return {
+      type: 'FeatureCollection' as const,
+      features: [{
+        type: 'Feature' as const, properties: {},
+        geometry: {
+          type: 'Polygon' as const,
+          coordinates: [[[mapOrigin.lon, mapOrigin.lat], [left.lon, left.lat], [right.lon, right.lat], [mapOrigin.lon, mapOrigin.lat]]],
+        },
+      }],
+    };
+  }, [currentScenario, mapOrigin]);
 
   return (
     <View style={st.root}>
@@ -509,6 +540,12 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
                 <LineLayer id="simFieldLine" style={{ lineColor: theme.accent, lineWidth: 2, lineOpacity: 0.6 }} />
               </ShapeSource>
             )}
+            {shotConeGeoJSON && (
+              <ShapeSource id="simShotCone" shape={shotConeGeoJSON as any}>
+                <FillLayer id="simShotConeFill" style={{ fillColor: '#40a0ff', fillOpacity: 0.25 }} />
+                <LineLayer id="simShotConeLine" style={{ lineColor: '#40a0ff', lineWidth: 1.5, lineOpacity: 0.6 }} />
+              </ShapeSource>
+            )}
             {zoneGeoJSON && (
               <ShapeSource id="simZones" shape={zoneGeoJSON as any}>
                 <CircleLayer id="simZoneDots" style={{
@@ -527,6 +564,10 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
               </ShapeSource>
             )}
           </MapView>
+          {/* Tester ist immer exakt bildschirmzentriert (Camera folgt fest
+              auf mapOrigin, scrollEnabled=false) — gleicher Anker wie
+              GameScreens ShockwaveEffect. */}
+          <ShockwaveEffect triggerKey={shotEffectKey} color="#40a0ff" />
         </View>
       )}
 
