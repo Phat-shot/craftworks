@@ -145,12 +145,39 @@ function checkArrival(run, key, sample) {
 }
 
 /**
+ * Checks a submitted answer against a puzzle POI's puzzle_config — 3 types,
+ * the web editor's puzzle sub-editor (HuntEditor.jsx) is the only writer of
+ * this shape:
+ *  'text'   (default, backward compatible with the original string-only
+ *            shape) — case-insensitive string equality.
+ *  'choice' — answer is the selected option's index, compared to
+ *             puzzle_config.correctIndex.
+ *  'number' — answer compared to puzzle_config.answer within an optional
+ *             puzzle_config.tolerance (default 0, exact match).
+ */
+function checkPuzzleAnswer(poi, answer) {
+  const cfg = poi.puzzle_config || {};
+  if (cfg.type === 'choice') {
+    const idx = typeof answer === 'number' ? answer : parseInt(answer, 10);
+    return Number.isFinite(idx) && idx === cfg.correctIndex;
+  }
+  if (cfg.type === 'number') {
+    const n = typeof answer === 'number' ? answer : parseFloat(answer);
+    if (!Number.isFinite(n) || typeof cfg.answer !== 'number') return false;
+    const tolerance = Number.isFinite(cfg.tolerance) ? cfg.tolerance : 0;
+    return Math.abs(n - cfg.answer) <= tolerance;
+  }
+  const expected = cfg.answer;
+  return typeof expected === 'string' && typeof answer === 'string'
+    ? expected.trim().toLowerCase() === answer.trim().toLowerCase()
+    : expected === answer;
+}
+
+/**
  * Completes a 'puzzle' POI's task — checks `answer` against the POI's
- * configured answer (string/number equality, case-insensitive for
- * strings — good enough for the foundation; a richer puzzle_config shape
- * is a web-editor-milestone concern, not an engine one). `poiId` picks
- * which of the current group's POIs this answer is for (only ambiguous
- * inside a parallel group with more than one puzzle active at once).
+ * configured answer (see checkPuzzleAnswer). `poiId` picks which of the
+ * current group's POIs this answer is for (only ambiguous inside a
+ * parallel group with more than one puzzle active at once).
  */
 function submitPuzzleAnswer(run, key, poiId, answer) {
   const track = run.progress[key];
@@ -159,10 +186,7 @@ function submitPuzzleAnswer(run, key, poiId, answer) {
   if (!poi || poi.poi_type !== 'puzzle') return { ok: false, err: 'not_a_puzzle' };
   if (track.completedPoiIds.includes(poi.id)) return { ok: false, err: 'already_completed' };
   if (!track.poiState[poi.id]?.arrivedAt) return { ok: false, err: 'not_at_poi' };
-  const expected = poi.puzzle_config?.answer;
-  const correct = typeof expected === 'string' && typeof answer === 'string'
-    ? expected.trim().toLowerCase() === answer.trim().toLowerCase()
-    : expected === answer;
+  const correct = checkPuzzleAnswer(poi, answer);
   if (!correct) {
     pushEvent(run, 'puzzle_wrong', { key, poiId: poi.id });
     return { ok: true, correct: false };

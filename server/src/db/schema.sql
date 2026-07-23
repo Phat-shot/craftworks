@@ -655,3 +655,11 @@ CREATE TABLE IF NOT EXISTS hunt_reports (
 CREATE INDEX IF NOT EXISTS idx_hunt_pois_scenario   ON hunt_pois(scenario_id);
 CREATE INDEX IF NOT EXISTS idx_hunt_routes_scenario ON hunt_routes(scenario_id);
 CREATE INDEX IF NOT EXISTS idx_hunt_runs_session    ON hunt_runs(session_id);
+
+-- Added after hunt_pois already shipped (in an earlier commit) — the
+-- CREATE TABLE IF NOT EXISTS above is a no-op on any DB that already ran
+-- it, so this column needs its own ALTER TABLE to actually reach an
+-- already-migrated environment (see server/src/index.js's migrate(): the
+-- incremental path only re-applies CREATE TABLE/INDEX IF NOT EXISTS and
+-- ALTER TABLE...ADD COLUMN IF NOT EXISTS statements, matched by regex).
+ALTER TABLE hunt_pois ADD COLUMN IF NOT EXISTS carry_pair_poi_id UUID REFERENCES hunt_pois(id) ON DELETE SET NULL;

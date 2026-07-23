@@ -99,6 +99,25 @@ async function insertPoisAndRoutes(db, scenarioId, pois, routes) {
         r.path_geojson ? JSON.stringify(r.path_geojson) : null]
     );
   }
+  // Carry pairing — reciprocal link between a carry_from and its matching
+  // carry_to POI (schema.sql's hunt_pois.carry_pair_poi_id). Written to
+  // BOTH sides regardless of which one(s) the client actually sent
+  // carryPairTempId on, so the link can never end up one-sided/stale — the
+  // editor keeps both ends in sync locally too (see HuntEditor.jsx), this
+  // is just a server-side safety net on top of that.
+  const pairs = new Map(); // realId -> realId
+  for (const p of pois) {
+    const pairRef = p.carryPairTempId ?? p.carry_pair_id ?? p.carry_pair_poi_id;
+    if (!pairRef) continue;
+    const selfId = idMap.get(String(p.tempId ?? p.id));
+    const otherId = idMap.get(String(pairRef));
+    if (!selfId || !otherId) continue;
+    pairs.set(selfId, otherId);
+    pairs.set(otherId, selfId);
+  }
+  for (const [selfId, otherId] of pairs) {
+    await db.query('UPDATE hunt_pois SET carry_pair_poi_id=$1 WHERE id=$2', [otherId, selfId]);
+  }
   return idMap;
 }
 
