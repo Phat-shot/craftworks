@@ -400,6 +400,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const telemetry = useTelemetry(socket, sessionId);
   const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
   const radarDurationMsRef = useRef(15_000);
+  const debugModeRef = useRef(false);
   // Action-bar cooldown/duration indicators (GlowBorder above): the server only
   // ever sends *RemainingMs, never each perk's total duration (which varies
   // by field-size auto-scaling and host overrides anyway) — so the ring's
@@ -555,6 +556,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       // wrong for anyone with a non-default class.
       if (s.me?.hitRangeM ?? s.hitRangeM) hitRangeRef.current = (s.me?.hitRangeM ?? s.hitRangeM)!;
       if (s.timings?.radarDurationMs) radarDurationMsRef.current = s.timings.radarDurationMs;
+      debugModeRef.current = !!s.debugMode;
       setSnap(s);
     };
     const onResult = (r: any) => {
@@ -562,7 +564,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         let toast: Toast;
         if (r.hit) toast = { icon: 'crosshair', text: `Treffer! (${Math.round((r.confidence || 0) * 100)}%)` };
         else if (r.err) toast = ERR_DE[r.err] || { icon: 'close', text: r.err };
-        else if (r.near) toast = { icon: 'windy', text: `Knapp! ${r.near.deltaDeg}° daneben (Toleranz ${r.near.toleranceDeg}°, ~${r.near.distanceM} m)` };
+        else if (r.near && debugModeRef.current) toast = { icon: 'windy', text: `Knapp! ${r.near.deltaDeg}° daneben (Toleranz ${r.near.toleranceDeg}°, ~${r.near.distanceM} m)` };
         else if (r.reason === 'no_candidates') toast = { icon: 'close', text: 'Kein gültiges Ziel (Team? Eingefroren? Keine Daten?)' };
         else if (r.reason === 'target_stale') toast = { icon: 'signalOff', text: 'Gegner-Position veraltet — dessen App/Display muss aktiv sein!' };
         else if (r.reason === 'low_confidence') toast = { icon: 'signal', text: 'Im Kegel, aber Datenqualität zu niedrig (GPS/Aktualität)' };
@@ -1762,6 +1764,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <Text style={st.frozenTxt}>EINGEFROREN — {Math.ceil(frozenMs / 1000)}s · Stehen bleiben! Bewegung verlängert.</Text>
         </View>
       )}
+      {/* proximityAlert is server-gated now (arops.js tickArops) — the real
+          always-on distance check only ever fires in debug sessions, so
+          this banner only shows for a real (non-debug) player when
+          Aufscheuchen faked it, exactly the "only via perks" requirement.
+          No client-side change needed beyond this comment. */}
       {snap?.me?.proximityAlert && (
         <View style={st.proxAlert}>
           <Icon name="warning" size={13} color="#fff" />

@@ -143,16 +143,25 @@ check('radar on cooldown after use', () => {
   assert.ok(r.remainingMs > 0);
 });
 
-check('proximity warner triggers within range', () => {
-  // H1 is 50m from seeker (range 40m) → no alert yet
-  arops.tickArops(gs);
-  assert.equal(gs.players.H1.proximityAlert, false);
-  // Seeker moves to 30m from H1
-  const near = shared.destinationPoint(posH1, 180, 30);
-  arops.actionArTelemetry(gs, 'S', { sample: sampleAt(near, { ts: Date.now() + 5000 }) });
-  arops.tickArops(gs);
-  assert.equal(gs.players.H1.proximityAlert, true, 'H1 should be warned');
-  assert.equal(gs.players.H2.proximityAlert, false, 'H2 is 100m+ away');
+check('proximity warner triggers within range (debug-only now — see arops.js tickArops)', () => {
+  // The real passive distance check only runs in debug sessions (fixes a
+  // position leak — see the Proximity-Alert-Gating change); toggled just
+  // for this check so the "Snapshot privacy" checks below (which rely on
+  // fog-of-war actually being active) aren't affected.
+  gs.cfg.debugMode = true;
+  try {
+    // H1 is 50m from seeker (range 40m) → no alert yet
+    arops.tickArops(gs);
+    assert.equal(gs.players.H1.proximityAlert, false);
+    // Seeker moves to 30m from H1
+    const near = shared.destinationPoint(posH1, 180, 30);
+    arops.actionArTelemetry(gs, 'S', { sample: sampleAt(near, { ts: Date.now() + 5000 }) });
+    arops.tickArops(gs);
+    assert.equal(gs.players.H1.proximityAlert, true, 'H1 should be warned');
+    assert.equal(gs.players.H2.proximityAlert, false, 'H2 is 100m+ away');
+  } finally {
+    gs.cfg.debugMode = false;
+  }
 });
 
 // ── Hits ────────────────────────────────────────────────────

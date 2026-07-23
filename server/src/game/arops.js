@@ -71,6 +71,20 @@ function pushEvent(gs, type, data) {
 function isFrozen(p, t) { return t < (p.frozenUntil || 0); }
 function isCloaked(p, t) { return t < (p.cloakUntil || 0); }
 
+// Shared cooldown check for actionArUsePerk's perk/ping branches — was
+// hand-duplicated per branch (elapsed/compare/error-shape all repeated
+// identically). Only CHECKS; the caller still assigns
+// container[key] = t itself once it's actually ready to consume the
+// cooldown (some branches, e.g. reveal_trap, have a further failure check
+// — missing position — that must be able to reject WITHOUT consuming the
+// cooldown, so the assignment can't be folded into this helper).
+function cooldownError(container, key, cooldownMs, t) {
+  const last = container[key];
+  const elapsed = t - last;
+  if (last && elapsed < cooldownMs) return { ok: false, err: 'cooldown', remainingMs: cooldownMs - elapsed };
+  return null;
+}
+
 function applyFreeze(gs, target, byUserId, t) {
   target.frozenUntil = t + gs.timings.freezeMs;
   target.freezeAnchor = target.lastAccepted
@@ -1761,10 +1775,8 @@ function actionArUsePerk(gs, userId, data) {
     if (!p.team) return { ok: false, err: 'no_team' };
     const lat = data?.lat, lon = data?.lon;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false, err: 'bad_location' };
-    const elapsed = t - p.lastPingAt;
-    if (p.lastPingAt && elapsed < gs.cfg.pingCooldownMs) {
-      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.pingCooldownMs - elapsed };
-    }
+    const cd = cooldownError(p, 'lastPingAt', gs.cfg.pingCooldownMs, t);
+    if (cd) return cd;
     p.lastPingAt = t;
     const pings = gs.teamPings[p.team];
     pings.push({ lat, lon, byUserId: userId, ts: t, expiresAt: t + gs.cfg.pingDurationMs });
@@ -1773,10 +1785,8 @@ function actionArUsePerk(gs, userId, data) {
   }
 
   if (perk === 'radar') {
-    const elapsed = t - p.perks.radarLastUsed;
-    if (p.perks.radarLastUsed && elapsed < gs.cfg.radarCooldownMs) {
-      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.radarCooldownMs - elapsed };
-    }
+    const cd = cooldownError(p.perks, 'radarLastUsed', gs.cfg.radarCooldownMs, t);
+    if (cd) return cd;
     p.perks.radarLastUsed = t;
     const opponents = Object.values(gs.players).filter(c =>
       c.userId !== userId && c.status === 'alive' && opponentOf(gs, p, c) && c.lastAccepted && !isCloaked(c, t)
@@ -1830,10 +1840,8 @@ function actionArUsePerk(gs, userId, data) {
 
   if (perk === 'drone') {
     if (p.role !== 'hider') return { ok: false, err: 'perk_wrong_role' };
-    const elapsed = t - p.perks.droneLastUsed;
-    if (p.perks.droneLastUsed && elapsed < gs.cfg.droneCooldownMs) {
-      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.droneCooldownMs - elapsed };
-    }
+    const cd = cooldownError(p.perks, 'droneLastUsed', gs.cfg.droneCooldownMs, t);
+    if (cd) return cd;
     p.perks.droneLastUsed = t;
     const range = shared.scaleDroneRangeM(shared.polygonAreaM2(gs.polygon));
     const alert = !!(p.lastAccepted && Object.values(gs.players).some(c =>
@@ -1846,10 +1854,8 @@ function actionArUsePerk(gs, userId, data) {
 
   if (perk === 'cloak') {
     if (p.role !== 'hider' && p.class !== 'bomber') return { ok: false, err: 'perk_wrong_role' };
-    const elapsed = t - p.perks.cloakLastUsed;
-    if (p.perks.cloakLastUsed && elapsed < gs.cfg.cloakCooldownMs) {
-      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.cloakCooldownMs - elapsed };
-    }
+    const cd = cooldownError(p.perks, 'cloakLastUsed', gs.cfg.cloakCooldownMs, t);
+    if (cd) return cd;
     p.perks.cloakLastUsed = t;
     p.cloakUntil = t + gs.cfg.cloakDurationMs;
     pushEvent(gs, 'cloak_used', { userId });
@@ -1858,10 +1864,8 @@ function actionArUsePerk(gs, userId, data) {
 
   if (perk === 'fake_marker') {
     if (p.role !== 'hider' && p.class !== 'sniper') return { ok: false, err: 'perk_wrong_role' };
-    const elapsed = t - p.perks.fakeMarkerLastUsed;
-    if (p.perks.fakeMarkerLastUsed && elapsed < gs.cfg.fakeMarkerCooldownMs) {
-      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.fakeMarkerCooldownMs - elapsed };
-    }
+    const cd = cooldownError(p.perks, 'fakeMarkerLastUsed', gs.cfg.fakeMarkerCooldownMs, t);
+    if (cd) return cd;
     p.perks.fakeMarkerLastUsed = t;
     const fallback = p.lastAccepted ? { lat: p.lastAccepted.lat, lon: p.lastAccepted.lon } : null;
     p.fakeMarkers = [randomPointInPolygon(gs.polygon) || fallback, randomPointInPolygon(gs.polygon) || fallback]
@@ -1873,10 +1877,8 @@ function actionArUsePerk(gs, userId, data) {
 
   if (perk === 'aufscheuchen') {
     if (p.role !== 'seeker') return { ok: false, err: 'perk_wrong_role' };
-    const elapsed = t - p.perks.aufscheuchenLastUsed;
-    if (p.perks.aufscheuchenLastUsed && elapsed < gs.cfg.aufscheuchenCooldownMs) {
-      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.aufscheuchenCooldownMs - elapsed };
-    }
+    const cd = cooldownError(p.perks, 'aufscheuchenLastUsed', gs.cfg.aufscheuchenCooldownMs, t);
+    if (cd) return cd;
     p.perks.aufscheuchenLastUsed = t;
     for (const h of Object.values(gs.players)) {
       if (h.role === 'hider' && h.status === 'alive') h.fakeProximityUntil = t + gs.cfg.aufscheuchenDurationMs;
@@ -1891,10 +1893,8 @@ function actionArUsePerk(gs, userId, data) {
   // range before anything is revealed.
   if (perk === 'reveal_trap') {
     if (p.class !== 'scout') return { ok: false, err: 'perk_wrong_role' };
-    const elapsed = t - p.perks.revealTrapLastUsed;
-    if (p.perks.revealTrapLastUsed && elapsed < gs.cfg.revealTrapCooldownMs) {
-      return { ok: false, err: 'cooldown', remainingMs: gs.cfg.revealTrapCooldownMs - elapsed };
-    }
+    const cd = cooldownError(p.perks, 'revealTrapLastUsed', gs.cfg.revealTrapCooldownMs, t);
+    if (cd) return cd;
     if (!p.lastAccepted) return { ok: false, err: 'no_position' };
     p.perks.revealTrapLastUsed = t;
     p.trap = {
@@ -2070,19 +2070,29 @@ function tickArops(gs) {
 
   if (gs.cfg.simulation) tickSimBots(gs, t); else tickBots(gs, t);
 
-  // Proximity warner (active shoot phases only)
+  // Proximity warner (active shoot phases only) — the real always-on
+  // distance check only ever fires in debug sessions now (diagnostic value
+  // only, see the debug bar in GameScreen.tsx); a passive "opponent nearby"
+  // signal with no cooldown and no player action behind it turned out to be
+  // a genuine, undodgeable position leak in every normal match ("Gegner in
+  // der Nähe" fired for every player regardless of any perk use). The one
+  // legitimate always-on source stays: Aufscheuchen's fake trigger IS the
+  // perk's entire purpose (spook a hider into thinking a seeker is close),
+  // so it keeps firing regardless of debugMode.
   for (const p of Object.values(gs.players)) {
     p.proximityAlert = false;
-    if (p.status !== 'alive' || !p.lastAccepted || !mode.shootPhases.includes(gs.phase)) continue;
-    for (const o of Object.values(gs.players)) {
-      if (o.userId === p.userId || o.status !== 'alive' || !opponentOf(gs, p, o) || !o.lastAccepted) continue;
-      if (isCloaked(o, t)) continue; // Cloak defeats detection sensors, not point-blank hits
-      if (shared.haversineMeters(p.lastAccepted, o.lastAccepted) <= gs.cfg.proximityRangeM) {
-        p.proximityAlert = true;
-        break;
+    if (gs.cfg.debugMode && p.status === 'alive' && p.lastAccepted && mode.shootPhases.includes(gs.phase)) {
+      for (const o of Object.values(gs.players)) {
+        if (o.userId === p.userId || o.status !== 'alive' || !opponentOf(gs, p, o) || !o.lastAccepted) continue;
+        if (isCloaked(o, t)) continue; // Cloak defeats detection sensors, not point-blank hits
+        if (shared.haversineMeters(p.lastAccepted, o.lastAccepted) <= gs.cfg.proximityRangeM) {
+          p.proximityAlert = true;
+          break;
+        }
       }
     }
-    // Aufscheuchen: seeker-faked alert, indistinguishable from a real one
+    // Aufscheuchen: seeker-faked alert, indistinguishable from a real one —
+    // always active, independent of debugMode (see comment above).
     if (t < (p.fakeProximityUntil || 0)) p.proximityAlert = true;
   }
 

@@ -1257,6 +1257,10 @@ console.log('\n═══ H&S PERKS ═══');
 
   check('Cloak: cloaked hider does not trigger seeker proximity alert even at 0m', () => {
     const gs = mkHS();
+    // The real passive proximity check only runs in debug sessions now (see
+    // the Proximity-Alert-Gating change) — this gs is a throwaway fixture
+    // local to this check, so debugMode here can't leak into any other test.
+    gs.cfg.debugMode = true;
     tel(gs, 'H1', MUC); tel(gs, 'S1', MUC);
     arops.actionArUsePerk(gs, 'H1', { perk: 'cloak' });
     tick(gs, 100);
