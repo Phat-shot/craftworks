@@ -90,17 +90,20 @@ cd apps/arops-mobile && npm run sync-shared
   zusätzliches Asset auf derselben Release liegengeblieben statt sie zu
   ersetzen — mit fixem Namen ersetzt jeder Build zuverlässig genau die eine
   Datei pro Branch, es gibt immer nur den neuesten Stand
-- **Versionsschema**: `apps/arops-mobile/app.json` `"version"` (Wear-Pendant
-  `apps/arops-wear/app/build.gradle.kts` `versionName`, muss identisch
-  mitgezogen werden) ist reine In-App-Anzeige (Startmenü/Einstellungen bzw.
-  Pairing-/Debug-Screen der Uhr) — **nicht** mehr Teil des APK-Dateinamens
-  (s.o.). Jedes Release (Merge auf main) **+1**, jeder Bugfix auf test
-  **+0.1** — von Hand vor dem Build hochzählen, beide Apps zusammen.
-  Zusätzlich wird bei jedem Build automatisch die Kurz-Commit-SHA
-  eingebettet (`COMMIT_SHA` in beiden APK-Workflows, Plattform analog aus
-  `server/src/VERSION`) und ebenfalls in der App angezeigt — die
-  verlässlichere Angabe, da sie nie von Hand gepflegt werden muss und nicht
-  drifted. Beide Apps bekommen auf test zusätzlich App-Channel-
+- **Versionsschema**: kein von Hand gepflegter Versionsstring mehr (das
+  alte Schema — `app.json` `"version"`/Wear-`versionName`, +1 pro
+  main-Release, +0.1 pro test-Bugfix — driftete wiederholt aus dem Takt,
+  weil das Hochzählen vor dem Push leicht vergessen wurde). Stattdessen
+  treibt `BUILD_NUMBER` (`GITHUB_RUN_NUMBER`, von GitHub selbst garantiert
+  monoton steigend, gesetzt in beiden APK-Workflows) sowohl
+  `android.versionCode`/Wear-`versionCode` (macht Sideload-Updates über
+  eine bestehende Installation hinweg erstmals korrekt möglich) als auch
+  die In-App-Anzeige (Startmenü/Einstellungen bzw. Pairing-/Debug-Screen
+  der Uhr, `apps/arops-mobile/src/config.ts`'s `BUILD_NUMBER` /
+  Wear-`BuildConfig.VERSION_NAME`). Weiterhin zusätzlich die Kurz-Commit-SHA
+  (`COMMIT_SHA` in beiden APK-Workflows, Plattform analog aus
+  `server/src/VERSION`), da sie den exakten Quellstand eindeutig
+  identifiziert. Beide Apps bekommen auf test zusätzlich App-Channel-
   Differenzierung (applicationId + Label mit "Beta"-Suffix, bei der
   Handy-App zusätzlich Icon-Badge), damit main- und test-Build gleichzeitig
   auf demselben Gerät installiert sein können

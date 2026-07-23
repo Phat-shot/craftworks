@@ -3,7 +3,6 @@ import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, BackHandle
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import {
   restoreSession, loadLastPosition, createArLobby, getUser, logout,
   loadHeadingSettings, getHeadingSettings, saveHeadingSettings,
@@ -12,7 +11,7 @@ import {
   getActiveGame, ActiveGame, onSessionExpired,
 } from './src/api';
 import type { ThemeName } from './src/api';
-import { SERVER_URL, BUILD_TIME, COMMIT_SHA } from './src/config';
+import { SERVER_URL, BUILD_TIME, COMMIT_SHA, BUILD_NUMBER } from './src/config';
 import Icon from './src/components/Icon';
 import { useWatchSync } from './src/hooks/useWatchSync';
 import { useEspSync } from './src/hooks/useEspSync';
@@ -246,7 +245,7 @@ function AppShell({ themeName, setThemeName }: {
         <View style={st.center}>
           <Icon name="satellite" size={56} color={theme.accent} style={{ marginBottom: 6 }} />
           <Text style={st.title}>AR Ops</Text>
-          <Text style={st.version}>v{Constants.expoConfig?.version || '–'}</Text>
+          <Text style={st.version}>Build {BUILD_NUMBER}</Text>
           <View style={st.subRow}>
             <Text style={st.sub}>Hallo {getUser()?.username}</Text>
             <Icon name="wave" size={14} color={theme.text3} />
@@ -338,7 +337,7 @@ function AppShell({ themeName, setThemeName }: {
               <Text style={st.modalTitle}>Info</Text>
               <TouchableOpacity onPress={() => setInfoOpen(false)}><Icon name="close" size={18} color={theme.text2} /></TouchableOpacity>
             </View>
-            <Text style={st.modalLine}>AR Ops · Version {Constants.expoConfig?.version || '–'}</Text>
+            <Text style={st.modalLine}>AR Ops · Build {BUILD_NUMBER}</Text>
             <Text style={st.modalLine}>Server: {SERVER_URL}</Text>
             <Text style={st.modalHint}>GPS+Kompass-basiertes Outdoor-Spiel — Hide&Seek, Domination, CTF, Seek&Destroy.</Text>
           </View>
@@ -354,7 +353,7 @@ function AppShell({ themeName, setThemeName }: {
               <TouchableOpacity onPress={() => setSettingsOpen(false)}><Icon name="close" size={18} color={theme.text2} /></TouchableOpacity>
             </View>
             <Text style={st.modalLine}>Angemeldet als {getUser()?.username}</Text>
-            <Text style={st.modalHint}>Build: {BUILD_TIME} · {COMMIT_SHA}</Text>
+            <Text style={st.modalHint}>Build #{BUILD_NUMBER} · {BUILD_TIME} · {COMMIT_SHA}</Text>
             {/* Design — device-weite Optik, wirkt auf alle Screens sofort
                 (ThemeProvider oben in App), persistiert über AsyncStorage
                 (theme.ts/api.ts). 'color' ist das bisherige, einzige Design

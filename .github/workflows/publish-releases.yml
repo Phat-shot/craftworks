@@ -24,11 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Version/Commit/Stand ermitteln
+      - name: Build-Nummer/Commit/Stand ermitteln
         id: info
         run: |
-          VERSION=$(node -p "require('./apps/arops-mobile/app.json').expo.version")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           echo "commit=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "stand=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
 
@@ -42,7 +41,7 @@ jobs:
       - name: README aktualisieren
         run: |
           FILE="releases-repo/README.md"
-          LINE="**Version:** ${{ steps.info.outputs.version }} · **Commit:** \`${{ steps.info.outputs.commit }}\` · **Stand:** ${{ steps.info.outputs.stand }}"
+          LINE="**Build:** #${{ steps.info.outputs.build }} · **Commit:** \`${{ steps.info.outputs.commit }}\` · **Stand:** ${{ steps.info.outputs.stand }}"
           awk -v line="$LINE" '
             /<!-- AUTO-GENERATED:START -->/ { print; print line; skip=1; next }
             /<!-- AUTO-GENERATED:END -->/ { skip=0 }
@@ -56,5 +55,5 @@ jobs:
           git config user.email "actions@github.com"
           git add README.md
           git diff --cached --quiet && echo "Nichts geändert." && exit 0
-          git commit -m "Release ${{ steps.info.outputs.version }} (${{ steps.info.outputs.commit }})"
+          git commit -m "Release #${{ steps.info.outputs.build }} (${{ steps.info.outputs.commit }})"
           git push

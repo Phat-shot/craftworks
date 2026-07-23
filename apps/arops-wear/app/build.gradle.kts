@@ -22,18 +22,23 @@ android {
         // itself no longer supports anything older.
         minSdk = 30
         targetSdk = 34
-        versionCode = 1
-        // Versionsschema (siehe CLAUDE.md): jedes Release (main) +1, jeder
-        // Bugfix auf test +0.1 — von Hand hochzählen, gemeinsam mit
-        // apps/arops-mobile/app.json "version" (dieselbe Zählung, beide
-        // Apps gehören zum selben AR-Ops-Release).
-        versionName = "1.4"
+        // Versionsschema (siehe CLAUDE.md): kein Hand-Zähler mehr — beide
+        // Apps liefen wiederholt aus dem Takt, weil das Hochzählen vor
+        // jedem Push leicht vergessen wurde. BUILD_NUMBER (gesetzt in
+        // .github/workflows/wear-apk.yml aus GITHUB_RUN_NUMBER, von GitHub
+        // selbst garantiert monoton steigend) treibt jetzt sowohl
+        // versionCode (macht Sideload-Updates über eine bestehende
+        // Installation hinweg erstmals korrekt möglich — vorher immer 1,
+        // Android verlangt dafür einen strikt steigenden Wert) als auch
+        // versionName (In-App-Anzeige, siehe PairingScreen.kt/
+        // DebugScreen.kt).
+        versionCode = System.getenv("BUILD_NUMBER")?.toIntOrNull() ?: 1
+        versionName = System.getenv("BUILD_NUMBER") ?: "dev"
         resValue("string", "app_name", if (isMainChannel) "AR Ops Radar" else "AR Ops Radar Beta")
         // Set per build in .github/workflows/wear-apk.yml — shown next to
-        // BuildConfig.VERSION_NAME in ui/PairingScreen.kt + ui/DebugScreen.kt.
-        // versionName above is bumped by hand and can drift out of sync with
-        // what's actually running (it did, repeatedly); this always
-        // unambiguously identifies the source commit.
+        // BuildConfig.VERSION_NAME (now itself the build number, see above)
+        // in ui/PairingScreen.kt + ui/DebugScreen.kt — unambiguously
+        // identifies the exact source commit a build came from.
         buildConfigField("String", "COMMIT_SHA", "\"${System.getenv("COMMIT_SHA") ?: "dev"}\"")
     }
 

@@ -32,6 +32,15 @@ module.exports = ({ config }) => {
           ? config.android.adaptiveIcon.foregroundImage
           : './assets/icons/adaptive-foreground-beta.png',
       },
+      // Versionsschema (see CLAUDE.md): no more hand-bumped app.json
+      // "version" — it drifted out of sync repeatedly. BUILD_NUMBER (set in
+      // .github/workflows/apk.yml from GITHUB_RUN_NUMBER, GitHub's own
+      // guaranteed-monotonic per-workflow counter) drives versionCode
+      // instead, matching the Wear app's build.gradle.kts. First time this
+      // has ever been a real strictly-increasing value — Android needs
+      // that for a sideload install to upgrade in place instead of always
+      // requiring an uninstall first (versionCode was static 1 before).
+      versionCode: parseInt(process.env.BUILD_NUMBER || '1', 10),
     },
     extra: {
       ...config.extra,
@@ -40,11 +49,13 @@ module.exports = ({ config }) => {
       // Settings screen (App.tsx) so testers can tell which build they're
       // actually running. Falls back to "now" for local dev builds.
       buildTime: process.env.BUILD_TIME || new Date().toISOString(),
-      // Short commit SHA — the version number in app.json is bumped by
-      // hand and drifts out of sync easily (it did, repeatedly); this is
-      // the one value that always unambiguously identifies the exact
-      // source a build came from.
+      // Short commit SHA — unambiguously identifies the exact source a
+      // build came from, independent of the (now purely nominal) app.json
+      // "version" field.
       commitSha: process.env.COMMIT_SHA || 'dev',
+      // Replaces app.json "version" as the in-app-displayed identifier —
+      // see the versionCode comment above for why.
+      buildNumber: process.env.BUILD_NUMBER || 'dev',
     },
   };
 };
