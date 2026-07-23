@@ -128,30 +128,30 @@ const DEBUG_COOLDOWNS = {
   fakeMarkerCooldownMs: 15_000, aufscheuchenCooldownMs: 15_000,
 };
 
-// Shared icon-toggle-group renderer — was previously duplicated ad hoc for
-// onHit (2 buttons) and foundMode (3 buttons), both living in the mode row.
-// Both are "what happens to a hit/found player" controls, just for different
-// mode families; this is the one shared shape for that pattern, now living
-// in each mode's own submode row instead of the mode-selection row.
-function IconToggleGroup<T extends string>({
-  options, value, onChange, theme, st,
+// One button per toggle, not one button per option — tapping cycles to the
+// next option (2 options = a plain flip), the button's own icon/label
+// always shows whichever is CURRENT. Every submode toggle uses this same
+// shape now (was previously a row of N separate buttons, one highlighted —
+// that read as N choices instead of 1 setting).
+function CycleToggle<T extends string>({
+  options, value, onChange, theme, st, disabled,
 }: {
-  options: { value: T; icon: IconName; title: string; body: string }[];
+  options: { value: T; icon: IconName; label: string; title: string; body: string }[];
   value: T;
   onChange: (v: T) => void;
   theme: ThemeTokens;
   st: ReturnType<typeof makeStyles>;
+  disabled?: boolean;
 }) {
+  const idx = Math.max(0, options.findIndex(o => o.value === value));
+  const current = options[idx]!;
   return (
-    <View style={st.modeRowToggle}>
-      {options.map(o => (
-        <TouchableOpacity key={o.value} style={[st.iconBtnLg, value === o.value && st.smallBtnActive]}
-          onPress={() => onChange(o.value)}
-          onLongPress={() => Alert.alert(o.title, o.body)}>
-          <Icon name={o.icon} size={17} color={value === o.value ? theme.accent : theme.text2} />
-        </TouchableOpacity>
-      ))}
-    </View>
+    <TouchableOpacity style={[st.smallBtnRow, st.smallBtnActive]} disabled={disabled}
+      onPress={() => onChange(options[(idx + 1) % options.length]!.value)}
+      onLongPress={() => Alert.alert(current.title, current.body)}>
+      <Icon name={current.icon} size={13} color={theme.accent} />
+      <Text style={[st.smallTxt, st.smallTxtActive]}>{current.label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -668,26 +668,17 @@ export default function LobbyScreen({
           statt weiterer SUB_MODES-Einträge. */}
       {isHost && subMode === 'hide_and_seek' && (
         <View style={st.rowBtns}>
-          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'classic' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ hsVariant: 'classic' })}
-            onLongPress={() => Alert.alert('Team', GAME_MODE_PROFILES.hide_and_seek?.shortDescription || '')}>
-            <Icon name="ghost" size={13} color={hsVariant === 'classic' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Team</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'ffa' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ hsVariant: 'ffa' })}
-            onLongPress={() => Alert.alert('Jeder gegen jeden',
-              GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
-            <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, hsVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'the_ship' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ hsVariant: 'the_ship' })}
-            onLongPress={() => Alert.alert('The Ship',
-              GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription || '')}>
-            <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
-          </TouchableOpacity>
+          {/* Toggle 1: Team / Single (Jeder gegen jeden) / The Ship — ein
+              Button, der durchschaltet, statt 3 nebeneinander. */}
+          <CycleToggle theme={theme} st={st} value={hsVariant}
+            onChange={v => emitUpdate({ hsVariant: v })}
+            options={[
+              { value: 'classic', icon: 'ghost', label: 'Team', title: 'Team', body: GAME_MODE_PROFILES.hide_and_seek?.shortDescription || '' },
+              { value: 'ffa', icon: 'crosshair', label: 'Jeder gegen jeden', title: 'Jeder gegen jeden',
+                body: GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '' },
+              { value: 'the_ship', icon: 'mask', label: 'The Ship', title: 'The Ship',
+                body: GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription || '' },
+            ]} />
           {/* Toggle 2 + Toggle 3 — 2 unabhängige Schalter statt eines
               verschmolzenen 3-Wege-Werts: was ein gefundener Hider wird,
               WENN er nicht einfriert (Sucher/Zuschauer), und getrennt davon
@@ -698,11 +689,11 @@ export default function LobbyScreen({
               "Gefundenes". */}
           {isHost && rolesApply && (
             <>
-              <IconToggleGroup theme={theme} st={st} value={foundMode}
+              <CycleToggle theme={theme} st={st} value={foundMode}
                 onChange={v => emitUpdate({ foundMode: v })}
                 options={[
-                  { value: 'seeker', icon: 'magnify', title: 'Weiterspielen (Sucher)', body: 'Gefundene Hider spielen sofort als Sucher weiter (falls nicht eingefroren).' },
-                  { value: 'spectator', icon: 'binoculars', title: 'Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu (falls nicht eingefroren).' },
+                  { value: 'seeker', icon: 'magnify', label: 'Weiter: Sucher', title: 'Weiterspielen (Sucher)', body: 'Gefundene Hider spielen sofort als Sucher weiter (falls nicht eingefroren).' },
+                  { value: 'spectator', icon: 'binoculars', label: 'Zuschauer', title: 'Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu (falls nicht eingefroren).' },
                 ]} />
               <TouchableOpacity style={[st.smallBtnRow, hiderCanFreeze && st.toggleOn]}
                 onPress={() => emitUpdate({ hiderCanFreeze: !hiderCanFreeze })}
@@ -731,32 +722,27 @@ export default function LobbyScreen({
           ffa reading, so that picker below hides it while ffa is selected. */}
       {teamMode && (
         <View style={st.rowBtns}>
-          <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'team' && st.smallBtnActive]}
-            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'team' })}
-            onLongPress={() => Alert.alert('Team (A vs. B)', 'Zwei feste Seiten treten gegeneinander an.')}>
-            <Icon name="people" size={13} color={teamVariant === 'team' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, teamVariant === 'team' && st.smallTxtActive]}>Team (A vs. B)</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'ffa' && st.smallBtnActive]}
-            disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'ffa' })}
-            onLongPress={() => Alert.alert('Jeder gegen jeden',
-              GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
-            <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? theme.accent : theme.text2} />
-            <Text style={[st.smallTxt, teamVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
-          </TouchableOpacity>
+          {/* Toggle 1: Team (A vs. B) / Jeder gegen jeden — ein Button. */}
+          <CycleToggle theme={theme} st={st} value={teamVariant} disabled={!isHost}
+            onChange={v => emitUpdate({ teamVariant: v })}
+            options={[
+              { value: 'team', icon: 'people', label: 'Team (A vs. B)', title: 'Team (A vs. B)', body: 'Zwei feste Seiten treten gegeneinander an.' },
+              { value: 'ffa', icon: 'crosshair', label: 'Jeder gegen jeden', title: 'Jeder gegen jeden',
+                body: GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '' },
+            ]} />
           {(subMode === 'ctf' || onHit === 'respawn') && (
             <Text style={st.smallTxt}>
               {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
             </Text>
           )}
-          {/* Treffer-Konsequenz — jetzt hier in der Submode-Zeile statt in
-              der Modus-Zeile oben (Leben verlieren vs. Einfrieren). */}
+          {/* Toggle 2: Treffer-Konsequenz — jetzt hier in der Submode-Zeile
+              statt in der Modus-Zeile oben (Leben verlieren vs. Einfrieren). */}
           {isHost && (
-            <IconToggleGroup theme={theme} st={st} value={onHit}
+            <CycleToggle theme={theme} st={st} value={onHit}
               onChange={v => emitUpdate({ onHit: v })}
               options={[
-                { value: 'respawn', icon: 'heart', title: 'Leben verlieren', body: 'Treffer kostet ein Leben statt einzufrieren.' },
-                { value: 'freeze', icon: 'snowflake', title: 'Einfrieren', body: 'Treffer friert kurz ein statt ein Leben zu kosten.' },
+                { value: 'respawn', icon: 'heart', label: 'Leben verlieren', title: 'Leben verlieren', body: 'Treffer kostet ein Leben statt einzufrieren.' },
+                { value: 'freeze', icon: 'snowflake', label: 'Einfrieren', title: 'Einfrieren', body: 'Treffer friert kurz ein statt ein Leben zu kosten.' },
               ]} />
           )}
         </View>
@@ -768,11 +754,11 @@ export default function LobbyScreen({
           erhalten) oder bricht komplett ab (Fortschritt auf 0). */}
       {isHost && (subMode === 'domination' || subMode === 'seek_destroy' || subMode === 'ctf') && (
         <View style={st.rowBtns}>
-          <IconToggleGroup theme={theme} st={st} value={ar.contestResets ? 'breaks' : 'pauses'}
+          <CycleToggle theme={theme} st={st} value={ar.contestResets ? 'breaks' : 'pauses'}
             onChange={v => emitUpdate({ contestResets: v === 'breaks' })}
             options={[
-              { value: 'pauses', icon: 'snowflake', title: 'Freeze pausiert Capture', body: 'Ein ungefreezter Gegner pausiert die Einnahme nur — Fortschritt bleibt erhalten, sobald er weg ist geht es weiter.' },
-              { value: 'breaks', icon: 'close', title: 'Freeze bricht Capture', body: 'Ein ungefreezter Gegner bricht den Versuch komplett ab — Fortschritt auf 0, von vorn beginnen.' },
+              { value: 'pauses', icon: 'snowflake', label: 'Freeze pausiert Capture', title: 'Freeze pausiert Capture', body: 'Ein ungefreezter Gegner pausiert die Einnahme nur — Fortschritt bleibt erhalten, sobald er weg ist geht es weiter.' },
+              { value: 'breaks', icon: 'close', label: 'Freeze bricht Capture', title: 'Freeze bricht Capture', body: 'Ein ungefreezter Gegner bricht den Versuch komplett ab — Fortschritt auf 0, von vorn beginnen.' },
             ]} />
         </View>
       )}
@@ -812,18 +798,17 @@ export default function LobbyScreen({
       {isHost && subMode === 'seek_destroy' && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Zerstören:</Text>
-          <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ destroyVariant: 'instant' })}
-            onLongPress={() => Alert.alert('Symmetrisch (mit Restore)', 'Beide Teams können jedes Ziel einnehmen. Sind alle zerstört, reaktivieren sie sich automatisch — das Match läuft bis zum Zeitlimit weiter.')}>
-            <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch (Restore)</Text>
-          </TouchableOpacity>
-          {teamVariant === 'team' && (
-            <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
-              onPress={() => emitUpdate({ destroyVariant: 'defuse' })}
-              onLongPress={() => Alert.alert('Angriff & Verteidigung', 'Team A scharf machen, Team B entschärfen. Explodiert ein Ziel ohne Verteidiger, endet das Match sofort — keine Reaktivierung.')}>
-              <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Angriff & Verteidigung</Text>
-            </TouchableOpacity>
-          )}
+          {/* ffa hat keine Entschärfen-Lesart (zweiseitig, force-reset zu
+              instant server-seitig) — dann nur die eine Option, der Button
+              zeigt sie fest an statt durchzuschalten. */}
+          <CycleToggle theme={theme} st={st} value={destroyVariant}
+            onChange={v => emitUpdate({ destroyVariant: v })}
+            options={teamVariant === 'team' ? [
+              { value: 'instant', icon: 'loop', label: 'Symmetrisch (Restore)', title: 'Symmetrisch (mit Restore)', body: 'Beide Teams können jedes Ziel einnehmen. Sind alle zerstört, reaktivieren sie sich automatisch — das Match läuft bis zum Zeitlimit weiter.' },
+              { value: 'defuse', icon: 'bomb', label: 'Angriff & Verteidigung', title: 'Angriff & Verteidigung', body: 'Team A scharf machen, Team B entschärfen. Explodiert ein Ziel ohne Verteidiger, endet das Match sofort — keine Reaktivierung.' },
+            ] : [
+              { value: 'instant', icon: 'loop', label: 'Symmetrisch (Restore)', title: 'Symmetrisch (mit Restore)', body: 'Jede/r kann jedes Ziel einnehmen. Sind alle zerstört, reaktivieren sie sich automatisch.' },
+            ]} />
         </View>
       )}
       {isHost && teamMode && onHit === 'respawn' && !autoScale && (
@@ -1207,7 +1192,6 @@ function makeStyles(theme: ThemeTokens) {
     // same space-between convention as topRow/topLeft above.
     modeRowOuter: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
     modeRowTight: { flex: 1, flexDirection: 'row', gap: 6 },
-    modeRowToggle: { flexDirection: 'row', gap: 6 },
     smallBtnTight: {
       flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
       backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
