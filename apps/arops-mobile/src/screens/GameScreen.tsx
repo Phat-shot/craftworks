@@ -1281,6 +1281,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // Only meaningful in team mode — ffa has no teammates to revive.
   const needsRevive = !ffaVariant && !!snap?.me?.team
     && (snap?.players || []).some(p => p.team === snap?.me?.team && p.userId !== me?.id && p.status === 'downed');
+  // CTF: am I currently carrying an (enemy, or in ffa anyone's) flag? Flags
+  // otherwise only render as plain map dots with no textual callout at all —
+  // easy to lose track of mid-match, especially since the carrier's own
+  // position marker doesn't change shape.
+  const carryingFlag = snap?.subMode === 'ctf' && !!me?.id
+    && (snap?.flags || []).some(f => f.state === 'carried' && f.carrier === me.id);
+  // CTF, team mode: is MY team's own flag currently being carried off by an
+  // enemy? Defenders otherwise have no textual cue to go defend it, only
+  // the (now-revealed, see arops.js's carrier-position privacy exception)
+  // moving dot on the map.
+  const ownFlagStolen = snap?.subMode === 'ctf' && !ffaVariant && !!snap?.me?.team
+    && (snap?.flags || []).some(f => f.team === snap?.me?.team && f.state === 'carried');
   // Active-capture override — continuous (not a 5s pulse like centerEvent
   // below) for as long as the dwell is actually in progress, own contribution
   // only (mine()): Domination's per-zone capture.pct, Zerstören's single
@@ -1897,6 +1909,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         <View style={st.proxAlert}>
           <Icon name="warning" size={13} color="#fff" />
           <Text style={st.proxTxt}>GEGNER IN DER NÄHE</Text>
+        </View>
+      )}
+      {carryingFlag && (
+        <View style={st.cloakBanner}>
+          <Icon name="flag" size={13} color="#fff" />
+          <Text style={st.cloakTxt}>DU TRÄGST DIE FLAGGE — zur eigenen Basis!</Text>
+        </View>
+      )}
+      {!carryingFlag && ownFlagStolen && (
+        <View style={st.cloakBanner}>
+          <Icon name="flag" size={13} color="#fff" />
+          <Text style={st.cloakTxt}>EURE FLAGGE WIRD GETRAGEN!</Text>
         </View>
       )}
       {cloakActive && (
