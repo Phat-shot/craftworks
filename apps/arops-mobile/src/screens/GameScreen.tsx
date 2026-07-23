@@ -106,7 +106,7 @@ interface Snap {
   destroyVariant?: 'instant' | 'defuse';
   capture?: { team?: 'a'|'b'; userId?: string; pct: number } | null;
   armed?: { explodeAt: number; defusePct: number } | null;
-  events: { seq: number; type: string; userId?: string; winner?: string }[];
+  events: { seq: number; type: string; userId?: string; byUserId?: string; winner?: string }[];
 }
 
 interface RadarContact { userId: string; lat: number; lon: number; ageMs: number; }
@@ -425,6 +425,23 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // Bumped once per fired shot — ShockwaveEffect replays its animation
   // whenever this changes (see its own doc comment). 0 = "never fired yet".
   const [shotEffectKey, setShotEffectKey] = useState(0);
+  // Status-bar center: normally the score/phase (see centerScoreText below),
+  // but overridden for 5s whenever an active capture is in progress or the
+  // player just hit/got hit (see the onTick event-scan below, snap.events —
+  // player_frozen/player_downed/player_eliminated already carry userId/
+  // byUserId, no separate detection heuristic needed).
+  const [centerEvent, setCenterEvent] = useState<Toast | null>(null);
+  const centerEventTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastEventSeqRef = useRef(0);
+  const isFirstTickRef = useRef(true);
+  const triggerCenterEvent = (toast: Toast) => {
+    setCenterEvent(toast);
+    if (centerEventTimeoutRef.current) clearTimeout(centerEventTimeoutRef.current);
+    centerEventTimeoutRef.current = setTimeout(() => setCenterEvent(null), 5000);
+  };
+  // Revive-needed toggle: flips every 5s between the normal center content
+  // and a "needs help" prompt while a teammate is downed (see needsRevive).
+  const [reviveToggle, setReviveToggle] = useState(false);
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
@@ -557,6 +574,28 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       if (s.me?.hitRangeM ?? s.hitRangeM) hitRangeRef.current = (s.me?.hitRangeM ?? s.hitRangeM)!;
       if (s.timings?.radarDurationMs) radarDurationMsRef.current = s.timings.radarDurationMs;
       debugModeRef.current = !!s.debugMode;
+      // Status-bar center 5s override: scan for NEW hit-related events since
+      // the last tick (seq is monotonic) — player_frozen/downed/eliminated
+      // already carry userId (victim) and byUserId (shooter), so both
+      // directions (got hit / just hit someone) are exact, not guessed from
+      // a before/after state diff. First tick only records the current
+      // high-water mark without triggering anything — otherwise a backlog
+      // of pre-join events (this session already in progress) would fire a
+      // false "Getroffen!" the instant the screen mounts.
+      if (isFirstTickRef.current) {
+        isFirstTickRef.current = false;
+        lastEventSeqRef.current = (s.events || []).reduce((mx, e) => Math.max(mx, e.seq), 0);
+      } else {
+        let maxSeq = lastEventSeqRef.current;
+        for (const ev of s.events || []) {
+          if (ev.seq <= lastEventSeqRef.current) continue;
+          if (ev.seq > maxSeq) maxSeq = ev.seq;
+          if (!['player_frozen', 'player_downed', 'player_eliminated'].includes(ev.type)) continue;
+          if (ev.userId === me?.id) triggerCenterEvent({ icon: 'warning', text: 'Getroffen!' });
+          else if (ev.byUserId === me?.id) triggerCenterEvent({ icon: 'crosshair', text: 'Gegner getroffen!' });
+        }
+        lastEventSeqRef.current = maxSeq;
+      }
       setSnap(s);
     };
     const onResult = (r: any) => {
@@ -1210,6 +1249,41 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     ? zerstorenLine()
     : null;
   const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
+  // Status-bar center default — reuses scoreLine for the 3 modes it already
+  // covers (own score vs. opponent, team mode; own alone, ffa), adds
+  // Deathmatch's own kills-based reading on top (scoreLine itself stays
+  // untouched — still used as-is in the endgame recap below). Hide & Seek
+  // has no comparable "score" concept, keeps showing the phase there
+  // (centerScoreText stays null, see the status bar center render below).
+  const centerScoreText: string | null = scoreLine
+    ?? (snap?.subMode === 'deathmatch' ? `Du: ${snap?.me?.score ?? 0} Kills` : null);
+  // Is a teammate currently downed (respawn variant) and needing a revive?
+  // Only meaningful in team mode — ffa has no teammates to revive.
+  const needsRevive = !ffaVariant && !!snap?.me?.team
+    && (snap?.players || []).some(p => p.team === snap?.me?.team && p.userId !== me?.id && p.status === 'downed');
+  // Active-capture override — continuous (not a 5s pulse like centerEvent
+  // below) for as long as the dwell is actually in progress, own contribution
+  // only (mine()): Domination's per-zone capture.pct, Zerstören's single
+  // capture.pct — both already carry team/userId so "is this MY capture" is
+  // exact, not guessed from proximity.
+  const activeCaptureText: Toast | null = useMemo(() => {
+    if (!snap) return null;
+    const mine = (c?: { team?: string; userId?: string } | null) =>
+      !!c && (ffaVariant ? c.userId === me?.id : c.team === snap.me?.team);
+    if (snap.subMode === 'domination') {
+      const z = (snap.zones || []).find(z => mine(z.capture));
+      if (z?.capture) return { icon: 'target', text: `Zone wird erobert… ${z.capture.pct}%` };
+    }
+    if (snap.subMode === 'seek_destroy' && mine(snap.capture)) {
+      return { icon: 'bomb', text: `Ziel wird erobert… ${snap.capture!.pct}%` };
+    }
+    return null;
+  }, [snap?.subMode, JSON.stringify(snap?.zones), snap?.capture, snap?.me?.team, ffaVariant, me?.id]);
+  useEffect(() => {
+    if (!needsRevive) { setReviveToggle(false); return; }
+    const iv = setInterval(() => setReviveToggle(v => !v), 5000);
+    return () => clearInterval(iv);
+  }, [needsRevive]);
   // Top-right status-bar indicator — used to always show H&S's "Hider: N",
   // which reads as meaningless noise in the other 4 modes (that counter
   // isn't even tracked for them). Swap in whatever's actually the relevant
@@ -1728,19 +1802,26 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const perkLeft = [radarBtn];
   const perkRight = [classPerkBtn];
 
+  // Status-bar center — priority: an active capture (continuous) > a fresh
+  // hit/got-hit event (5s pulse) > revive prompt (toggles with the default
+  // every 5s while needed) > the normal default (own score vs. opponent's,
+  // or just the phase for Hide & Seek, which has no score concept).
+  const centerDefault: Toast = centerScoreText ? { icon: scoreIcon, text: centerScoreText } : phaseLabel;
+  const centerToast: Toast = activeCaptureText
+    ?? centerEvent
+    ?? (needsRevive && reviveToggle ? { icon: 'warning', text: 'Team braucht Revive!' } : centerDefault);
+
   return (
     <View style={st.wrap}>
       {/* Schuss-Feedback — screen-center-anchoriert (wie ShotOverlay), löst
           bei JEDEM abgesetzten Schuss aus (shoot()), unabhängig vom
           Reichweiten-Anzeige-Toggle. */}
       <ShockwaveEffect triggerKey={shotEffectKey} color={classAccentColor} />
-      {/* Status bar — single row: timer | phase (centered) | mode indicator
-          (tappable for the ranked roster). Used to be phase/timer/indicator
-          on one row plus a second row (statusScoreRow) folding in the
-          mode-specific score text (Domination/CTF %, Zerstören armed/defuse
-          countdown) — reported as reading like two separate banners; the
-          score text is still one tap away via the roster, so it's dropped
-          here rather than crammed alongside the other three. */}
+      {/* Status bar — single row: timer | center (centerToast — own score vs.
+          opponent's by default, overridden by an active capture/fresh hit
+          event/revive prompt, see centerToast above; just the phase for
+          Hide & Seek, which has no score) | mode indicator (tappable for the
+          ranked roster). */}
       <View style={st.status}>
         <View style={st.statusRow}>
           <View style={[st.iconTextRow, st.statusSide]}>
@@ -1748,8 +1829,8 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             <Text style={st.timer}>{Math.floor(remainingS / 60)}:{String(remainingS % 60).padStart(2, '0')}</Text>
           </View>
           <View style={[st.iconTextRow, st.statusCenter]}>
-            <Icon name={phaseLabel.icon} size={13} color="#f0c840" />
-            <Text style={st.phase} numberOfLines={1}>{phaseLabel.text}</Text>
+            <Icon name={centerToast.icon} size={13} color="#f0c840" />
+            <Text style={st.phase} numberOfLines={1}>{centerToast.text}</Text>
           </View>
           <TouchableOpacity style={[st.iconTextRow, st.statusSide, st.statusSideRight]} onPress={() => setRosterOpen(o => !o)}>
             <Icon name={statusIndicator.icon} size={13} color="#a090c0" />
