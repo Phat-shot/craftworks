@@ -44,31 +44,34 @@ export const OSM_STYLE_DARK = {
     id: 'osm', type: 'raster' as const, source: 'osm',
     paint: {
       'raster-brightness-min': 0,
-      'raster-brightness-max': 0.35,
-      'raster-contrast': 0.15,
+      'raster-brightness-max': 0.4,
+      // Was 0.15 — reported as too low-contrast to read comfortably (roads/
+      // labels barely stood out from the darkened background). Pushed hard;
+      // -brightness-max above still caps how bright the lightest pixel can
+      // get, so this only spreads what's already there further apart, it
+      // doesn't blow anything out.
+      'raster-contrast': 0.5,
       'raster-saturation': -0.35,
       'raster-hue-rotate': 180,
     },
   }],
 };
 
-// Solid-color backdrop for the "comic map" view — deliberately no real tiles
-// underneath, so the host-fetched building/path/vegetation shapes (see
-// ComicMapLayers) read as our own generated map, not real photography peeking
-// through a stylized overlay.
-export const BLANK_STYLE = {
-  version: 8 as const,
-  sources: {},
-  layers: [{ id: 'bg', type: 'background' as const, paint: { 'background-color': '#f3e9d2' } }],
-};
-
-// Dark-theme backdrop for the comic map — same idea as OSM_STYLE_DARK, a
-// "night city" paper instead of the light cream one. ComicMapLayers' own
-// building/forest/water/grass/path/road colors are saturated, mid-brightness
-// comic-style fills (not pale/washed), so they stay legible against a dark
-// backdrop unchanged — only the background itself needs a theme-aware swap.
-export const BLANK_STYLE_DARK = {
-  version: 8 as const,
-  sources: {},
-  layers: [{ id: 'bg', type: 'background' as const, paint: { 'background-color': '#1a1a20' } }],
-};
+// Comic-map backdrop, theme-aware instead of a fixed color — takes the
+// current theme's own background color so the map blends into the
+// surrounding screen chrome instead of standing out as a hard-coded block
+// (was a fixed cream `#f3e9d2` regardless of theme, then a fixed dark
+// `#1a1a20`for dark themes — neither actually matched the live theme,
+// which reads wrong wherever the comic map sits next to themed UI, e.g.
+// GameScreen's split view). ComicMapLayers' own building/forest/water/
+// grass/path/road colors are saturated, mid-brightness comic-style fills
+// (not pale/washed), so they stay legible against any reasonable
+// background color unchanged — only the backdrop itself needs to track
+// the theme.
+export function blankMapStyle(backgroundColor: string) {
+  return {
+    version: 8 as const,
+    sources: {},
+    layers: [{ id: 'bg', type: 'background' as const, paint: { 'background-color': backgroundColor } }],
+  };
+}

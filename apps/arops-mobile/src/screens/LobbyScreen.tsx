@@ -1,16 +1,14 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import * as Location from 'expo-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
-import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition, getDebugEnabled } from '../api';
+import { getSocket, getUser, fetchLobbyQr, saveLastPosition, getDebugEnabled } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { OSM_STYLE, OSM_STYLE_DARK, BLANK_STYLE, BLANK_STYLE_DARK } from '../mapStyle';
+import { OSM_STYLE, OSM_STYLE_DARK, blankMapStyle } from '../mapStyle';
 import { polygonAreaM2, scaleCoreConfig, scaleTimings, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
-import { withTimeout } from '../utils/withTimeout';
+import { useTelemetry } from '../hooks/useTelemetry';
 import { useTheme, ThemeTokens, THEMES } from '../theme';
-import MatchSimScreen from './MatchSimScreen';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -136,7 +134,7 @@ export default function LobbyScreen({
   // comparing against THEMES.day avoids threading the ThemeName itself down
   // through props just for this.
   const mapStyle = theme === THEMES.day ? OSM_STYLE : OSM_STYLE_DARK;
-  const blankMapStyle = theme === THEMES.day ? BLANK_STYLE : BLANK_STYLE_DARK;
+  const comicMapStyle = useMemo(() => blankMapStyle(theme.bg), [theme]);
   const [members, setMembers] = useState<Member[]>([]);
   const [ar, setAr] = useState<ArSettings>({});
   const [polyErrs, setPolyErrs] = useState<string[]>([]);
@@ -147,201 +145,38 @@ export default function LobbyScreen({
   const [qrOpen, setQrOpen] = useState(false);
   const [copied, setCopied] = useState<'code' | 'link' | null>(null);
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
-  // Match-Simulation entry point — a client-local pick (never touches
-  // ar_settings.subMode, which the server only ever accepts real game
-  // modes for), only offered when the app-wide Debug-Modus setting is on.
-  // See MatchSimScreen.tsx.
+  // Gates the per-lobby debug toggle below (fog-of-war off etc.) — app-wide
+  // Debug-Modus setting, see Einstellungen. Match-Simulation itself moved
+  // back to its own main-menu entry point (App.tsx) — see MatchSimScreen.tsx.
   const debugEnabled = useMemo(() => getDebugEnabled(), []);
-  const [simSelected, setSimSelected] = useState(false);
-  const [simRunning, setSimRunning] = useState(false);
-  // Mirrors simRunning for the game:start listener below (a plain
-  // useEffect closure would otherwise capture a stale simRunning at
-  // subscription time) — see that listener's own comment for why this
-  // guard exists at all.
-  const simRunningRef = useRef(false);
-  simRunningRef.current = simRunning;
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
-  // Seeded from the last real fix persisted locally (see api.ts
-  // saveLastPosition) so the map already centers on roughly the right area
-  // on first render, instead of the world-view fallback, while a fresh fix
-  // is still pending — myPosStale marks it as "last known", not live.
-  const lastKnownPos = getLastPosition();
-  const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(
-    lastKnownPos ? { lat: lastKnownPos.lat, lon: lastKnownPos.lon } : null
-  );
-  const [myPosStale, setMyPosStale] = useState(!!lastKnownPos);
-  const myPosStaleRef = useRef(myPosStale);
-  myPosStaleRef.current = myPosStale;
-  const [myPosLoading, setMyPosLoading] = useState(false);
-  const [myPosErr, setMyPosErr] = useState(false);
-  // Distinct from myPosErr — "permission denied" needs a Settings change
-  // (retrying can never succeed on its own, no matter which OS API is
-  // behind loadMyPosition), whereas a plain myPosErr (fix timed out) might
-  // resolve on the very next retry. Both used to collapse into the same
-  // generic warning icon with no way to tell them apart, which could read
-  // as "GPS is broken" indefinitely when the actual, fixable cause was a
-  // denied permission the whole time.
-  const [myPosPermDenied, setMyPosPermDenied] = useState(false);
-  // Surfaced in the UI while loading — a GPS cold fix can legitimately take
-  // up to ~24s (3 attempts × 8s timeout) outdoors; with nothing but a small
-  // spinner icon to show for it, that reads as "the app is stuck" instead of
-  // "still searching". Attempt count included so long waits stay legible.
-  const [myPosAttempt, setMyPosAttempt] = useState(0);
-  // Generation token for the watchdog below — a stale watchdog from an
-  // earlier loadMyPosition() call (e.g. superseded by a manual retry tap)
-  // must not clear the loading state of a newer, still-in-flight one.
-  const loadGenRef = useRef(0);
+  // GPS/compass acquisition — adopted from GameScreen's own useTelemetry()
+  // hook instead of this screen's former ~180-line bespoke retry/watchdog
+  // implementation (see git history for that version's own hard-won fixes,
+  // now superseded). Passing sessionId=null disables the hook's 1Hz
+  // telemetry-SEND loop entirely (gated on `socket && sessionId`, see
+  // useTelemetry.ts) — only the GPS/compass ACQUISITION side runs here,
+  // which is all this screen ever needed. The hook's own doc comment warns
+  // against mounting it outside GameScreen's lifetime (an earlier attempt
+  // hoisted to App.tsx correlated with the whole app becoming unresponsive)
+  // — LobbyScreen doesn't do that: it has the same bounded "in this one
+  // place for a while, then leave" lifecycle GameScreen itself has, not the
+  // always-mounted app-wide scope that caused that regression.
+  const telemetry = useTelemetry(getSocket(), null, true);
+  const myPos = telemetry.sample ? { lat: telemetry.sample.lat, lon: telemetry.sample.lon } : null;
+  // Keeps api.ts's getLastPosition() cache warm for other flows that fall
+  // back to it (e.g. MatchSimScreen's origin resolution) — useTelemetry
+  // itself has no equivalent (GameScreen never needed one), but there's no
+  // harm in this screen still doing it since GPS acquisition is otherwise
+  // identical.
+  useEffect(() => {
+    if (telemetry.sample) saveLastPosition(telemetry.sample.lat, telemetry.sample.lon);
+  }, [telemetry.sample]);
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
   const comicMapReqRef = useRef<string | null>(null);
-
-  // One-shot fetch (not a live watch) — this is just a reference point for
-  // drawing the field, not gameplay telemetry, so no need to keep polling.
-  // GPS can be unreliable on first try (cold fix, permission dialog timing).
-  // Earlier version: recursive getCurrentPositionAsync attempts each wrapped
-  // in withTimeout. Reported symptom: stuck showing "1/3" forever, spinner
-  // never stopping — getCurrentPositionAsync has known hangs on some Android/
-  // expo-location versions where the underlying NATIVE call itself never
-  // settles, and (unconfirmed but plausible) requestForegroundPermissionsAsync
-  // itself was never time-boxed at all, so a hang there before even reaching
-  // the timeout-wrapped call would freeze progress with no way out — not even
-  // the manual retry button, since it's disabled by myPosLoading which would
-  // then never flip back to false.
-  //
-  // Rebuilt so the retry loop's progress depends ONLY on a plain JS timer,
-  // never on any expo-location promise actually settling — it is therefore
-  // structurally impossible for this to hang indefinitely again, regardless
-  // of which native call turns out to be the culprit. watchPositionAsync is
-  // also generally more reliable for acquiring a first fix than one-shot
-  // getCurrentPositionAsync (keeps trying continuously instead of one single
-  // snapshot attempt) — take its first update, then unsubscribe immediately.
-  //
-  // Watchdog on top of that (WATCHDOG_MS, well past the 24s of the internal
-  // loop below): reported "hangs again" after the fix above means some path
-  // through this function can still leave myPosLoading stuck — possibly a
-  // synchronous throw before the loop is even reached. The watchdog and the
-  // surrounding try/catch/finally are a second, independent layer that does
-  // not rely on this function's own internals ever behaving — whatever goes
-  // wrong inside, the lobby can no longer get stuck on "GPS wird gesucht"
-  // forever, only ever fall back to the manual retry button.
-  //
-  // A native (FusedLocationProviderClient) Android module was tried here and
-  // in useTelemetry.ts's startPosition (see git history — "native GPS statt
-  // expo-location") — reverted after real-device testing showed it
-  // measurably WORSE (near a minute to a fix, vs. this) rather than better.
-  // Root cause not fully confirmed (the one-shot getCurrentLocation() call
-  // it used, instead of the continuous-watch-take-first-update strategy
-  // this function already uses, is the leading suspect), but with no device
-  // here to verify a fix, reverting to this known-working expo-location
-  // path for all platforms was the safer call. Revisit only with real
-  // hardware in hand to actually iterate against.
-  const WATCHDOG_MS = 30_000;
-  // Reported: GPS in the Lobby worked instantly the very first time
-  // (permission dialog just granted), then never again on later lobby
-  // visits. Root cause: the watchPositionAsync subscription this function
-  // starts was NEVER torn down if the component unmounted while a fix was
-  // still pending (leave the lobby, back out, create/join a different one
-  // before the up-to-24s window elapsed) — the old `useEffect(() => {
-  // loadMyPosition(); }, [])` had no cleanup at all. That leaked native
-  // location listener keeps running forever; a SECOND LobbyScreen mount
-  // then starts its OWN watchPositionAsync on top of it, and Android's
-  // FusedLocationProvider does not reliably serve every concurrent listener
-  // — the newer one can simply never fire. The very first visit is exactly
-  // the one case with no earlier leaked subscription to collide with,
-  // which is why only that one "just worked". posSubRef/mountedRef below
-  // are now reachable from the mount effect's cleanup so an in-flight
-  // subscription (and any pending state updates) actually get cancelled on
-  // unmount instead of leaking.
-  const posSubRef = useRef<Location.LocationSubscription | null>(null);
-  const mountedRef = useRef(true);
-  const loadMyPosition = async () => {
-    setMyPosLoading(true);
-    setMyPosErr(false);
-    setMyPosPermDenied(false);
-    setMyPosAttempt(0);
-
-    const gen = ++loadGenRef.current;
-    const watchdog = setTimeout(() => {
-      if (loadGenRef.current !== gen || !mountedRef.current) return; // superseded, or unmounted
-      setMyPosErr(true);
-      setMyPosLoading(false);
-    }, WATCHDOG_MS);
-
-    try {
-      const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
-      if (!mountedRef.current) return;
-      if (!perm || perm.status !== 'granted') {
-        // A perm object that came back but says !granted is a REAL denial
-        // (as opposed to the request itself timing out/throwing) — that
-        // can only ever be fixed in Settings, not by tapping retry again.
-        if (perm) setMyPosPermDenied(true);
-        setMyPosErr(true);
-        setMyPosLoading(false);
-        return;
-      }
-
-      // Fill from the OS's own cache if we don't have anything yet, or all
-      // we have is the (possibly much older) locally-persisted last fix —
-      // a fresher OS-cached fix is worth preferring over that.
-      Location.getLastKnownPositionAsync().then(cached => {
-        if (!mountedRef.current || !cached) return;
-        setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
-      }).catch(() => {});
-
-      let settled = false;
-      posSubRef.current?.remove();
-      Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 }, pos => {
-        if (settled) return;
-        settled = true;
-        posSubRef.current?.remove();
-        posSubRef.current = null;
-        if (!mountedRef.current) return;
-        setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-        setMyPosStale(false);
-        setMyPosLoading(false);
-        saveLastPosition(pos.coords.latitude, pos.coords.longitude);
-      }).then(s => {
-        if (settled || !mountedRef.current) { s.remove(); return; }
-        posSubRef.current = s;
-      }).catch(() => {});
-
-      const WINDOW_MS = 8000;
-      const WINDOWS = 3;
-      for (let i = 0; i < WINDOWS && !settled && mountedRef.current; i++) {
-        setMyPosAttempt(i);
-        await new Promise(r => setTimeout(r, WINDOW_MS));
-      }
-      if (!mountedRef.current) return;
-      if (!settled) {
-        setMyPosErr(true);
-        setMyPosLoading(false);
-        // Deliberately NOT removing posSubRef here (unlike before) — a cold
-        // GPS fix, or briefly being indoors, can easily take longer than
-        // the visible 24s retry window. Leaving watchPositionAsync running
-        // in the background means a fix that arrives late still gets
-        // adopted automatically (the callback above still fires and calls
-        // saveLastPosition) instead of silently going nowhere until the
-        // player notices and taps retry again. Superseded by the next
-        // loadMyPosition() call (which removes it first) or by unmount.
-      }
-    } catch {
-      if (mountedRef.current) { setMyPosErr(true); setMyPosLoading(false); }
-    } finally {
-      clearTimeout(watchdog);
-    }
-  };
-
-  useEffect(() => {
-    mountedRef.current = true;
-    loadMyPosition();
-    return () => {
-      mountedRef.current = false;
-      posSubRef.current?.remove();
-      posSubRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     const socket = getSocket();
@@ -362,22 +197,7 @@ export default function LobbyScreen({
     const onJoined = (p: any) => setMembers(m => [...m.filter(x => x.id !== p.userId), { id: p.userId, username: p.username, ready: false }]);
     const onLeft = ({ userId }: any) => setMembers(m => m.filter(x => x.id !== userId));
     const onReady = ({ userId, ready: r }: any) => setMembers(m => m.map(x => x.id === userId ? { ...x, ready: r } : x));
-    // Match-Simulation creates its own throwaway lobbies from this same
-    // screen (MatchSimScreen, rendered instead of this component's normal
-    // body while simRunning — LobbyScreen itself never unmounts, so this
-    // listener stays attached the whole time) and joins each one's socket
-    // room directly on the same shared socket. Socket.IO delivers room
-    // broadcasts to every socket that joined that room regardless of which
-    // screen triggered the join, so a sim lobby's own game:start would
-    // otherwise ALSO reach this listener and wrongly navigate to a real
-    // GameScreen for a session that only ever exists for the simulation
-    // (real GPS/compass then fight a synthetic field that doesn't match
-    // wherever the device actually is — the "out of map" symptom this
-    // guard fixes). This lobby never has a legitimate game:start while a
-    // simulation is running (the normal lobby:start path is skipped
-    // entirely whenever simSelected is true), so blocking unconditionally
-    // here is always correct, never just a heuristic.
-    const onStart = ({ sessionId }: any) => { if (!simRunningRef.current) onGameStart(sessionId); };
+    const onStart = ({ sessionId }: any) => onGameStart(sessionId);
     // Fallback to the raw code rather than doing nothing for one we haven't
     // mapped in START_ERR — a silent no-op here is exactly what made a tap
     // on "Start" look broken with zero feedback (see START_ERR's comment).
@@ -510,19 +330,9 @@ export default function LobbyScreen({
 
   const onMapPress = (feature: any) => {
     if (!isHost) return;
-    // Placing a point is a strong signal the host is actively looking at the
-    // map right now — a good moment to retry a GPS fix that hasn't resolved
-    // yet (observed: a fix that seemed stuck often just appears shortly
-    // after the host starts tapping the map anyway). Checking myPosStale too
-    // (not just !myPos) matters now that myPos starts pre-seeded from the
-    // persisted last-known position: without it, this retry-on-tap safety
-    // net could never fire again once that seed was in place, even though
-    // it's stale — the exact case a fresh fix is still needed for.
-    // Excluded once myPosPermDenied: a denied permission can't be fixed by
-    // retrying, only by a Settings change — retrying anyway on every single
-    // tap while placing several points in a row was hammering the
-    // permission check for nothing every time (reported as "GPS churns").
-    if ((!myPos || myPosStale) && !myPosLoading && !myPosPermDenied) loadMyPosition();
+    // No explicit "retry GPS on tap" needed anymore — useTelemetry already
+    // retries continuously in the background on its own (see its internal
+    // watchdog), the same way GameScreen just lets it run.
     const c = feature?.geometry?.coordinates;
     if (!Array.isArray(c)) return;
     if (tapMode === 'zones' && NEEDS_ZONES[subMode] !== undefined) {
@@ -739,26 +549,13 @@ export default function LobbyScreen({
       {isHost && (
         <View style={st.modeRowTight}>
           {SUB_MODES.map(m => (
-            <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && !simSelected && st.smallBtnActive]}
-              onPress={() => { setSimSelected(false); emitUpdate({ subMode: m.id }); }}
+            <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
+              onPress={() => emitUpdate({ subMode: m.id })}
               onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
-              <Icon name={m.icon} size={13} color={subMode === m.id && !simSelected ? theme.accent : theme.text2} />
-              <Text style={[st.smallTxt, subMode === m.id && !simSelected && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
+              <Icon name={m.icon} size={13} color={subMode === m.id ? theme.accent : theme.text2} />
+              <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
             </TouchableOpacity>
           ))}
-          {/* Match-Simulation — its own match "next to Deathmatch", not a
-              real ar_settings.subMode (server only accepts real game
-              modes there; MatchSimScreen sets subMode per-snippet itself
-              internally). Only ever a client-local pick, only shown with
-              the app-wide Debug-Modus setting on. */}
-          {debugEnabled && (
-            <TouchableOpacity key="simulation" style={[st.smallBtnTight, simSelected && st.smallBtnActive]}
-              onPress={() => setSimSelected(true)}
-              onLongPress={() => Alert.alert('Match-Simulation', 'Fest verdrahtete, automatische Testläufe (Klassen-Grenzwerte, Bot-Beschuss, Objectives) — keine Optionen.')}>
-              <Icon name="bug" size={13} color={simSelected ? theme.accent : theme.text2} />
-              <Text style={[st.smallTxt, simSelected && st.smallTxtActive]} numberOfLines={1}>Sim</Text>
-            </TouchableOpacity>
-          )}
         </View>
       )}
       {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
@@ -910,8 +707,7 @@ export default function LobbyScreen({
               geometry: { type: 'Point', coordinates: [myPos.lon, myPos.lat] },
             }}>
               <CircleLayer id="myPosDot" style={{
-                circleRadius: 8, circleColor: myPosStale ? '#807050' : '#40a0ff',
-                circleOpacity: myPosStale ? 0.5 : 0.85,
+                circleRadius: 8, circleColor: '#40a0ff', circleOpacity: 0.85,
                 circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
                 // 'map' instead of the default 'viewport': lets the dot tilt
                 // with the map plane instead of always facing the camera
@@ -943,33 +739,27 @@ export default function LobbyScreen({
         </MapView>
         <TouchableOpacity
           style={st.locateBtn}
-          onPress={() => (myPosPermDenied ? Linking.openSettings() : loadMyPosition())}
-          disabled={myPosLoading}
+          onPress={() => (telemetry.granted === false ? Linking.openSettings() : telemetry.retryPosition())}
         >
-          {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
-            <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? theme.danger : '#40a0ff'} />
+          {(!myPos && telemetry.granted !== false) ? <ActivityIndicator size="small" color="#40a0ff" /> : (
+            <Icon name={telemetry.granted === false ? 'warning' : 'crosshair'} size={18} color={telemetry.granted === false ? theme.danger : '#40a0ff'} />
           )}
         </TouchableOpacity>
-        {myPosLoading && (
+        {!myPos && telemetry.granted !== false && (
           <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>GPS wird gesucht… ({myPosAttempt + 1}/3)</Text>
+            <Text style={st.gpsStatusTxt}>GPS wird gesucht…</Text>
           </View>
         )}
-        {!myPosLoading && myPosPermDenied && (
+        {telemetry.granted === false && (
           <View style={st.gpsStatusBadge}>
             <Text style={st.gpsStatusTxt}>Standort-Zugriff verweigert — antippen für Einstellungen</Text>
-          </View>
-        )}
-        {!myPosLoading && !myPosPermDenied && myPosStale && (
-          <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>Letzte bekannte Position</Text>
           </View>
         )}
       </View>
 
       {ar.comicMap && (
         <View style={st.comicPreviewBox}>
-          <MapView style={{ flex: 1 }} mapStyle={blankMapStyle as any} scrollEnabled={false} zoomEnabled={false}>
+          <MapView style={{ flex: 1 }} mapStyle={comicMapStyle as any} scrollEnabled={false} zoomEnabled={false}>
             <Camera defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
             <ComicMapLayers features={ar.comicMap.features} />
           </MapView>
@@ -1181,19 +971,15 @@ export default function LobbyScreen({
         </View>
       </TouchableOpacity>
       {isHost && (
-        <TouchableOpacity style={st.startBtn} onPress={simSelected ? () => setSimRunning(true) : startGame}>
+        <TouchableOpacity style={st.startBtn} onPress={startGame}>
           <View style={st.btnRow}>
-            <Icon name={simSelected ? 'bug' : 'rocket'} size={15} color="#e060ff" />
-            <Text style={st.startTxt}>{simSelected ? 'Simulation starten' : 'Spiel starten'}</Text>
+            <Icon name="rocket" size={15} color="#e060ff" />
+            <Text style={st.startTxt}>Spiel starten</Text>
           </View>
         </TouchableOpacity>
       )}
     </View>
   );
-
-  if (simRunning) {
-    return <MatchSimScreen origin={myPos} onExit={() => setSimRunning(false)} />;
-  }
 
   return (
     <View style={st.wrap}>

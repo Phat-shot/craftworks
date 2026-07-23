@@ -17,19 +17,25 @@
 // ═══════════════════════════════════════════════════════════
 import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet } from 'react-native';
+import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import * as Location from 'expo-location';
 import { Magnetometer } from 'expo-sensors';
 import { destinationPoint, squareFieldCorners, SIM_SCENARIOS } from '@craftworks/arops-shared';
 import type { SimScenario, SimShootBeat, SimCheckpoint } from '@craftworks/arops-shared';
 import { getSocket, getUser, createArLobby, getLastPosition, joinLobbyByCode } from '../api';
 import Icon from '../components/Icon';
-import { useTheme, ThemeTokens } from '../theme';
+import { useTheme, ThemeTokens, THEMES } from '../theme';
+import { OSM_STYLE, OSM_STYLE_DARK } from '../mapStyle';
 
 interface SimSnap {
   phase: string;
   me: { status: string } | null;
   zones?: { owner?: string | null }[];
   events: { type: string; userId?: string; byUserId?: string }[];
+  // Ground-truth positions — sim sessions force debugMode (see arops.js's
+  // applySimOverrides), so fog-of-war never hides these. Used only for the
+  // live map view, not for any check's pass/fail logic.
+  players?: { userId: string; lat?: number; lon?: number }[];
 }
 
 interface CheckResult { snippetKey: string; label: string; pass: boolean; detail: string; }
@@ -104,7 +110,10 @@ function checkBotShot(beat: SimShootBeat, myUserId: string, snap: SimSnap | null
 // returns every check's pass/fail. Never throws — a setup failure (lobby/
 // start/timeout) is folded into a single failing result so one broken
 // scenario doesn't abort the whole run.
-async function runScenario(scenario: SimScenario, myUserId: string, origin: { lat: number; lon: number }): Promise<CheckResult[]> {
+async function runScenario(
+  scenario: SimScenario, myUserId: string, origin: { lat: number; lon: number },
+  onSnapshot: (snap: SimSnap) => void,
+): Promise<CheckResult[]> {
   const fail = (detail: string): CheckResult[] => [{ snippetKey: scenario.key, label: scenario.label, pass: false, detail }];
 
   const socket = getSocket();
@@ -121,7 +130,7 @@ async function runScenario(scenario: SimScenario, myUserId: string, origin: { la
 
   const results: CheckResult[] = [];
   let latestSnap: SimSnap | null = null;
-  const onTick = (s: SimSnap) => { latestSnap = s; };
+  const onTick = (s: SimSnap) => { latestSnap = s; onSnapshot(s); };
   let telemetryTimer: ReturnType<typeof setInterval> | null = null;
   const cleanup = () => {
     socket.off('game:ar_tick', onTick);
@@ -323,6 +332,13 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
   const [progress, setProgress] = useState('');
   const [sensorProgress, setSensorProgress] = useState('');
   const [results, setResults] = useState<CheckResult[]>([]);
+  // Drives the live map — the scenario currently in flight (for its field/
+  // bot layout) and the latest snapshot received for it (for live
+  // positions). Cleared between scenarios so the map never shows a stale
+  // field from the previous one while the next is still setting up.
+  const [currentScenario, setCurrentScenario] = useState<SimScenario | null>(null);
+  const [liveSnap, setLiveSnap] = useState<SimSnap | null>(null);
+  const [mapOrigin, setMapOrigin] = useState<{ lat: number; lon: number } | null>(null);
   const cancelRef = useRef(false);
 
   const start = async () => {
@@ -337,6 +353,7 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
     // field is anchored at the same point, see resolveOrigin's fallback
     // chain (Lobby's live GPS → last cached fix → jittered default).
     const resolvedOrigin = resolveOrigin(origin);
+    setMapOrigin(resolvedOrigin);
 
     // Sensor detection runs in the BACKGROUND — nothing here has a hard
     // dependency on it (every scenario uses scripted, not real, positions),
@@ -365,9 +382,13 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
       const scenario = SIM_SCENARIOS[i]!;
       setCurrentLabel(scenario.label);
       setProgress(`Szenario ${i + 1}/${SIM_SCENARIOS.length}`);
-      const r = await runScenario(scenario, myUserId, resolvedOrigin);
+      setCurrentScenario(scenario);
+      setLiveSnap(null);
+      const r = await runScenario(scenario, myUserId, resolvedOrigin, setLiveSnap);
       setResults(prev => [...prev, ...r]);
     }
+    setCurrentScenario(null);
+    setLiveSnap(null);
     // Everything else is done — the sensor test almost certainly finished
     // (or timed out) long before this point, but wait for it explicitly so
     // "done" always reflects the FULL result set, never a partial one.
@@ -380,6 +401,51 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
 
   const total = results.length;
   const passCount = results.filter(r => r.pass).length;
+  const myUserId = getUser()?.id;
+  const mapStyle = theme === THEMES.day ? OSM_STYLE : OSM_STYLE_DARK;
+
+  // Live map data for the currently-running scenario — the field polygon
+  // and any capture zones are static (computed once per scenario from its
+  // own fixed bearing/distance offsets), the tester is fixed at the origin
+  // (every scenario scripts it that way), and bots come from the latest
+  // game:ar_tick snapshot (ground truth — sim sessions force debugMode, no
+  // fog of war). Recomputed only when the scenario or origin actually
+  // changes, not on every tick.
+  const fieldGeoJSON = useMemo(() => {
+    if (!currentScenario || !mapOrigin) return null;
+    const corners = squareFieldCorners(currentScenario.fieldSideM).map(w => {
+      const p = destinationPoint(mapOrigin, w.bearingDeg, w.distanceM);
+      return [p.lon, p.lat];
+    });
+    return {
+      type: 'FeatureCollection' as const,
+      features: [{ type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [[...corners, corners[0]]] } }],
+    };
+  }, [currentScenario, mapOrigin]);
+
+  const zoneGeoJSON = useMemo(() => {
+    if (!currentScenario?.zones?.length || !mapOrigin) return null;
+    return {
+      type: 'FeatureCollection' as const,
+      features: currentScenario.zones.map((z, i) => {
+        const p = destinationPoint(mapOrigin, z.bearingDeg, z.distanceM);
+        return { type: 'Feature' as const, properties: { i }, geometry: { type: 'Point' as const, coordinates: [p.lon, p.lat] } };
+      }),
+    };
+  }, [currentScenario, mapOrigin]);
+
+  const actorsGeoJSON = useMemo(() => {
+    if (!mapOrigin) return null;
+    const features: any[] = [{
+      type: 'Feature', properties: { kind: 'tester' },
+      geometry: { type: 'Point', coordinates: [mapOrigin.lon, mapOrigin.lat] },
+    }];
+    for (const p of liveSnap?.players || []) {
+      if (p.userId === myUserId || p.lat == null || p.lon == null) continue;
+      features.push({ type: 'Feature', properties: { kind: 'bot' }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } });
+    }
+    return { type: 'FeatureCollection' as const, features };
+  }, [liveSnap, mapOrigin, myUserId]);
 
   return (
     <View style={st.root}>
@@ -428,6 +494,42 @@ export default function MatchSimScreen({ origin, onExit }: { origin: { lat: numb
         </View>
       )}
 
+      {/* Live view of whichever scenario is currently running — field
+          outline, capture zone(s) if any, tester (fixed at the origin) and
+          bot(s) (live from the latest snapshot). Only rendered while a
+          scenario is actually in flight; the map has nothing meaningful to
+          show before start or between scenarios. */}
+      {currentScenario && mapOrigin && (
+        <View style={st.mapBox}>
+          <MapView key={currentScenario.key} style={{ flex: 1 }} mapStyle={mapStyle as any} scrollEnabled={false} zoomEnabled={false} rotateEnabled={false}>
+            <Camera defaultSettings={{ centerCoordinate: [mapOrigin.lon, mapOrigin.lat], zoomLevel: 17.3 }} />
+            {fieldGeoJSON && (
+              <ShapeSource id="simField" shape={fieldGeoJSON as any}>
+                <FillLayer id="simFieldFill" style={{ fillColor: theme.accent, fillOpacity: 0.08 }} />
+                <LineLayer id="simFieldLine" style={{ lineColor: theme.accent, lineWidth: 2, lineOpacity: 0.6 }} />
+              </ShapeSource>
+            )}
+            {zoneGeoJSON && (
+              <ShapeSource id="simZones" shape={zoneGeoJSON as any}>
+                <CircleLayer id="simZoneDots" style={{
+                  circleRadius: 14, circleColor: '#f0c840', circleOpacity: 0.25,
+                  circleStrokeWidth: 2, circleStrokeColor: '#f0c840',
+                }} />
+              </ShapeSource>
+            )}
+            {actorsGeoJSON && (
+              <ShapeSource id="simActors" shape={actorsGeoJSON as any}>
+                <CircleLayer id="simActorDots" style={{
+                  circleRadius: 8,
+                  circleColor: ['match', ['get', 'kind'], 'tester', '#40a0ff', '#ff5050'] as any,
+                  circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
+                }} />
+              </ShapeSource>
+            )}
+          </MapView>
+        </View>
+      )}
+
       <ScrollView style={st.list}>
         {results.map((r, i) => (
           <View key={i} style={[st.row, r.pass ? st.rowPass : st.rowFail]}>
@@ -463,6 +565,10 @@ function makeStyles(theme: ThemeTokens) {
     sensorTxt: { color: theme.text3, fontSize: 11 },
     summary: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
     summaryTxt: { fontSize: 16, fontWeight: '900' },
+    mapBox: {
+      height: 220, borderRadius: 12, overflow: 'hidden', marginBottom: 12,
+      borderWidth: 1, borderColor: theme.border,
+    },
     list: { flex: 1 },
     row: {
       flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 8,
