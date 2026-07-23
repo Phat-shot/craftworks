@@ -16,6 +16,8 @@ const REGISTRY = {
   magnify: [MaterialCommunityIcons, 'magnify'],
   binoculars: [MaterialCommunityIcons, 'binoculars'],
   heart: [MaterialCommunityIcons, 'heart'],
+  navigation: [MaterialCommunityIcons, 'navigation'],
+  closeCircle: [MaterialCommunityIcons, 'close-circle'],
   flag: [MaterialCommunityIcons, 'flag'],
   bomb: [MaterialCommunityIcons, 'bomb'],
   checkCircle: [MaterialCommunityIcons, 'check-circle'],

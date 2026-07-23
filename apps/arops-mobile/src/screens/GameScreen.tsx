@@ -320,6 +320,59 @@ function ShotOverlay({ rotateDeg, pitchDeg, lengthPx, anchorPx, myHitShape, effe
   );
 }
 
+// Freeze feedback on the own marker — a ring "rolling up" as the freeze
+// counts down, screen-center-anchored like ShotOverlay above. 12 fixed tick
+// marks around the anchor (each individually pre-rotated + offset — same
+// zero-size-anchor rotation-pivot trick ShotOverlay uses, just once per
+// tick instead of once for the whole shape) fading out clockwise as
+// `progress` (frozenRemainingMs / freezeMs) depletes from 1 to 0 — a true
+// circular arc/pie wipe isn't achievable with plain Views (no SVG, see
+// GlowBorder's own comment above), this reads the same "winding down" way
+// without it.
+function FreezeRing({ progress, color }: { progress: number; color: string }) {
+  const SEGMENTS = 12;
+  const RADIUS = 26;
+  const TICK_LEN = 8;
+  const p = Math.max(0, Math.min(1, progress));
+  if (p <= 0) return null;
+  const litCount = Math.round(p * SEGMENTS);
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {Array.from({ length: SEGMENTS }).map((_, i) => (
+        <View key={i} style={{
+          position: 'absolute', top: '50%', left: '50%', width: 0, height: 0,
+          transform: [{ rotate: `${(360 / SEGMENTS) * i}deg` }],
+        }}>
+          <View style={{
+            position: 'absolute', top: -(RADIUS + TICK_LEN), left: -1.5, width: 3, height: TICK_LEN,
+            borderRadius: 1.5, backgroundColor: color, opacity: i < litCount ? 0.95 : 0.18,
+          }} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// Own-marker status badge (downed→arrow-to-base, found→cross/ghost, H&S
+// seeker→magnifying glass — see ownBadge's own doc comment for the full
+// state table) — small icon chip at the same screen anchor as ShotOverlay/
+// FreezeRing. `rotateDeg` (only for the base-direction arrow) is already
+// converted from an absolute compass bearing to a screen-relative angle by
+// the caller (same north-up-offset math shotOverlayRotateDeg uses).
+function OwnMarkerBadge({ icon, color, rotateDeg }: { icon: IconName; color: string; rotateDeg?: number }) {
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={{
+        position: 'absolute', top: '50%', left: '50%', width: 28, height: 28, marginTop: -14, marginLeft: -14,
+        borderRadius: 14, backgroundColor: 'rgba(10,8,16,.85)', alignItems: 'center', justifyContent: 'center',
+        transform: rotateDeg !== undefined ? [{ rotate: `${rotateDeg}deg` }] : undefined,
+      }}>
+        <Icon name={icon} size={16} color={color} />
+      </View>
+    </View>
+  );
+}
+
 export default function GameScreen({ sessionId, onExit, watchSync }: {
   sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
 }) {
@@ -678,7 +731,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const actorsGeoJSON = useMemo(() => {
     const features: any[] = [];
     if (telemetry.sample) {
-      features.push({ type: 'Feature', properties: { color: '#f0c840', op: 0.95 },
+      // Grey once out of action (downed/found) — previously always the same
+      // gold regardless of state, unlike every other player's dot (which
+      // already reacts to frozen/team/inCone below).
+      const ownColor = snap?.me?.status && snap.me.status !== 'alive' ? '#808080' : '#f0c840';
+      features.push({ type: 'Feature', properties: { color: ownColor, op: 0.95 },
         geometry: { type: 'Point', coordinates: [telemetry.sample.lon, telemetry.sample.lat] } });
     }
     for (const p of snap?.players || []) {
@@ -709,7 +766,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         geometry: { type: 'Point', coordinates: [snap.me.trapAlert.lon, snap.me.trapAlert.lat] } });
     }
     return { type: 'FeatureCollection' as const, features };
-  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies, snap?.me?.trapAlert]);
+  }, [telemetry.sample?.lat, telemetry.sample?.lon, JSON.stringify(snap?.players), radarContacts, visibleEnemies, snap?.me?.trapAlert, snap?.me?.status]);
 
   // Team ping markers (map tap) — fade out as they approach expiry, same
   // convention as the age-based fades above. snap.me.teamPings is already
@@ -1089,6 +1146,32 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       : snap?.phase === 'warmup' ? { icon: 'hourglass', text: 'Warmup' }
       : snap?.phase === 'live' ? { icon: 'circle', text: 'Live' } : { icon: 'hourglass', text: '' });
   const frozenMs = snap?.me?.frozenRemainingMs ?? 0;
+  // Own-marker status badge: downed (respawn variant, lives left) → arrow
+  // toward own base; found (eliminated, or H&S hider caught) → cross, unless
+  // it's specifically an H&S hider → ghost instead; H&S seeker still
+  // actively hunting → magnifying glass. Own base position is always
+  // visible to the player themself (never an opponent's), no privacy
+  // concern reusing it here (same field the base-setup UI already reads).
+  const ownBadge = useMemo(() => {
+    if (!snap?.me) return null;
+    const status = snap.me.status;
+    if (status === 'downed') {
+      const baseKey = snap.teamVariant === 'ffa' ? me?.id : snap.me.team;
+      const base = baseKey ? snap.bases?.[baseKey] : null;
+      if (!base || !telemetry.sample) return null;
+      return { icon: 'navigation' as IconName, color: '#ffffff', bearing: bearingDeg(telemetry.sample, base) };
+    }
+    if (status === 'found') {
+      return snap.subMode === 'hide_and_seek' && snap.me.role === 'hider'
+        ? { icon: 'ghost' as IconName, color: '#c0c0ff', bearing: null }
+        : { icon: 'closeCircle' as IconName, color: '#ff4040', bearing: null };
+    }
+    if (snap.subMode === 'hide_and_seek' && snap.me.role === 'seeker' && status === 'alive') {
+      return { icon: 'magnify' as IconName, color: '#f0c840', bearing: null };
+    }
+    return null;
+  }, [snap?.me?.status, snap?.me?.team, snap?.me?.role, snap?.subMode, snap?.teamVariant, snap?.bases,
+      telemetry.sample?.lat, telemetry.sample?.lon, me?.id]);
   const isCaptainSetup = snap?.phase === 'base_setup' && snap?.me?.isCaptain;
   // Remaining time (not raw %) from a progress percentage + its known total
   // dwell time (snap.timings) — the flow-ring on the map shows the % itself
@@ -1342,6 +1425,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       <ShotOverlay rotateDeg={shotOverlayRotateDeg} pitchDeg={mapPitch}
         lengthPx={shotOverlayLengthPx} anchorPx={screenAnchorPx} myHitShape={myHitShape}
         effectiveConeHalfAngleDeg={effectiveConeHalfAngleDeg} color={classAccentColor} />
+    )}
+    {/* Own-marker state feedback — screen-center anchor only holds in
+        controlled-camera views (map locked to the player's own position,
+        see the Camera above); free-2D lets the player pan away from their
+        own dot, so there's no fixed screen point to anchor a ring/badge to
+        there — same scoping ShotOverlay itself already has via its anchorPx
+        param. */}
+    {!isFree2D && telemetry.sample && snap?.timings?.freezeMs && frozenMs > 0 && (
+      <FreezeRing progress={frozenMs / snap.timings.freezeMs} color="#a0d8ff" />
+    )}
+    {!isFree2D && telemetry.sample && frozenMs <= 0 && ownBadge && (
+      <OwnMarkerBadge icon={ownBadge.icon} color={ownBadge.color}
+        rotateDeg={ownBadge.bearing !== null ? ownBadge.bearing - (activeHeadingDeg ?? 0) : undefined} />
     )}
     </View>
   );
