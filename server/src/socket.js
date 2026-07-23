@@ -3,6 +3,7 @@ const { verifyToken } = require('./auth/verifyToken');
 const users = require('./repositories/users');
 const { registerPlatformHandlers, notifyFollowers } = require('./socket/platform');
 const { registerGameHandlers } = require('./socket/game');
+const { registerHuntSandboxHandlers } = require('./socket/hunt');
 
 module.exports = function setupSocket(io, db) {
   // ── Auth middleware ──────────────────────
@@ -38,5 +39,6 @@ module.exports = function setupSocket(io, db) {
 
     registerPlatformHandlers(io, socket, db);
     registerGameHandlers(io, socket, db);
+    registerHuntSandboxHandlers(io, socket);
   });
 };

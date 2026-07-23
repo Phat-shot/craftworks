@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════
 //  SCHNITZELJAGD lifecycle test — the minimal hunt.js state machine
 //  (arrival, puzzle/target task completion, task/leg timeouts, strict-
-//  route deviation, all 3 late-join modes).
+//  route deviation, parallel POI groups, all 3 late-join modes).
 //  Run: node server/test/hunt_lifecycle.test.js
 // ═══════════════════════════════════════════════════════════
 const assert = require('assert');
@@ -56,13 +56,13 @@ console.log('\n═══ ARRIVAL + TASK COMPLETION ═══');
     const run = makeRun();
     hunt.checkArrival(run, 'A1', P0);
     // still on the puzzle POI — arrival alone doesn't complete a puzzle
-    assert.equal(run.progress.A1.currentPoiIndex, 0);
-    hunt.submitPuzzleAnswer(run, 'A1', 'turm'); // case-insensitive match
-    assert.equal(run.progress.A1.currentPoiIndex, 1, 'advanced past the puzzle');
+    assert.equal(run.progress.A1.groupIdx, 0);
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'turm'); // case-insensitive match
+    assert.equal(run.progress.A1.groupIdx, 1, 'advanced past the puzzle');
     hunt.checkArrival(run, 'A1', P1);
-    assert.equal(run.progress.A1.currentPoiIndex, 1, 'target needs an explicit confirm, not just arrival');
-    hunt.confirmTargetDestroyed(run, 'A1');
-    assert.equal(run.progress.A1.currentPoiIndex, 2, 'advanced past the target');
+    assert.equal(run.progress.A1.groupIdx, 1, 'target needs an explicit confirm, not just arrival');
+    hunt.confirmTargetDestroyed(run, 'A1', 'poi_1');
+    assert.equal(run.progress.A1.groupIdx, 2, 'advanced past the target');
     hunt.checkArrival(run, 'A1', P2); // base — completes immediately
     assert.ok(run.progress.A1.completedAt, 'base POI completed on arrival alone');
   });
@@ -70,20 +70,84 @@ console.log('\n═══ ARRIVAL + TASK COMPLETION ═══');
   check('wrong puzzle answer does not advance', () => {
     const run = makeRun();
     hunt.checkArrival(run, 'A1', P0);
-    const r = hunt.submitPuzzleAnswer(run, 'A1', 'falsch');
+    const r = hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'falsch');
     assert.equal(r.correct, false);
-    assert.equal(run.progress.A1.currentPoiIndex, 0);
+    assert.equal(run.progress.A1.groupIdx, 0);
   });
 
   check('finishing the last POI ends the whole run once every track is done', () => {
     const run = makeRun();
     hunt.checkArrival(run, 'A1', P0);
-    hunt.submitPuzzleAnswer(run, 'A1', 'Turm');
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm');
     hunt.checkArrival(run, 'A1', P1);
-    hunt.confirmTargetDestroyed(run, 'A1');
+    hunt.confirmTargetDestroyed(run, 'A1', 'poi_1');
     hunt.checkArrival(run, 'A1', P2);
     assert.ok(run.endedAt, 'sole track finished -> run ends');
     assert.ok(run.events.some(e => e.type === 'run_ended'));
+  });
+}
+
+console.log('\n═══ PARALLEL POI GROUPS ═══');
+{
+  // poi_0 and poi_1 now share order_index 0 — a parallel group — followed
+  // by poi_2 (base) alone at order_index 1.
+  const parallelPois = [
+    { order_index: 0 }, { order_index: 0 }, { order_index: 1 },
+  ];
+
+  check('two POIs sharing an order_index form one group — both current at once', () => {
+    const run = makeRun([], parallelPois);
+    const group = run.groups[0];
+    assert.equal(run.groups.length, 2, '2 groups: the parallel pair, then the base');
+    assert.equal(group.pois.length, 2);
+  });
+
+  check('completing the parallel POIs in EITHER order still finishes the group', () => {
+    const run = makeRun([], parallelPois);
+    // Reverse order: target (poi_1) before puzzle (poi_0).
+    hunt.checkArrival(run, 'A1', P1);
+    hunt.confirmTargetDestroyed(run, 'A1', 'poi_1');
+    assert.equal(run.progress.A1.groupIdx, 0, 'group not done yet — poi_0 still pending');
+    hunt.checkArrival(run, 'A1', P0);
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm');
+    assert.equal(run.progress.A1.groupIdx, 1, 'both done — advanced to the base group');
+  });
+
+  check('a still-pending sibling POI is untouched by completing the other one', () => {
+    const run = makeRun([], parallelPois);
+    hunt.checkArrival(run, 'A1', P0);
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm');
+    assert.equal(run.progress.A1.groupIdx, 0, 'still group 0 — poi_1 not done');
+    assert.equal(run.progress.A1.completedPoiIds.length, 1);
+    assert.ok(run.progress.A1.completedPoiIds.includes('poi_0'));
+  });
+
+  check('no leg deadline/route is armed across a parallel group boundary', () => {
+    const run = makeRun(
+      [{ travel_time_limit_ms: 5000 }, { travel_time_limit_ms: 5000 }],
+      parallelPois,
+    );
+    hunt.checkArrival(run, 'A1', P0);
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm');
+    hunt.checkArrival(run, 'A1', P1);
+    hunt.confirmTargetDestroyed(run, 'A1', 'poi_1');
+    assert.equal(run.progress.A1.legDeadlineAt, null, 'group has no single "the path" to time-limit');
+  });
+
+  check('task timeout on one parallel POI only skips that one, sibling stays workable', () => {
+    const run = makeRun([], [
+      { order_index: 0, task_time_limit_ms: 30, timeout_action: { type: 'skip' } },
+      { order_index: 0 },
+      { order_index: 1 },
+    ]);
+    hunt.checkArrival(run, 'A1', P0);
+    sleepMs(60);
+    hunt.tickHunt(run);
+    assert.equal(run.progress.A1.completedPoiIds.length, 1, 'poi_0 auto-skipped');
+    assert.equal(run.progress.A1.groupIdx, 0, 'still group 0 — poi_1 (no deadline) still pending');
+    hunt.checkArrival(run, 'A1', P1);
+    hunt.confirmTargetDestroyed(run, 'A1', 'poi_1');
+    assert.equal(run.progress.A1.groupIdx, 1, 'both now done — advanced');
   });
 }
 
@@ -94,7 +158,7 @@ console.log('\n═══ TIMEOUTS ═══');
     hunt.checkArrival(run, 'A1', P0);
     sleepMs(60);
     hunt.tickHunt(run);
-    assert.equal(run.progress.A1.currentPoiIndex, 1, 'skipped past the unsolved puzzle');
+    assert.equal(run.progress.A1.groupIdx, 1, 'skipped past the unsolved puzzle');
     assert.ok(run.events.some(e => e.type === 'timeout' && e.kind === 'task'));
   });
 
@@ -110,11 +174,11 @@ console.log('\n═══ TIMEOUTS ═══');
   check('leg timeout ("skip") advances to the next POI without ever arriving', () => {
     const run = makeRun([{ travel_time_limit_ms: 30, timeout_action: { type: 'skip' } }]);
     hunt.checkArrival(run, 'A1', P0);
-    hunt.submitPuzzleAnswer(run, 'A1', 'Turm'); // now mid-leg toward poi_1
-    assert.equal(run.progress.A1.currentPoiIndex, 1);
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm'); // now mid-leg toward poi_1
+    assert.equal(run.progress.A1.groupIdx, 1);
     sleepMs(60);
     hunt.tickHunt(run);
-    assert.equal(run.progress.A1.currentPoiIndex, 2, 'leg timeout skipped straight to poi_2');
+    assert.equal(run.progress.A1.groupIdx, 2, 'leg timeout skipped straight to poi_2');
   });
 }
 
@@ -124,7 +188,7 @@ console.log('\n═══ STRICT ROUTE ENFORCEMENT ═══');
     const path = [P0, P1];
     const run = makeRun([{ route_type: 'defined', enforcement: 'strict', path_geojson: path }]);
     hunt.checkArrival(run, 'A1', P0);
-    hunt.submitPuzzleAnswer(run, 'A1', 'Turm'); // mid-leg toward poi_1, route now armed
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm'); // mid-leg toward poi_1, route now armed
     const farOff = shared.destinationPoint(P0, 0, 200); // 200m perpendicular-ish, well past tolerance
     hunt.tickHunt(run, { A1: farOff });
     assert.equal(run.progress.A1.routeDeviation, true);
@@ -135,7 +199,7 @@ console.log('\n═══ STRICT ROUTE ENFORCEMENT ═══');
     const path = [P0, P1];
     const run = makeRun([{ route_type: 'defined', enforcement: 'guidance', path_geojson: path }]);
     hunt.checkArrival(run, 'A1', P0);
-    hunt.submitPuzzleAnswer(run, 'A1', 'Turm');
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm');
     const farOff = shared.destinationPoint(P0, 0, 200);
     hunt.tickHunt(run, { A1: farOff });
     assert.equal(run.progress.A1.routeDeviation, false);
@@ -172,24 +236,24 @@ console.log('\n═══ LATE-JOIN MODES ═══');
   check('"clone" copies another player\'s current progress into a new independent track', () => {
     const run = makeRun([], [], 'individual', [{ userId: 'A1' }]);
     hunt.checkArrival(run, 'A1', P0);
-    hunt.submitPuzzleAnswer(run, 'A1', 'Turm'); // A1 now at poi_1
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm'); // A1 now at poi_1
     const r = hunt.joinHuntRun(run, 'B1', 'clone', { cloneFromKey: 'A1' });
     assert.equal(r.ok, true);
-    assert.equal(run.progress.B1.currentPoiIndex, 1, 'cloned A1\'s current position in the hunt');
+    assert.equal(run.progress.B1.groupIdx, 1, 'cloned A1\'s current position in the hunt');
     // Independent from here on — B1 finishing its task doesn't affect A1.
     hunt.checkArrival(run, 'B1', P1);
-    hunt.confirmTargetDestroyed(run, 'B1');
-    assert.equal(run.progress.B1.currentPoiIndex, 2);
-    assert.equal(run.progress.A1.currentPoiIndex, 1, 'A1 untouched by B1\'s own progress');
+    hunt.confirmTargetDestroyed(run, 'B1', 'poi_1');
+    assert.equal(run.progress.B1.groupIdx, 2);
+    assert.equal(run.progress.A1.groupIdx, 1, 'A1 untouched by B1\'s own progress');
   });
 
   check('"fresh" join always starts at the first POI', () => {
     const run = makeRun([], [], 'individual', [{ userId: 'A1' }]);
     hunt.checkArrival(run, 'A1', P0);
-    hunt.submitPuzzleAnswer(run, 'A1', 'Turm');
+    hunt.submitPuzzleAnswer(run, 'A1', 'poi_0', 'Turm');
     const r = hunt.joinHuntRun(run, 'B1', 'fresh', {});
     assert.equal(r.ok, true);
-    assert.equal(run.progress.B1.currentPoiIndex, 0);
+    assert.equal(run.progress.B1.groupIdx, 0);
   });
 }
 

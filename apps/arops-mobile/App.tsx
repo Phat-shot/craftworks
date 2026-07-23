@@ -23,6 +23,7 @@ import LobbyScreen from './src/screens/LobbyScreen';
 import GameScreen from './src/screens/GameScreen';
 import GlossaryScreen from './src/screens/GlossaryScreen';
 import MatchSimScreen from './src/screens/MatchSimScreen';
+import HuntSandboxScreen from './src/screens/HuntSandboxScreen';
 import { ThemeProvider, useTheme, THEME_LABELS, ThemeTokens } from './src/theme';
 
 type Route =
@@ -33,7 +34,8 @@ type Route =
   | { name: 'lobby'; lobbyId: string; isHost: boolean; lobbyCode?: string }
   | { name: 'game'; sessionId: string }
   | { name: 'glossary' }
-  | { name: 'matchsim' };
+  | { name: 'matchsim' }
+  | { name: 'huntsandbox' };
 
 // Owns the theme boot/selection state and wraps everything else in
 // ThemeProvider — AppShell (and every screen it renders) can then call
@@ -286,6 +288,15 @@ function AppShell({ themeName, setThemeName }: {
               <Text style={st.simTxt}>Match-Simulation</Text>
             </TouchableOpacity>
           )}
+          {/* Schnitzeljagd equivalent of Match-Simulation above — same
+              debug-only gate, no real scenario editor/scan-code flow exists
+              yet, this just exercises the hunt.js engine directly. */}
+          {debugEnabled && (
+            <TouchableOpacity style={st.huntBtn} onPress={() => setRoute({ name: 'huntsandbox' })}>
+              <Icon name="crosshair" size={16} color="#40e0a0" />
+              <Text style={st.huntTxt}>Schnitzeljagd-Sandbox</Text>
+            </TouchableOpacity>
+          )}
           {!!hostErr && <Text style={st.err}>{hostErr}</Text>}
           <View style={st.menuIconRow}>
             <TouchableOpacity style={[st.menuIconBtn, watchSync.paired && st.menuIconBtnActive]} onPress={() => setWatchPairOpen(true)}>
@@ -309,6 +320,7 @@ function AppShell({ themeName, setThemeName }: {
           resolveOrigin() falls back to the last cached fix, or a jittered
           default as a last resort, never blocking on "keine Position". */}
       {route.name === 'matchsim' && <MatchSimScreen origin={null} onExit={() => setRoute({ name: 'menu' })} />}
+      {route.name === 'huntsandbox' && <HuntSandboxScreen onExit={() => setRoute({ name: 'menu' })} />}
       {route.name === 'lobby' && (
         <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} />
       )}
@@ -456,6 +468,12 @@ function makeStyles(theme: ThemeTokens) {
       borderRadius: 12, padding: 14, marginTop: 12,
     },
     simTxt: { color: '#ff8040', fontSize: 14, fontWeight: '800' },
+    huntBtn: {
+      width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      backgroundColor: 'rgba(64,224,160,.2)', borderWidth: 2, borderColor: 'rgba(32,160,112,.5)',
+      borderRadius: 12, padding: 14, marginTop: 12,
+    },
+    huntTxt: { color: '#40e0a0', fontSize: 14, fontWeight: '800' },
     err: { color: theme.danger, fontSize: 12, marginTop: 12 },
     menuIconRow: { flexDirection: 'row', gap: 12, marginTop: 24 },
     menuIconBtn: {
