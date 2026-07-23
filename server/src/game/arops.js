@@ -211,6 +211,21 @@ function advanceDwell(slot, presentUids, dtMs) {
   return { uid, ms };
 }
 
+/**
+ * "Team Capture" host option (Domination zones / Seek&Destroy's instant
+ * target): normally any single teammate alone in the zone can capture it.
+ * When enabled, capture requires at least cfg.teamCaptureSize teammates
+ * simultaneously present ('all' means the team's whole current roster) —
+ * never applies to ffa (no teams to require multiple of).
+ */
+function teamHasEnoughForCapture(gs, team, pres) {
+  if (!gs.cfg.teamCaptureEnabled) return true;
+  const need = gs.cfg.teamCaptureSize === 'all'
+    ? Object.values(gs.players).filter(p => p.team === team).length
+    : gs.cfg.teamCaptureSize;
+  return pres.byTeam[team].length >= Math.max(1, need);
+}
+
 // ═══════════════════════════════════════════════════════════
 //  MODE PLUGINS
 // ═══════════════════════════════════════════════════════════
@@ -460,7 +475,7 @@ const MODES = {
       for (const z of gs.zones) {
         const pres = zonePresence(gs, z, t);
         const presentKeys = ffa ? pres.all : ['a', 'b'].filter(tm => pres.byTeam[tm].length > 0);
-        if (presentKeys.length === 1) {
+        if (presentKeys.length === 1 && (ffa || teamHasEnoughForCapture(gs, presentKeys[0], pres))) {
           const key = presentKeys[0];
           if (ms.owners[z.id] !== key) {
             const prog = ms.capProgress[z.id];
@@ -474,8 +489,13 @@ const MODES = {
               pushEvent(gs, 'zone_captured', ffa ? { zoneId: z.id, userId: key } : { zoneId: z.id, team: key });
             }
           }
+        } else if (gs.cfg.contestResets && ms.capProgress[z.id]) {
+          // Host opted into "a contest cancels the attempt" — default is to
+          // pause and keep (see below).
+          delete ms.capProgress[z.id];
         }
-        // contested or empty: progress pauses (kept, not reset)
+        // contested or empty (contestResets off, the default): progress
+        // pauses (kept, not reset)
         const owner = ms.owners[z.id];
         if (owner) {
           if (ffa) ms.playerScore[owner] = (ms.playerScore[owner] || 0) + dtMs / 1000;
@@ -521,6 +541,7 @@ const MODES = {
             : null,
         })),
         onHit: gs.cfg.onHit,
+        ...(gs.cfg.teamCaptureEnabled ? { teamCaptureSize: gs.cfg.teamCaptureSize } : {}),
         ...(ms.lives ? { lives: ms.lives, livesPerPlayer: gs.cfg.livesPerPlayer } : {}),
         ...(ms.bases ? { bases: ms.bases } : {}),
       };
@@ -592,8 +613,12 @@ const MODES = {
           if (flag.state === 'home') {
             const pres = zonePresence(gs, baseZone(key), t);
             const thieves = pres.all.filter(uid => uid !== key);
-            flag.pickupProg = advanceDwell(flag.pickupProg, thieves, thieves.length ? dtMs : 0);
-            if (!thieves.length) flag.pickupProg = null;
+            // No thief present this tick: pause (kept), don't reset — same
+            // fix as Seek&Destroy's defuse-variant plant/defuse progress
+            // above (see its comment for why the reset-on-empty was a bug).
+            if (thieves.length) {
+              flag.pickupProg = advanceDwell(flag.pickupProg, thieves, dtMs);
+            }
             if (flag.pickupProg && flag.pickupProg.ms >= gs.timings.flagPickupDwellMs) {
               flag.state = 'carried';
               flag.carrier = flag.pickupProg.uid;
@@ -652,8 +677,11 @@ const MODES = {
           // Enemies dwell in this base to steal the flag
           const pres = zonePresence(gs, baseZone(tm), t);
           const enemies = pres.byTeam[enemyTeam];
-          flag.pickupProg = advanceDwell(flag.pickupProg, enemies, enemies.length ? dtMs : 0);
-          if (!enemies.length) flag.pickupProg = null;
+          // Pause (kept) on an empty zone instead of resetting — see the
+          // Seek&Destroy defuse-variant fix above for why.
+          if (enemies.length) {
+            flag.pickupProg = advanceDwell(flag.pickupProg, enemies, dtMs);
+          }
           if (flag.pickupProg && flag.pickupProg.ms >= gs.timings.flagPickupDwellMs) {
             flag.state = 'carried';
             flag.carrier = flag.pickupProg.uid;
@@ -818,13 +846,16 @@ const MODES = {
       if (remaining.length === 0) {
         if (gs.cfg.destroyReactivate) {
           ms.destroyed = ms.destroyed.map(() => false);
-          ms.activeIndex = 0;
+          ms.activeIndex = Math.floor(Math.random() * gs.zones.length);
           pushEvent(gs, 'targets_reactivated', {});
         } else {
           return endGame(gs, ffa ? 'player_' + byKey : (byKey === 'a' ? 'team_a' : 'team_b'));
         }
       } else {
-        ms.activeIndex = remaining[0];
+        // Random among the remaining non-destroyed zones — a fixed
+        // remaining[0] made the rotation fully predictable/sequential
+        // instead of an actually contested "which target next" fight.
+        ms.activeIndex = remaining[Math.floor(Math.random() * remaining.length)];
       }
     },
     tick(gs, t, dtMs) {
@@ -846,8 +877,17 @@ const MODES = {
         if (!ms.armed) {
           const pres = zonePresence(gs, zone, t);
           const attackers = pres.byTeam.a;
-          const slot = ms.captureProg && ms.captureProg.team === 'a' ? ms.captureProg : null;
+          // No attacker present this tick: progress PAUSES (kept, not
+          // reset) — same "contested/empty pauses" convention every other
+          // capture path in this file uses (Domination's capProgress,
+          // instant-variant's captureProg above). This used to unconditionally
+          // null captureProg the instant the zone went empty for even one
+          // tick, wiping out an almost-complete plant on a single GPS-jitter
+          // dropout at the zone boundary — reported as capture progress
+          // "hanging" near completion and never finishing (the player just
+          // kept getting reset back to ~0 right before the end).
           if (attackers.length) {
+            const slot = ms.captureProg && ms.captureProg.team === 'a' ? ms.captureProg : null;
             const next = advanceDwell(slot, attackers, dtMs);
             ms.captureProg = { team: 'a', uid: next.uid, ms: next.ms };
             if (next.ms >= gs.timings.plantDwellMs) {
@@ -855,14 +895,14 @@ const MODES = {
               ms.captureProg = null;
               pushEvent(gs, 'target_armed', { zoneId: zone.id, byUserId: next.uid, explodeAt: ms.armed.explodeAt });
             }
-          } else {
-            ms.captureProg = null;
           }
         } else {
           const pres = zonePresence(gs, zone, t);
           const defenders = pres.byTeam.b;
-          ms.armed.defuseProg = advanceDwell(ms.armed.defuseProg, defenders, defenders.length ? dtMs : 0);
-          if (!defenders.length) ms.armed.defuseProg = null;
+          // Same pause-not-reset fix as the plant progress above.
+          if (defenders.length) {
+            ms.armed.defuseProg = advanceDwell(ms.armed.defuseProg, defenders, dtMs);
+          }
           if (ms.armed.defuseProg && ms.armed.defuseProg.ms >= gs.timings.defuseDwellMs) {
             pushEvent(gs, 'target_defused', { zoneId: zone.id, byUserId: ms.armed.defuseProg.uid });
             const p = gs.players[ms.armed.defuseProg.uid]; if (p) p.score += 10;
@@ -883,12 +923,14 @@ const MODES = {
             this.destroyActive(gs, uid, [uid], t);
             return;
           }
+        } else if (gs.cfg.contestResets && ms.captureProg) {
+          ms.captureProg = null;
         }
       } else {
         // instant (default): either team can dwell-capture the active target
         const pres = zonePresence(gs, zone, t);
         const teamsIn = ['a', 'b'].filter(tm => pres.byTeam[tm].length > 0);
-        if (teamsIn.length === 1) {
+        if (teamsIn.length === 1 && teamHasEnoughForCapture(gs, teamsIn[0], pres)) {
           const tm = teamsIn[0];
           const prog = ms.captureProg && ms.captureProg.team === tm ? ms.captureProg : null;
           const nextMs = (prog ? prog.ms : 0) + dtMs;
@@ -897,9 +939,11 @@ const MODES = {
             this.destroyActive(gs, tm, pres.byTeam[tm], t);
             return;
           }
+        } else if (gs.cfg.contestResets && ms.captureProg) {
+          // Host opted into "a contest cancels the attempt" — default is to
+          // pause and keep, same convention as Domination's zone capture.
+          ms.captureProg = null;
         }
-        // contested by both teams or empty: progress pauses (kept), same
-        // convention as Domination's zone capture.
       }
 
       if (!gs.gameOver && t - gs.phaseStartTime >= gs.cfg.gameDurationMs) {
@@ -944,6 +988,8 @@ const MODES = {
             ? Math.min(100, Math.round(100 * ms.armed.defuseProg.ms / gs.timings.defuseDwellMs)) : 0,
         } : null,
         onHit: gs.cfg.onHit,
+        ...(gs.cfg.teamCaptureEnabled && gs.cfg.destroyVariant === 'instant'
+          ? { teamCaptureSize: gs.cfg.teamCaptureSize } : {}),
         ...(ms.lives ? { lives: ms.lives, livesPerPlayer: gs.cfg.livesPerPlayer } : {}),
         ...(ms.bases ? { bases: ms.bases } : {}),
       };
@@ -1345,6 +1391,14 @@ function createAropsGame(sessionId, players, workshopConfig) {
   // single-bomb-site mechanic but generalized to a rotating target list).
   cfg.destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
   cfg.destroyReactivate = ar.destroyReactivate === true;
+  // Domination zone capture / Seek&Destroy's 'instant' target capture: what
+  // happens when an unfrozen opponent shows up in the zone alongside the
+  // capturing side (contested). Default (false) pauses progress and keeps
+  // it — the capturing side can finish once the opponent leaves/is dealt
+  // with. When true, a contest instead cancels the attempt outright,
+  // resetting progress to 0 — a stricter host option for "any interruption
+  // costs you the whole attempt".
+  cfg.contestResets = ar.contestResets === true;
   // Team/FFA variant for the 4 team-capable modes (domination, ctf,
   // seek_destroy, deathmatch) — 'team' (default, unchanged behavior) or
   // 'ffa' ("Jeder gegen jeden", every player for themselves). Only
@@ -1355,6 +1409,11 @@ function createAropsGame(sessionId, players, workshopConfig) {
   // guard here too in case a stale ar_settings still has it set.
   cfg.teamVariant = (mode.usesTeams && ar.teamVariant === 'ffa') ? 'ffa' : 'team';
   if (cfg.teamVariant === 'ffa' && subMode === 'seek_destroy') cfg.destroyVariant = 'instant';
+  // "Team Capture" (Domination zones / Seek&Destroy's instant target):
+  // requires several teammates simultaneously present instead of just one.
+  // Never applies to ffa — there are no teams to require multiple of.
+  cfg.teamCaptureEnabled = ar.teamCaptureEnabled === true && cfg.teamVariant !== 'ffa';
+  cfg.teamCaptureSize = ar.teamCaptureSize === 3 || ar.teamCaptureSize === 'all' ? ar.teamCaptureSize : 2;
 
   const hitConfig = { ...shared.DEFAULT_HIT_CONFIG };
   if (auto) {
@@ -1389,7 +1448,16 @@ function createAropsGame(sessionId, players, workshopConfig) {
     );
   }
   if (subMode === 'domination' || subMode === 'seek_destroy') {
-    const minZones = subMode === 'domination' ? 2 : 1;
+    let minZones = subMode === 'domination' ? 2 : 1;
+    // Reactivating (destroyReactivate) cycles through the same target list
+    // forever — with exactly as many targets as teams (or, in ffa, players),
+    // every side can always claim one simultaneously and the "rotating
+    // single active target" mechanic never actually rotates/contests
+    // anything. Require at least one spare target so there's always
+    // something worth fighting over.
+    if (subMode === 'seek_destroy' && cfg.destroyReactivate) {
+      minZones = Math.max(minZones, (cfg.teamVariant === 'ffa' ? players.length : 2) + 1);
+    }
     if (zones.length < minZones) throw new Error('need_zones');
     const zCheck = shared.validateZones(zones, polygon);
     if (!zCheck.ok) throw new Error('invalid_zones: ' + zCheck.errors.join(','));

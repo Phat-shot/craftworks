@@ -127,6 +127,78 @@ console.log('\n═══ DOMINATION ═══');
   });
 }
 
+// ═══ CONTEST RESETS (host toggle) ═══════════════════════════
+console.log('\n═══ CONTEST RESETS ═══');
+{
+  check('domination: contestResets=true cancels progress on contest instead of pausing it', () => {
+    const gs = createGame('dom_contest',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
+        timings: FAST, gameDurationMs: 600_000, contestResets: true } });
+    skipWarmup(gs);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200);
+    assert.ok(gs.modeState.capProgress.z1 && gs.modeState.capProgress.z1.ms > 0, 'accumulated progress');
+    tel(gs, 'B1', Z1); // contest
+    tick(gs, 200);
+    assert.equal(gs.modeState.capProgress.z1, undefined, 'contest cancelled the attempt (contestResets=true)');
+  });
+
+  check('domination: contestResets=false (default) pauses progress on contest instead of cancelling it', () => {
+    const gs = createGame('dom_pause',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
+        timings: FAST, gameDurationMs: 600_000 } });
+    skipWarmup(gs);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200);
+    const before = gs.modeState.capProgress.z1;
+    assert.ok(before && before.ms > 0, 'accumulated progress');
+    tel(gs, 'B1', Z1); // contest
+    tick(gs, 200);
+    assert.deepEqual(gs.modeState.capProgress.z1, before, 'progress kept, not reset (default)');
+  });
+
+  check('teamCaptureEnabled: domination zone requires N teammates present, not just 1', () => {
+    const gs = createGame('dom_teamcap',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2], teams: { A1: 'a', A2: 'a', B1: 'b' },
+        timings: FAST, gameDurationMs: 600_000, teamCaptureEnabled: true, teamCaptureSize: 2 } });
+    skipWarmup(gs);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.owners.z1, null, 'solo teammate cannot capture — needs 2');
+    tel(gs, 'A2', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.owners.z1, 'a', 'both teammates present together — captures');
+  });
+
+  check('teamCaptureEnabled is ignored in ffa (no teams to require multiple of)', () => {
+    const gs = createGame('dom_teamcap_ffa',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', teamVariant: 'ffa', zones: [Z1, Z2],
+        timings: FAST, gameDurationMs: 600_000, teamCaptureEnabled: true, teamCaptureSize: 2 } });
+    skipWarmup(gs);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); tick(gs, 200);
+    assert.equal(gs.modeState.owners.z1, 'A1', 'solo player captures normally — teamCaptureEnabled has no ffa reading');
+  });
+
+  check('seek_destroy instant: contestResets=true cancels progress on contest', () => {
+    const gs = createGame('snd_contest',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2],
+        timings: FAST, gameDurationMs: 600_000, contestResets: true } });
+    skipWarmup(gs);
+    tel(gs, 'A1', Z1);
+    tick(gs, 200);
+    assert.ok(gs.modeState.captureProg && gs.modeState.captureProg.ms > 0, 'accumulated progress');
+    tel(gs, 'B1', Z1); // contest
+    tick(gs, 200);
+    assert.equal(gs.modeState.captureProg, null, 'contest cancelled the attempt (contestResets=true)');
+  });
+}
+
 // ═══ FREEZE MECHANIC ════════════════════════════════════════
 console.log('\n═══ FREEZE ═══');
 {
@@ -1018,16 +1090,39 @@ console.log('\n═══ SEEK & DESTROY ═══');
   });
 
   check('destroyReactivate: after all targets are destroyed, they reset and the match continues', () => {
+    // destroyReactivate requires at least one more target than teams (2
+    // teams here → minimum 3) — see the need_zones invariant test below.
+    const Z3 = shared.destinationPoint(MUC, 0, 100);
     const gs = createGame('snd_reactivate',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST,
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2, Z3], timings: FAST,
         gameDurationMs: 600_000, destroyReactivate: true } });
     skipWarmup(gs);
-    tel(gs, 'A1', Z1);
-    tick(gs, 200); tick(gs, 200);
+    // Destroy all 3 targets in turn, walking to whichever zone is currently
+    // active (order is randomized among the remaining ones, see the
+    // "random next active target" test above).
+    for (let i = 0; i < 3; i++) {
+      const active = gs.zones[gs.modeState.activeIndex];
+      tel(gs, 'A1', active);
+      tick(gs, 200); tick(gs, 200);
+    }
     assert.equal(gs.gameOver, false, 'reactivation keeps the match going instead of ending it');
-    assert.deepEqual(gs.modeState.destroyed, [false], 'the single zone reactivated');
+    assert.deepEqual(gs.modeState.destroyed, [false, false, false], 'all 3 zones reactivated');
     assert.ok(gs.events.some(e => e.type === 'targets_reactivated'));
+  });
+
+  check('destroyReactivate requires more targets than teams/players, otherwise need_zones', () => {
+    assert.throws(() => createGame('snd_reactivate_toofew',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2], timings: FAST,
+        gameDurationMs: 600_000, destroyReactivate: true } }), /need_zones/,
+      '2 teams need > 2 targets (3+) when reactivating');
+    // Without reactivate, the same 2 zones are fine.
+    const gs = createGame('snd_no_reactivate',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2], timings: FAST,
+        gameDurationMs: 600_000 } });
+    assert.equal(gs.zones.length, 2);
   });
 
   check('defuse variant: attacker arms the target, defender defuses it — target survives, stays active', () => {
@@ -1055,6 +1150,53 @@ console.log('\n═══ SEEK & DESTROY ═══');
     assert.equal(gs.modeState.destroyed[0], true);
     assert.equal(gs.gameOver, true);
     assert.equal(gs.winner, 'team_a');
+  });
+
+  check('defuse variant: a momentary empty zone (GPS jitter) pauses plant progress instead of resetting it', () => {
+    // Regression test: advanceDwell used to be paired with an unconditional
+    // `else { ms.captureProg = null }` whenever nobody was present that
+    // tick, wiping out an almost-complete plant on a single dropout at the
+    // zone boundary — reported as capture progress getting stuck near
+    // completion and never finishing (repeated near-100% resets read as
+    // "hangs"). Every other capture path (Domination's capProgress,
+    // instant-variant's captureProg) already paused-and-kept; this made
+    // defuse-variant plant/defuse the odd one out.
+    const gs = mk({ destroyVariant: 'defuse' });
+    tel(gs, 'A1', Z1);
+    tick(gs, 200); // partway into the plant dwell (plantDwellMs=300 under FAST)
+    const progBefore = gs.modeState.captureProg;
+    assert.ok(progBefore && progBefore.ms > 0, 'accumulated some progress');
+    tel(gs, 'A1', shared.destinationPoint(Z1, 90, 500)); // step well outside the zone
+    tick(gs, 200);
+    assert.deepEqual(gs.modeState.captureProg, progBefore, 'progress paused, not reset, while the zone is empty');
+    tel(gs, 'A1', Z1); // back in
+    tick(gs, 200);
+    assert.ok(gs.modeState.armed, 'resumed and finished arming instead of restarting from 0');
+  });
+
+  check('CTF: a momentary empty base zone pauses flag pickup progress instead of resetting it', () => {
+    const gs = createGame('ctf_pause',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'ctf', timings: FAST, gameDurationMs: 600_000 } });
+    // Captains place bases (A1 for team a, B1 for team b, default alternating assignment)
+    arops.actionArSetBase(gs, 'A1', { lat: Z1.lat, lon: Z1.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: Z2.lat, lon: Z2.lon });
+    // Both in their own base right as base_setup ends, otherwise the
+    // spawn/respawn checkpoint marks them 'downed' and zonePresence excludes
+    // non-alive players from every flag check below (see the matching
+    // comment on the CTF suite's own "valid base set" test above).
+    tel(gs, 'A1', Z1);
+    tel(gs, 'B1', Z2);
+    gs.phaseStartTime = Date.now() - (gs.timings.baseSettingMs + 100);
+    tick(gs, 100);
+    assert.equal(gs.phase, 'live');
+    tel(gs, 'B1', Z1); // B1 (team b) dwelling to steal team a's home flag
+    tick(gs, 200);
+    const progBefore = gs.modeState.flags.a.pickupProg;
+    assert.ok(progBefore && progBefore.ms > 0, 'accumulated some pickup progress');
+    tel(gs, 'B1', shared.destinationPoint(Z1, 90, 500));
+    tick(gs, 200);
+    assert.deepEqual(gs.modeState.flags.a.pickupProg, progBefore, 'pickup progress paused, not reset');
   });
 
   check('time limit: higher score wins, tie is a draw', () => {
