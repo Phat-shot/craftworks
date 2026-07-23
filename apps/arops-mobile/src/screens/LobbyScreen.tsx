@@ -46,6 +46,15 @@ interface ArSettings {
   // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
   destroyVariant?: 'instant' | 'defuse';
   destroyReactivate?: boolean;
+  // Domination/Zerstören (instant): contested by an unfrozen opponent
+  // cancels the capture attempt (progress resets to 0) instead of just
+  // pausing it — see arops.js's cfg.contestResets.
+  contestResets?: boolean;
+  // "Team Capture": requires several teammates simultaneously in the
+  // zone/target to capture instead of just one — see arops.js's
+  // cfg.teamCaptureEnabled/cfg.teamCaptureSize. Never applies to ffa.
+  teamCaptureEnabled?: boolean;
+  teamCaptureSize?: 2 | 3 | 'all';
   // On-hit consequence + lives (respawn variant only) — all 4 combat modes
   // (Domination, CTF, Seek&Destroy, Deathmatch).
   onHit?: 'respawn' | 'freeze';
@@ -112,6 +121,33 @@ const DEBUG_COOLDOWNS = {
   radarCooldownMs: 15_000, droneCooldownMs: 15_000, cloakCooldownMs: 15_000,
   fakeMarkerCooldownMs: 15_000, aufscheuchenCooldownMs: 15_000,
 };
+
+// Shared icon-toggle-group renderer — was previously duplicated ad hoc for
+// onHit (2 buttons) and foundMode (3 buttons), both living in the mode row.
+// Both are "what happens to a hit/found player" controls, just for different
+// mode families; this is the one shared shape for that pattern, now living
+// in each mode's own submode row instead of the mode-selection row.
+function IconToggleGroup<T extends string>({
+  options, value, onChange, theme, st,
+}: {
+  options: { value: T; icon: IconName; title: string; body: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  theme: ThemeTokens;
+  st: ReturnType<typeof makeStyles>;
+}) {
+  return (
+    <View style={st.modeRowToggle}>
+      {options.map(o => (
+        <TouchableOpacity key={o.value} style={[st.iconBtnLg, value === o.value && st.smallBtnActive]}
+          onPress={() => onChange(o.value)}
+          onLongPress={() => Alert.alert(o.title, o.body)}>
+          <Icon name={o.icon} size={17} color={value === o.value ? theme.accent : theme.text2} />
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
 
 export default function LobbyScreen({
   lobbyId, isHost = false, lobbyCode, onGameStart,
@@ -328,6 +364,10 @@ export default function LobbyScreen({
     emitUpdate({ classes: { ...(ar.classes || {}), [uid]: next } });
   };
 
+  // Which kind of point was placed most recently — "Schritt zurück" below
+  // undoes whichever this is (target/zone or field/geofence point), not just
+  // one or the other.
+  const [lastEditType, setLastEditType] = useState<'polygon' | 'zones' | null>(null);
   const onMapPress = (feature: any) => {
     if (!isHost) return;
     // No explicit "retry GPS on tap" needed anymore — useTelemetry already
@@ -337,9 +377,30 @@ export default function LobbyScreen({
     if (!Array.isArray(c)) return;
     if (tapMode === 'zones' && NEEDS_ZONES[subMode] !== undefined) {
       emitUpdate({ zones: [...zones, { lat: c[1], lon: c[0] }] });
+      setLastEditType('zones');
     } else {
       emitUpdate({ polygon: [...polygon, { lat: c[1], lon: c[0] }] });
+      setLastEditType('polygon');
     }
+  };
+  const undoLastPoint = () => {
+    if (lastEditType === 'zones' && zones.length) {
+      emitUpdate({ zones: zones.slice(0, -1) });
+    } else if (polygon.length) {
+      emitUpdate({ polygon: polygon.slice(0, -1) });
+      setLastEditType('polygon');
+    } else if (zones.length) {
+      emitUpdate({ zones: zones.slice(0, -1) });
+      setLastEditType('zones');
+    }
+  };
+  // Clears every point (field + zones) but keeps the comic map and the
+  // current map viewport — see everHadFieldRef below, which stops the
+  // Camera from jumping back to the own-position view once the field
+  // polygon empties out again.
+  const clearAllPoints = () => {
+    setLastEditType(null);
+    emitUpdate({ polygon: [], zones: [] });
   };
 
   const toggleRole = (uid: string) => {
@@ -416,6 +477,13 @@ export default function LobbyScreen({
     ? [polygon.reduce((s, p) => s + p.lon, 0) / polygon.length,
        polygon.reduce((s, p) => s + p.lat, 0) / polygon.length]
     : myPos ? [myPos.lon, myPos.lat] : [11.5755, 48.1374];
+  // Latches once the field polygon first reaches 3 points — used for the
+  // Camera's `key` below so clearing all points (Papierkorb) doesn't jump
+  // the viewport back to the own-position view; without this, the key would
+  // flip from 'f' back to 'me' the instant polygon.length drops under 3,
+  // forcing MapLibre to re-apply defaultSettings and recenter.
+  const everHadFieldRef = useRef(false);
+  if (polygon.length >= 3) everHadFieldRef.current = true;
 
   const fieldGeoJSON = useMemo(() => ({
     type: 'Feature' as const, properties: {},
@@ -586,47 +654,6 @@ export default function LobbyScreen({
               </TouchableOpacity>
             ))}
           </View>
-          {/* Treffer-Konsequenz — ganz rechts in der Modus-Reihe, icon-only
-              (Leben verlieren vs. Einfrieren), statt einer eigenen Zeile mit
-              Text weiter unten. */}
-          {teamMode && (
-            <View style={st.modeRowToggle}>
-              <TouchableOpacity style={[st.iconBtnLg, onHit === 'respawn' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ onHit: 'respawn' })}
-                onLongPress={() => Alert.alert('Leben verlieren', 'Treffer kostet ein Leben statt einzufrieren.')}>
-                <Icon name="heart" size={17} color={onHit === 'respawn' ? theme.accent : theme.text2} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.iconBtnLg, onHit === 'freeze' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ onHit: 'freeze' })}
-                onLongPress={() => Alert.alert('Einfrieren', 'Treffer friert kurz ein statt ein Leben zu kosten.')}>
-                <Icon name="snowflake" size={17} color={onHit === 'freeze' ? theme.accent : theme.text2} />
-              </TouchableOpacity>
-            </View>
-          )}
-          {/* Hide & Seek — ganz rechts: Freeze für Hider an/aus, links davon
-              Weiterspielen (Sucher)/Zuschauer. Ersetzt den bisherigen
-              3-Wege-"Gefunden"-Picker (spectator/seeker/freeze) unten:
-              Freeze AN gewinnt immer (unabhängig vom anderen Toggle);
-              Freeze AUS liest den Weiterspielen/Zuschauer-Toggle. */}
-          {rolesApply && (
-            <View style={st.modeRowToggle}>
-              <TouchableOpacity style={[st.iconBtnLg, foundMode === 'seeker' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'seeker' })}
-                onLongPress={() => Alert.alert('Weiterspielen (Sucher)', 'Gefundene Hider spielen sofort als Sucher weiter.')}>
-                <Icon name="magnify" size={17} color={foundMode === 'seeker' ? theme.accent : theme.text2} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.iconBtnLg, foundMode !== 'seeker' && foundMode !== 'freeze' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: 'spectator' })}
-                onLongPress={() => Alert.alert('Zuschauer', 'Gefundene Hider scheiden aus und schauen zu.')}>
-                <Icon name="binoculars" size={17} color={foundMode !== 'seeker' && foundMode !== 'freeze' ? theme.accent : theme.text2} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.iconBtnLg, foundMode === 'freeze' && st.smallBtnActive]}
-                onPress={() => emitUpdate({ foundMode: foundMode === 'freeze' ? 'spectator' : 'freeze' })}
-                onLongPress={() => Alert.alert('Freeze für Hider', 'Gefundene Hider frieren kurz ein statt auszuscheiden — überstimmt Weiterspielen/Zuschauer.')}>
-                <Icon name="snowflake" size={17} color={foundMode === 'freeze' ? theme.accent : theme.text2} />
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
       )}
       {/* Jeder gegen jeden + The Ship sind Varianten von Hide & Seek
@@ -654,6 +681,20 @@ export default function LobbyScreen({
             <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
           </TouchableOpacity>
+          {/* Gefunden-Konsequenz — jetzt hier in der Submode-Zeile statt in
+              der Modus-Zeile oben. Freeze AN gewinnt immer (unabhängig vom
+              anderen Toggle); Freeze AUS liest den Weiterspielen/
+              Zuschauer-Toggle. Nur bei classic sichtbar (rolesApply) — ffa/
+              The Ship haben keine Rollen, also nichts "Gefundenes". */}
+          {isHost && rolesApply && (
+            <IconToggleGroup theme={theme} st={st} value={foundMode}
+              onChange={v => emitUpdate({ foundMode: v })}
+              options={[
+                { value: 'seeker', icon: 'magnify', title: 'Weiterspielen (Sucher)', body: 'Gefundene Hider spielen sofort als Sucher weiter.' },
+                { value: 'spectator', icon: 'binoculars', title: 'Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu.' },
+                { value: 'freeze', icon: 'snowflake', title: 'Freeze für Hider', body: 'Gefundene Hider frieren kurz ein statt auszuscheiden — überstimmt Weiterspielen/Zuschauer.' },
+              ]} />
+          )}
         </View>
       )}
       {/* Alle Modus-spezifischen Einstellungen konsistent direkt unter dem
@@ -688,6 +729,16 @@ export default function LobbyScreen({
               {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
             </Text>
           )}
+          {/* Treffer-Konsequenz — jetzt hier in der Submode-Zeile statt in
+              der Modus-Zeile oben (Leben verlieren vs. Einfrieren). */}
+          {isHost && (
+            <IconToggleGroup theme={theme} st={st} value={onHit}
+              onChange={v => emitUpdate({ onHit: v })}
+              options={[
+                { value: 'respawn', icon: 'heart', title: 'Leben verlieren', body: 'Treffer kostet ein Leben statt einzufrieren.' },
+                { value: 'freeze', icon: 'snowflake', title: 'Einfrieren', body: 'Treffer friert kurz ein statt ein Leben zu kosten.' },
+              ]} />
+          )}
         </View>
       )}
       {isHost && subMode === 'seek_destroy' && (
@@ -710,6 +761,49 @@ export default function LobbyScreen({
               Ziele reaktivieren: {ar.destroyReactivate ? 'AN' : 'AUS'}
             </Text>
           </TouchableOpacity>
+        </View>
+      )}
+      {/* Was passiert, wenn ein ungefreezter Gegner während der Einnahme/des
+          Scharfmachens im Ziel auftaucht: standardmäßig pausiert das nur
+          (Fortschritt bleibt erhalten), mit diesem Toggle bricht es den
+          Versuch stattdessen komplett ab (Fortschritt auf 0). Gilt für
+          Domination-Zonen und Zerstören-Ziele (instant-Variante). */}
+      {isHost && (subMode === 'domination' || subMode === 'seek_destroy') && (
+        <View style={st.rowBtns}>
+          <TouchableOpacity style={[st.smallBtnRow, ar.contestResets && st.toggleOn]}
+            onPress={() => emitUpdate({ contestResets: !ar.contestResets })}
+            onLongPress={() => Alert.alert('Einnahme bei Kontakt',
+              'AUS (Standard): ein ungefreezter Gegner im Ziel pausiert die Einnahme nur, Fortschritt bleibt erhalten. AN: bricht den Versuch komplett ab.')}>
+            <Icon name="close" size={13} color={ar.contestResets ? theme.onAccent : theme.text2} />
+            <Text style={[st.smallTxt, ar.contestResets && st.toggleOnTxt]}>
+              Kontakt bricht Einnahme ab: {ar.contestResets ? 'AN' : 'AUS'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {/* Team Capture: mehrere Teammitglieder müssen gleichzeitig im Ziel
+          stehen, um es einzunehmen — Standard AUS (jede/r Einzelne kann
+          einnehmen). Nur bei echten Teams (nicht ffa) und nur, wo Domination/
+          Zerstören's symmetrische Einnahme überhaupt gilt (Zerstören-
+          "Entschärfen" ist bereits zweiseitig angelegt, davon unabhängig). */}
+      {isHost && teamVariant === 'team' && (subMode === 'domination' || (subMode === 'seek_destroy' && destroyVariant === 'instant')) && (
+        <View style={st.rowBtns}>
+          <TouchableOpacity style={[st.smallBtnRow, ar.teamCaptureEnabled && st.toggleOn]}
+            onPress={() => emitUpdate({ teamCaptureEnabled: !ar.teamCaptureEnabled })}
+            onLongPress={() => Alert.alert('Team Capture', 'Statt einer einzelnen Person müssen mehrere Teammitglieder gleichzeitig im Ziel stehen, um es einzunehmen.')}>
+            <Icon name="teamCapture" size={13} color={ar.teamCaptureEnabled ? theme.onAccent : theme.text2} />
+            <Text style={[st.smallTxt, ar.teamCaptureEnabled && st.toggleOnTxt]}>
+              Team Capture: {ar.teamCaptureEnabled ? 'AN' : 'AUS'}
+            </Text>
+          </TouchableOpacity>
+          {ar.teamCaptureEnabled && ([2, 3, 'all'] as const).map(n => (
+            <TouchableOpacity key={n} style={[st.smallBtn, (ar.teamCaptureSize ?? 2) === n && st.smallBtnActive]}
+              onPress={() => emitUpdate({ teamCaptureSize: n })}>
+              <Text style={[st.smallTxt, (ar.teamCaptureSize ?? 2) === n && st.smallTxtActive]}>
+                {n === 'all' ? 'ganzes Team' : n}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
       )}
       {isHost && teamMode && onHit === 'respawn' && !autoScale && (
@@ -736,7 +830,7 @@ export default function LobbyScreen({
           {/* key changes force MapLibre to re-apply defaultSettings: once when
               our own position resolves (async, arrives after mount), again
               once the field polygon is complete enough to re-center on it. */}
-          <Camera key={polygon.length >= 3 ? 'f' : myPos ? 'me' : 'e'}
+          <Camera key={everHadFieldRef.current ? 'f' : myPos ? 'me' : 'e'}
             defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
           {myPos && (
             <ShapeSource id="myPos" shape={{
@@ -813,11 +907,19 @@ export default function LobbyScreen({
       {isHost && (
         <>
           <View style={st.rowBtns}>
-            <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
+            {/* Just 2 correction buttons instead of separate undo/clear per
+                point type: "Schritt zurück" undoes whichever kind of point
+                (field/geofence or target/zone) was placed most recently,
+                "Papierkorb" clears everything at once but keeps the comic
+                map + viewport (see everHadFieldRef/clearAllPoints above) —
+                long-press forces a full regenerate regardless of staleness. */}
+            <TouchableOpacity style={st.iconBtnLg} onPress={undoLastPoint} disabled={!polygon.length && !zones.length}>
               <Icon name="undo" size={19} color={theme.text2} />
             </TouchableOpacity>
-            <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Icon name="close" size={19} color={theme.text2} />
+            <TouchableOpacity style={st.iconBtnLg} onPress={clearAllPoints}
+              onLongPress={generateComicMap}
+              disabled={!polygon.length && !zones.length}>
+              <Icon name="trash" size={19} color={theme.text2} />
             </TouchableOpacity>
             <Text style={st.wpCount}>{polygon.length}</Text>
             {NEEDS_ZONES[subMode] !== undefined && (
@@ -827,9 +929,6 @@ export default function LobbyScreen({
                 </TouchableOpacity>
                 <TouchableOpacity style={[st.smallBtn, tapMode === 'zones' && st.smallBtnActive]} onPress={() => setTapMode('zones')}>
                   <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen {zones.length}/{NEEDS_ZONES[subMode]}+</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                  <Icon name="trash" size={19} color={theme.text2} />
                 </TouchableOpacity>
               </>
             )}
@@ -1099,7 +1198,7 @@ function makeStyles(theme: ThemeTokens) {
     codeSubRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     codeSub: { color: theme.text3, fontSize: 9 },
     hostHint: { color: theme.text3, fontSize: 11, marginBottom: 8 },
-    mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+    mapBox: { height: 300, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
     comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
     // Stale/cached status badges — semantic (warning-gold / ok-green),
     // stays literal across themes same as everywhere else status color is used.
