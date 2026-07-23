@@ -10,7 +10,10 @@ test('timings: small field (L=20, platform minimum) matches spec anchors', () =>
   const t = scaleTimings(400); // 20×20m
   assert.equal(t.zoneRadiusM, 10);
   assert.equal(t.freezeMs, 3_000);
-  assert.equal(t.captureDwellMs, 3_000);
+  assert.equal(t.captureDwellMs, 1_500, 'capture dwell is always half the freeze duration');
+  assert.equal(t.plantDwellMs, 1_500);
+  assert.equal(t.defuseDwellMs, 1_500);
+  assert.equal(t.flagPickupDwellMs, 1_500);
   assert.equal(t.freezeMoveToleranceM, 15);
   assert.equal(t.baseSettingMs, 60_000);
   assert.equal(t.warmupMs, 60_000);

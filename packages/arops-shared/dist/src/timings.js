@@ -15,7 +15,13 @@
 //  points, without being formally anchored to them.
 // ═══════════════════════════════════════════════════════════
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateRandomZones = exports.validateZones = exports.distanceToZoneM = exports.isInZone = exports.scaleCoreConfig = exports.scaleDroneRangeM = exports.scaleTimings = void 0;
+exports.scaleTimings = scaleTimings;
+exports.scaleDroneRangeM = scaleDroneRangeM;
+exports.scaleCoreConfig = scaleCoreConfig;
+exports.isInZone = isInZone;
+exports.distanceToZoneM = distanceToZoneM;
+exports.validateZones = validateZones;
+exports.generateRandomZones = generateRandomZones;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 /**
  * Piecewise-linear 3-anchor-point scale: flat floor below `sSmall`, linear
@@ -37,28 +43,32 @@ function scale3(L, atSmall, atMedium, atLarge) {
 /** Compute all mode timings from the playfield area. */
 function scaleTimings(areaM2) {
     const L = Math.sqrt(Math.max(1, areaM2)); // characteristic length in m
+    // 3s @ 20m, 10s @ 100m, 30s @ 1000m+.
+    const freezeMs = scale3(L, 3000, 10000, 30000);
+    // Every capture/plant/defuse/flag-pickup dwell is pinned to half the
+    // freeze duration (host requirement) rather than its own independent
+    // field-size formula — a target/flag should take exactly as long to
+    // secure as half the punishment for getting caught doing it.
+    const halfFreezeMs = freezeMs / 2;
     return {
         // ~L/8: small ≈10m (floor), medium ≈13m, large(L=200) ≈25m.
         zoneRadiusM: clamp(L / 8, 10, 40),
-        // 3s @ 20m, 10s @ 100m, 30s @ 1000m+.
-        freezeMs: scale3(L, 3000, 10000, 30000),
+        freezeMs,
         freezeMoveToleranceM: 15, // fixed: below GPS drift would punish standing still
         freezeExtensionMs: clamp(L * 25, 1000, 8000),
         // Base-placement phase: 1min @ 20m, 2min @ 100m, 5min @ 1000m+.
         baseSettingMs: scale3(L, 60000, 120000, 300000),
         // Warmup phase: fixed 1 minute regardless of field size.
         warmupMs: 60000,
-        // Small ≈2.5s, medium ≈5s, large(L=200) ≈10s.
-        flagPickupDwellMs: clamp((L / 20) * 1000, 2000, 12000),
+        flagPickupDwellMs: halfFreezeMs,
         // Small ≈15s, medium ≈30s, large(L=200) ≈60s.
         flagReturnMs: clamp(L * 300, 10000, 90000),
         // Small ≈30m, medium ≈60m, large(L=200) ≈120m — the old 60m floor left
         // almost no room to place 2 bases at all on a small/medium field.
         minBaseSeparationM: clamp(L * 0.6, 15, 500),
-        // Small ≈3.3s, medium ≈6.7s, large(L=200) ≈13.3s.
-        captureDwellMs: clamp((L / 15) * 1000, 3000, 20000),
-        plantDwellMs: clamp((L / 15) * 1000, 4000, 20000),
-        defuseDwellMs: clamp((L / 20) * 1000, 3000, 15000),
+        captureDwellMs: halfFreezeMs,
+        plantDwellMs: halfFreezeMs,
+        defuseDwellMs: halfFreezeMs,
         // Small ≈51s, medium ≈86s, large(L=200) ≈158s.
         bombTimerMs: clamp(((L / 1.4) + 15) * 1000, 45000, 240000),
         // Small ≈10m, medium ≈20m, large(L=200) ≈40m.
@@ -66,7 +76,6 @@ function scaleTimings(areaM2) {
         spawnCheckDwellMs: clamp((L / 20) * 1000, 3000, 15000),
     };
 }
-exports.scaleTimings = scaleTimings;
 /** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
 function scaleDroneRangeM(areaM2) {
     const L = Math.sqrt(Math.max(1, areaM2));
@@ -75,7 +84,6 @@ function scaleDroneRangeM(areaM2) {
     // as a "nearby" signal, it'd fire almost constantly).
     return clamp(L * 0.5, 15, 200);
 }
-exports.scaleDroneRangeM = scaleDroneRangeM;
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
  * straight from the playfield size — an alternative to the host manually
@@ -127,17 +135,14 @@ function scaleCoreConfig(areaM2) {
         livesPerPlayer,
     };
 }
-exports.scaleCoreConfig = scaleCoreConfig;
 const geo_1 = require("./geo");
 function isInZone(p, z) {
     return (0, geo_1.haversineMeters)(p, { lat: z.lat, lon: z.lon }) <= z.radiusM;
 }
-exports.isInZone = isInZone;
 /** Negative = inside (meters past the rim), positive = outside. */
 function distanceToZoneM(p, z) {
     return (0, geo_1.haversineMeters)(p, { lat: z.lat, lon: z.lon }) - z.radiusM;
 }
-exports.distanceToZoneM = distanceToZoneM;
 // ── Zone validation (host setup) ────────────────────────────
 const geo_2 = require("./geo");
 /**
@@ -165,7 +170,6 @@ function validateZones(zones, polygon, maxZones = 8) {
     }
     return { ok: errors.length === 0, errors };
 }
-exports.validateZones = validateZones;
 // ── Random zone/target generation (host "random" toggle) ───────────────────
 // A public, multi-point counterpart to server/src/game/arops.js's private,
 // single-point `randomPointInPolygon` (used there only for fake-marker
@@ -212,4 +216,3 @@ function generateRandomZones(polygon, count, minSeparationM, radiusM, maxAttempt
     }
     return zones;
 }
-exports.generateRandomZones = generateRandomZones;

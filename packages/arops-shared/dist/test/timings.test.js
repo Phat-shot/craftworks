@@ -13,7 +13,10 @@ const REF_AREA_M2 = 224 * 224; // a "medium" reference field, L≈224m
     const t = (0, timings_1.scaleTimings)(400); // 20×20m
     strict_1.default.equal(t.zoneRadiusM, 10);
     strict_1.default.equal(t.freezeMs, 3000);
-    strict_1.default.equal(t.captureDwellMs, 3000);
+    strict_1.default.equal(t.captureDwellMs, 1500, 'capture dwell is always half the freeze duration');
+    strict_1.default.equal(t.plantDwellMs, 1500);
+    strict_1.default.equal(t.defuseDwellMs, 1500);
+    strict_1.default.equal(t.flagPickupDwellMs, 1500);
     strict_1.default.equal(t.freezeMoveToleranceM, 15);
     strict_1.default.equal(t.baseSettingMs, 60000);
     strict_1.default.equal(t.warmupMs, 60000);

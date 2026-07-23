@@ -31,17 +31,18 @@ export interface ModeTimings {
    *  in auto mode — a plain "get ready" pause doesn't need more time just
    *  because the field is bigger. */
   warmupMs: number;
-  /** CTF: dwell time in enemy base / at dropped flag to pick it up. */
+  /** CTF: dwell time in enemy base / at dropped flag to pick it up. Always
+   *  freezeMs/2. */
   flagPickupDwellMs: number;
   /** CTF: dropped flag auto-returns after this. */
   flagReturnMs: number;
   /** CTF: minimum distance between the two bases. */
   minBaseSeparationM: number;
-  /** Domination: dwell to capture a zone. */
+  /** Domination: dwell to capture a zone. Always freezeMs/2. */
   captureDwellMs: number;
-  /** S&D: dwell to plant. */
+  /** S&D: dwell to plant. Always freezeMs/2. */
   plantDwellMs: number;
-  /** S&D: dwell to defuse. */
+  /** S&D: dwell to defuse. Always freezeMs/2. */
   defuseDwellMs: number;
   /** S&D: time from plant to detonation. */
   bombTimerMs: number;
@@ -77,28 +78,32 @@ function scale3(L: number, atSmall: number, atMedium: number, atLarge: number): 
 /** Compute all mode timings from the playfield area. */
 export function scaleTimings(areaM2: number): ModeTimings {
   const L = Math.sqrt(Math.max(1, areaM2)); // characteristic length in m
+  // 3s @ 20m, 10s @ 100m, 30s @ 1000m+.
+  const freezeMs = scale3(L, 3_000, 10_000, 30_000);
+  // Every capture/plant/defuse/flag-pickup dwell is pinned to half the
+  // freeze duration (host requirement) rather than its own independent
+  // field-size formula — a target/flag should take exactly as long to
+  // secure as half the punishment for getting caught doing it.
+  const halfFreezeMs = freezeMs / 2;
   return {
     // ~L/8: small ≈10m (floor), medium ≈13m, large(L=200) ≈25m.
     zoneRadiusM:          clamp(L / 8, 10, 40),
-    // 3s @ 20m, 10s @ 100m, 30s @ 1000m+.
-    freezeMs:             scale3(L, 3_000, 10_000, 30_000),
+    freezeMs,
     freezeMoveToleranceM: 15, // fixed: below GPS drift would punish standing still
     freezeExtensionMs:    clamp(L * 25, 1_000, 8_000),
     // Base-placement phase: 1min @ 20m, 2min @ 100m, 5min @ 1000m+.
     baseSettingMs:        scale3(L, 60_000, 120_000, 300_000),
     // Warmup phase: fixed 1 minute regardless of field size.
     warmupMs:             60_000,
-    // Small ≈2.5s, medium ≈5s, large(L=200) ≈10s.
-    flagPickupDwellMs:    clamp((L / 20) * 1000, 2_000, 12_000),
+    flagPickupDwellMs:    halfFreezeMs,
     // Small ≈15s, medium ≈30s, large(L=200) ≈60s.
     flagReturnMs:         clamp(L * 300, 10_000, 90_000),
     // Small ≈30m, medium ≈60m, large(L=200) ≈120m — the old 60m floor left
     // almost no room to place 2 bases at all on a small/medium field.
     minBaseSeparationM:   clamp(L * 0.6, 15, 500),
-    // Small ≈3.3s, medium ≈6.7s, large(L=200) ≈13.3s.
-    captureDwellMs:       clamp((L / 15) * 1000, 3_000, 20_000),
-    plantDwellMs:         clamp((L / 15) * 1000, 4_000, 20_000),
-    defuseDwellMs:        clamp((L / 20) * 1000, 3_000, 15_000),
+    captureDwellMs:       halfFreezeMs,
+    plantDwellMs:         halfFreezeMs,
+    defuseDwellMs:        halfFreezeMs,
     // Small ≈51s, medium ≈86s, large(L=200) ≈158s.
     bombTimerMs:          clamp(((L / 1.4) + 15) * 1000, 45_000, 240_000),
     // Small ≈10m, medium ≈20m, large(L=200) ≈40m.

@@ -15,17 +15,18 @@ export interface ModeTimings {
      *  in auto mode — a plain "get ready" pause doesn't need more time just
      *  because the field is bigger. */
     warmupMs: number;
-    /** CTF: dwell time in enemy base / at dropped flag to pick it up. */
+    /** CTF: dwell time in enemy base / at dropped flag to pick it up. Always
+     *  freezeMs/2. */
     flagPickupDwellMs: number;
     /** CTF: dropped flag auto-returns after this. */
     flagReturnMs: number;
     /** CTF: minimum distance between the two bases. */
     minBaseSeparationM: number;
-    /** Domination: dwell to capture a zone. */
+    /** Domination: dwell to capture a zone. Always freezeMs/2. */
     captureDwellMs: number;
-    /** S&D: dwell to plant. */
+    /** S&D: dwell to plant. Always freezeMs/2. */
     plantDwellMs: number;
-    /** S&D: dwell to defuse. */
+    /** S&D: dwell to defuse. Always freezeMs/2. */
     defuseDwellMs: number;
     /** S&D: time from plant to detonation. */
     bombTimerMs: number;
