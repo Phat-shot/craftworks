@@ -129,10 +129,11 @@ const DEBUG_COOLDOWNS = {
 };
 
 // One button per toggle, not one button per option — tapping cycles to the
-// next option (2 options = a plain flip), the button's own icon/label
-// always shows whichever is CURRENT. Every submode toggle uses this same
-// shape now (was previously a row of N separate buttons, one highlighted —
-// that read as N choices instead of 1 setting).
+// next option (2 options = a plain flip), the button's own icon always
+// shows whichever is CURRENT. Icon-only, no text label (long-press still
+// gives the full name/explanation via Alert) — this row was getting
+// crowded/wordy with every toggle spelling itself out; `label` stays on
+// the options shape purely for the long-press Alert title.
 function CycleToggle<T extends string>({
   options, value, onChange, theme, st, disabled,
 }: {
@@ -146,11 +147,10 @@ function CycleToggle<T extends string>({
   const idx = Math.max(0, options.findIndex(o => o.value === value));
   const current = options[idx]!;
   return (
-    <TouchableOpacity style={[st.smallBtnRow, st.smallBtnActive]} disabled={disabled}
+    <TouchableOpacity style={[st.smallBtn, st.toggleOn]} disabled={disabled}
       onPress={() => onChange(options[(idx + 1) % options.length]!.value)}
       onLongPress={() => Alert.alert(current.title, current.body)}>
-      <Icon name={current.icon} size={13} color={theme.accent} />
-      <Text style={[st.smallTxt, st.smallTxtActive]}>{current.label}</Text>
+      <Icon name={current.icon} size={15} color={theme.onAccent} />
     </TouchableOpacity>
   );
 }
@@ -695,19 +695,12 @@ export default function LobbyScreen({
                   { value: 'seeker', icon: 'magnify', label: 'Weiter: Sucher', title: 'Weiterspielen (Sucher)', body: 'Gefundene Hider spielen sofort als Sucher weiter (falls nicht eingefroren).' },
                   { value: 'spectator', icon: 'binoculars', label: 'Weiter: Zuschauer', title: 'Weiter: Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu (falls nicht eingefroren).' },
                 ]} />
-              <TouchableOpacity style={[st.smallBtnRow, hiderCanFreeze && st.toggleOn]}
+              <TouchableOpacity style={[st.smallBtn, hiderCanFreeze && st.toggleOn]}
                 onPress={() => emitUpdate({ hiderCanFreeze: !hiderCanFreeze })}
                 onLongPress={() => Alert.alert('Hider kann Freezen',
                   'AN: Gefundene Hider frieren kurz ein statt auszuscheiden — überstimmt Weiterspielen/Zuschauer. AUS: der andere Toggle entscheidet direkt.')}>
-                <Icon name="snowflake" size={13} color={hiderCanFreeze ? theme.onAccent : theme.text2} />
-                <Text style={[st.smallTxt, hiderCanFreeze && st.toggleOnTxt]}>Hider</Text>
+                <Icon name="snowflake" size={15} color={hiderCanFreeze ? theme.onAccent : theme.text2} />
               </TouchableOpacity>
-              {hiderCanFreeze && !autoScale && FREEZE_OPTIONS.map(o => (
-                <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
-                  onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
-                  <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
-                </TouchableOpacity>
-              ))}
             </>
           )}
         </View>
@@ -734,13 +727,11 @@ export default function LobbyScreen({
               { value: 'ffa', icon: 'crosshair', label: 'Jeder gegen jeden', title: 'Jeder gegen jeden',
                 body: GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '' },
             ]} />
-          {(subMode === 'ctf' || onHit === 'respawn') && (
-            <Text style={st.smallTxt}>
-              {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
-            </Text>
-          )}
           {/* Toggle 2: Treffer-Konsequenz — jetzt hier in der Submode-Zeile
-              statt in der Modus-Zeile oben (Leben verlieren vs. Einfrieren). */}
+              statt in der Modus-Zeile oben (Leben verlieren vs. Einfrieren).
+              Leben/Freeze-Zeit selbst sitzen unten bei den übrigen Settings
+              (Versteckzeit/Spielzeit etc.), nicht hier — diese Zeile ist nur
+              noch für die Toggles selbst, keine Werte-Picker. */}
           {isHost && (
             <CycleToggle theme={theme} st={st} value={onHit}
               onChange={v => emitUpdate({ onHit: v })}
@@ -749,22 +740,6 @@ export default function LobbyScreen({
                 { value: 'freeze', icon: 'snowflake', label: 'Einfrieren', title: 'Einfrieren', body: 'Treffer friert kurz ein statt ein Leben zu kosten.' },
               ]} />
           )}
-          {/* Leben-/Freeze-Zeit-Auswahl direkt hinter dem jeweils
-              zugehörigen Toggle statt als eigene Zeile weiter unten in den
-              Settings — analog zur Team-Capture-Größenauswahl, die auch
-              direkt hinter ihrem eigenen Toggle sitzt, kein Tag davor. */}
-          {isHost && onHit === 'respawn' && !autoScale && [1, 3, 5].map(n => (
-            <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
-              onPress={() => emitUpdate({ livesPerPlayer: n })}>
-              <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
-            </TouchableOpacity>
-          ))}
-          {isHost && onHit === 'freeze' && !autoScale && FREEZE_OPTIONS.map(o => (
-            <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
-              onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
-              <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
-            </TouchableOpacity>
-          ))}
         </View>
       )}
       {/* Toggle 3 (Domination/CTF/Bomb): was passiert, wenn ein
@@ -774,11 +749,16 @@ export default function LobbyScreen({
           erhalten) oder bricht komplett ab (Fortschritt auf 0). */}
       {isHost && (subMode === 'domination' || subMode === 'seek_destroy' || subMode === 'ctf') && (
         <View style={st.rowBtns}>
+          {/* Eigene Icons statt beide "snowflake" — sonst nicht vom Hider-
+              Freeze-/Einfrieren-Toggle unterscheidbar, jetzt wo alle Toggles
+              nur noch ein Icon ohne Text zeigen. "Pausiert"/"Unterbricht"
+              ist konzeptionell auch kein Freeze-Zustand selbst, sondern eine
+              Capture-Konsequenz DAVON — pause/close passt dafür besser. */}
           <CycleToggle theme={theme} st={st} value={ar.contestResets ? 'breaks' : 'pauses'}
             onChange={v => emitUpdate({ contestResets: v === 'breaks' })}
             options={[
-              { value: 'pauses', icon: 'snowflake', label: 'Pausiert', title: 'Freeze pausiert Capture', body: 'Ein ungefreezter Gegner pausiert die Einnahme nur — Fortschritt bleibt erhalten, sobald er weg ist geht es weiter.' },
-              { value: 'breaks', icon: 'snowflake', label: 'Unterbricht', title: 'Freeze bricht Capture', body: 'Ein ungefreezter Gegner bricht den Versuch komplett ab — Fortschritt auf 0, von vorn beginnen.' },
+              { value: 'pauses', icon: 'pause', label: 'Pausiert', title: 'Freeze pausiert Capture', body: 'Ein ungefreezter Gegner pausiert die Einnahme nur — Fortschritt bleibt erhalten, sobald er weg ist geht es weiter.' },
+              { value: 'breaks', icon: 'closeCircle', label: 'Unterbricht', title: 'Freeze bricht Capture', body: 'Ein ungefreezter Gegner bricht den Versuch komplett ab — Fortschritt auf 0, von vorn beginnen.' },
             ]} />
         </View>
       )}
@@ -791,22 +771,11 @@ export default function LobbyScreen({
           selbe "nur zeigen wenn relevant"-Regel wie bei Leben unten. */}
       {isHost && teamVariant === 'team' && (subMode === 'domination' || subMode === 'ctf' || (subMode === 'seek_destroy' && destroyVariant === 'instant')) && (
         <View style={st.rowBtns}>
-          <TouchableOpacity style={[st.smallBtnRow, ar.teamCaptureEnabled && st.toggleOn]}
+          <TouchableOpacity style={[st.smallBtn, ar.teamCaptureEnabled && st.toggleOn]}
             onPress={() => emitUpdate({ teamCaptureEnabled: !ar.teamCaptureEnabled })}
             onLongPress={() => Alert.alert('Team Capture', 'Statt einer einzelnen Person müssen mehrere Teammitglieder gleichzeitig im Ziel stehen, um es einzunehmen.')}>
-            <Icon name="teamCapture" size={13} color={ar.teamCaptureEnabled ? theme.onAccent : theme.text2} />
-            <Text style={[st.smallTxt, ar.teamCaptureEnabled && st.toggleOnTxt]}>
-              Team Capture: {ar.teamCaptureEnabled ? 'AN' : 'AUS'}
-            </Text>
+            <Icon name="teamCapture" size={15} color={ar.teamCaptureEnabled ? theme.onAccent : theme.text2} />
           </TouchableOpacity>
-          {ar.teamCaptureEnabled && ([2, 3, 'all'] as const).map(n => (
-            <TouchableOpacity key={n} style={[st.smallBtn, (ar.teamCaptureSize ?? 2) === n && st.smallBtnActive]}
-              onPress={() => emitUpdate({ teamCaptureSize: n })}>
-              <Text style={[st.smallTxt, (ar.teamCaptureSize ?? 2) === n && st.smallTxtActive]}>
-                {n === 'all' ? 'ganzes Team' : n}
-              </Text>
-            </TouchableOpacity>
-          ))}
         </View>
       )}
       {/* Toggle 5 (nur Bomb): Symmetrisch reaktiviert Ziele immer nach
@@ -1017,18 +986,61 @@ export default function LobbyScreen({
                   </TouchableOpacity>
                 ))}
               </View>
-              {showBaseSettingInPreview && (
+              {isHost && teamMode && onHit === 'respawn' && (
                 <View style={st.rowBtns}>
-                  <Text style={st.wpCount}>Vorbereitung:</Text>
-                  {BASE_SETTING_OPTIONS.map(o => (
-                    <TouchableOpacity key={o.ms} style={[st.smallBtn, baseSettingMs === o.ms && st.smallBtnActive]}
-                      onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), baseSettingMs: o.ms } })}>
-                      <Text style={[st.smallTxt, baseSettingMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                  <Text style={st.wpCount}>Leben:</Text>
+                  {[1, 3, 5].map(n => (
+                    <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
+                      onPress={() => emitUpdate({ livesPerPlayer: n })}>
+                      <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               )}
+              {showFreezeInPreview && (
+                <View style={st.rowBtns}>
+                  <Text style={st.wpCount}>Freeze-Zeit:</Text>
+                  {FREEZE_OPTIONS.map(o => (
+                    <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
+                      onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
+                      <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              {showBaseSettingInPreview && (
+                <>
+                  <View style={st.rowBtns}>
+                    <Text style={st.wpCount}>Vorbereitung:</Text>
+                    {BASE_SETTING_OPTIONS.map(o => (
+                      <TouchableOpacity key={o.ms} style={[st.smallBtn, baseSettingMs === o.ms && st.smallBtnActive]}
+                        onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), baseSettingMs: o.ms } })}>
+                        <Text style={[st.smallTxt, baseSettingMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={[st.wpCount, { marginBottom: 8 }]}>
+                    {teamVariant === 'ffa' ? 'Jede/r platziert die eigene Basis' : 'Captain platziert die Basis'}
+                  </Text>
+                </>
+              )}
             </>
+          )}
+          {/* Nicht an !autoScale gekoppelt (anders als Leben/Freeze-Zeit
+              oben) — ist ein Headcount, keine Timing-Größe, die Auto-Mode
+              ersetzen würde. */}
+          {isHost && ar.teamCaptureEnabled && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Spieler pro Ziel:</Text>
+              {([2, 3, 'all'] as const).map(n => (
+                <TouchableOpacity key={n} style={[st.smallBtn, (ar.teamCaptureSize ?? 2) === n && st.smallBtnActive]}
+                  onPress={() => emitUpdate({ teamCaptureSize: n })}>
+                  <Text style={[st.smallTxt, (ar.teamCaptureSize ?? 2) === n && st.smallTxtActive]}>
+                    {n === 'all' ? 'ganzes Team' : n}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
           <View style={st.divider} />
           <View style={st.rowBtns}>

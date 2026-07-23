@@ -71,6 +71,7 @@ const REGISTRY = {
   chevronUp: [MaterialCommunityIcons, 'chevron-up'],
   trap: [MaterialCommunityIcons, 'paw'],
   teamCapture: [MaterialCommunityIcons, 'account-multiple-check'],
+  pause: [MaterialCommunityIcons, 'pause-circle-outline'],
 } as const satisfies Record<string, readonly [IconSet, string]>;
 
 export type IconName = keyof typeof REGISTRY;
