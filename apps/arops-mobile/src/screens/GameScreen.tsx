@@ -277,9 +277,9 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
 // the Camera is user-panned, not locked to the player) — null everywhere
 // else, where the Camera is always centered on the player and '50%'/'50%'
 // is already correct.
-function ShotOverlay({ rotateDeg, pitchDeg, lengthPx, anchorPx, myHitShape, effectiveConeHalfAngleDeg, color }: {
+function ShotOverlay({ rotateDeg, pitchDeg, lengthPx, anchorPx, myHitShape, effectiveConeHalfAngleDeg, laneWidthPx, color }: {
   rotateDeg: number; pitchDeg: number; lengthPx: number; anchorPx: [number, number] | null;
-  myHitShape: 'cone' | 'lateral' | 'omni'; effectiveConeHalfAngleDeg: number; color: string;
+  myHitShape: 'cone' | 'lateral' | 'omni'; effectiveConeHalfAngleDeg: number; laneWidthPx: number; color: string;
 }) {
   if (myHitShape === 'omni') return null; // omni's range circle stays map-anchored (rotation-irrelevant)
   const LENGTH_PX = lengthPx;
@@ -314,7 +314,13 @@ function ShotOverlay({ rotateDeg, pitchDeg, lengthPx, anchorPx, myHitShape, effe
           borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: fill,
         };
       })()
-    : { position: 'absolute' as const, left: -18, top: -LENGTH_PX, width: 36, height: LENGTH_PX,
+    // Sniper's lane — was a hardcoded 36px box regardless of the actual
+    // lateralToleranceM/map scale (reported: overlay width didn't match the
+    // real hitbox). Now derived the same way the cone's halfWidthPx above
+    // is: from LENGTH_PX's own meters-per-pixel basis (shotOverlayLengthPx
+    // == effectiveMaxRangeM in px), so the drawn lane always matches the
+    // server-validated width regardless of zoom/field-size.
+    : { position: 'absolute' as const, left: -laneWidthPx / 2, top: -LENGTH_PX, width: laneWidthPx, height: LENGTH_PX,
         backgroundColor: fill, borderWidth: 1.5, borderColor: border };
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -1554,7 +1560,9 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     {showRange && telemetry.sample && activeHeadingDeg !== null && (
       <ShotOverlay rotateDeg={shotOverlayRotateDeg} pitchDeg={mapPitch}
         lengthPx={shotOverlayLengthPx} anchorPx={screenAnchorPx} myHitShape={myHitShape}
-        effectiveConeHalfAngleDeg={effectiveConeHalfAngleDeg} color={classAccentColor} />
+        effectiveConeHalfAngleDeg={effectiveConeHalfAngleDeg}
+        laneWidthPx={effectiveLaneWidthM * (shotOverlayLengthPx / effectiveMaxRangeM)}
+        color={classAccentColor} />
     )}
     {/* Own-marker state feedback — screen-center anchor only holds in
         controlled-camera views (map locked to the player's own position,
@@ -1730,13 +1738,21 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   }, []); // pure static geometry — color/opacity tinting happens at render time below
   const radiusArcOverlay = (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {/* Fill-only per band, no left/right border — unlike the Sniper lane
+          above, each band's width here follows a sine curve (the dome
+          silhouette), not a straight taper, so adjacent bands' edges don't
+          line up into one continuous outline. A border on every band drew
+          ~2×OMNI_BANDS short misaligned vertical segments instead — read as
+          "lines trying to form a circle" rather than a smooth filled dome
+          (reported). Only the near/far edge (first/last band) keeps a
+          border, for definition without the seam artifact. */}
       {omniCameraBands.map((b, i) => (
         <View key={i} style={{
           position: 'absolute', top: `${b.topPct}%`, left: `${b.leftPct}%`,
           width: `${b.widthPct}%`, height: `${b.heightPct}%`,
           backgroundColor: hexToRgba(classAccentColor, b.opacity),
-          borderLeftWidth: 1.5, borderRightWidth: 1.5, borderColor: hexToRgba(classAccentColor, AIM_BORDER_OPACITY),
           borderBottomWidth: i === 0 ? 1.5 : 0, borderTopWidth: i === omniCameraBands.length - 1 ? 1.5 : 0,
+          borderColor: hexToRgba(classAccentColor, AIM_BORDER_OPACITY),
         }} />
       ))}
       <Text style={{
