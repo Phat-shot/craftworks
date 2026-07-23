@@ -427,7 +427,7 @@ export default function HuntEditor() {
         <div style={{ display: 'flex', gap: 4 }}>
           {['individual', 'teams', 'shared'].map(m => (
             <button key={m} onClick={() => setProgressMode(m)}
-              style={toggleBtnStyle(progressMode === m)}>
+              style={{ ...toggleBtnStyle(progressMode === m), flex: 1 }}>
               {m === 'individual' ? 'Einzeln' : m === 'teams' ? 'Teams' : 'Gemeinsam'}
             </button>
           ))}
@@ -585,8 +585,8 @@ export default function HuntEditor() {
             )}
 
             <div style={{ display: 'flex', gap: 4 }}>
-              <button onClick={() => moveSelected(-1)} style={secondaryBtnStyle}>↑ Nach oben</button>
-              <button onClick={() => moveSelected(1)} style={secondaryBtnStyle}>↓ Nach unten</button>
+              <button onClick={() => moveSelected(-1)} style={{ ...secondaryBtnStyle, flex: 1 }}>↑ Nach oben</button>
+              <button onClick={() => moveSelected(1)} style={{ ...secondaryBtnStyle, flex: 1 }}>↓ Nach unten</button>
             </div>
 
             <button onClick={() => removeItem(itemKey(selected))} style={{ ...secondaryBtnStyle, color: 'var(--red)', borderColor: 'var(--red)', marginTop: 8 }}>
@@ -603,10 +603,10 @@ export default function HuntEditor() {
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Weg-Block</div>
               <div style={{ display: 'flex', gap: 4 }}>
                 <button disabled={!canFixed} onClick={() => updateSelected({ mode: 'fixed' })}
-                  style={{ ...toggleBtnStyle(selected.mode === 'fixed'), opacity: canFixed ? 1 : 0.4 }}>
+                  style={{ ...toggleBtnStyle(selected.mode === 'fixed'), flex: 1, opacity: canFixed ? 1 : 0.4 }}>
                   🛤 Fixe Route
                 </button>
-                <button onClick={() => updateSelected({ mode: 'target' })} style={toggleBtnStyle(selected.mode === 'target')}>
+                <button onClick={() => updateSelected({ mode: 'target' })} style={{ ...toggleBtnStyle(selected.mode === 'target'), flex: 1 }}>
                   🧭 Ziel-Navigation
                 </button>
               </div>
@@ -722,9 +722,17 @@ const primaryBtnStyle = {
   background: 'var(--gold)', color: '#1a1000', border: 'none', borderRadius: 6,
   padding: '8px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
 };
+// No `flex` here on purpose — this was `flex: 1` before, which is only
+// correct for buttons living in a horizontal `display:flex` row (equal
+// width split). Reused standalone in the vertical column layout (e.g. the
+// "POI-Platzierung"-Toggle, "Speichern"), `flex:1` instead means "grow to
+// fill remaining vertical space" in that flex-column context — the button
+// visibly ballooned to fill whatever empty space was below it, only
+// "shrinking" once enough POIs were listed to consume that space. Row
+// usages opt back in explicitly via `flex: 1` on their own style spread.
 const secondaryBtnStyle = {
   background: 'var(--bg2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6,
-  padding: '6px 10px', fontSize: 12, cursor: 'pointer', flex: 1,
+  padding: '6px 10px', fontSize: 12, cursor: 'pointer',
 };
 const toggleBtnStyle = active => ({
   ...secondaryBtnStyle,

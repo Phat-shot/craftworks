@@ -693,17 +693,21 @@ export default function LobbyScreen({
                 onChange={v => emitUpdate({ foundMode: v })}
                 options={[
                   { value: 'seeker', icon: 'magnify', label: 'Weiter: Sucher', title: 'Weiterspielen (Sucher)', body: 'Gefundene Hider spielen sofort als Sucher weiter (falls nicht eingefroren).' },
-                  { value: 'spectator', icon: 'binoculars', label: 'Zuschauer', title: 'Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu (falls nicht eingefroren).' },
+                  { value: 'spectator', icon: 'binoculars', label: 'Weiter: Zuschauer', title: 'Weiter: Zuschauer', body: 'Gefundene Hider scheiden aus und schauen zu (falls nicht eingefroren).' },
                 ]} />
               <TouchableOpacity style={[st.smallBtnRow, hiderCanFreeze && st.toggleOn]}
                 onPress={() => emitUpdate({ hiderCanFreeze: !hiderCanFreeze })}
                 onLongPress={() => Alert.alert('Hider kann Freezen',
                   'AN: Gefundene Hider frieren kurz ein statt auszuscheiden — überstimmt Weiterspielen/Zuschauer. AUS: der andere Toggle entscheidet direkt.')}>
                 <Icon name="snowflake" size={13} color={hiderCanFreeze ? theme.onAccent : theme.text2} />
-                <Text style={[st.smallTxt, hiderCanFreeze && st.toggleOnTxt]}>
-                  Hider kann Freezen: {hiderCanFreeze ? 'AN' : 'AUS'}
-                </Text>
+                <Text style={[st.smallTxt, hiderCanFreeze && st.toggleOnTxt]}>Hider</Text>
               </TouchableOpacity>
+              {hiderCanFreeze && !autoScale && FREEZE_OPTIONS.map(o => (
+                <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
+                  onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
+                  <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                </TouchableOpacity>
+              ))}
             </>
           )}
         </View>
@@ -745,6 +749,22 @@ export default function LobbyScreen({
                 { value: 'freeze', icon: 'snowflake', label: 'Einfrieren', title: 'Einfrieren', body: 'Treffer friert kurz ein statt ein Leben zu kosten.' },
               ]} />
           )}
+          {/* Leben-/Freeze-Zeit-Auswahl direkt hinter dem jeweils
+              zugehörigen Toggle statt als eigene Zeile weiter unten in den
+              Settings — analog zur Team-Capture-Größenauswahl, die auch
+              direkt hinter ihrem eigenen Toggle sitzt, kein Tag davor. */}
+          {isHost && onHit === 'respawn' && !autoScale && [1, 3, 5].map(n => (
+            <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
+              onPress={() => emitUpdate({ livesPerPlayer: n })}>
+              <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
+            </TouchableOpacity>
+          ))}
+          {isHost && onHit === 'freeze' && !autoScale && FREEZE_OPTIONS.map(o => (
+            <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
+              onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
+              <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
       )}
       {/* Toggle 3 (Domination/CTF/Bomb): was passiert, wenn ein
@@ -757,8 +777,8 @@ export default function LobbyScreen({
           <CycleToggle theme={theme} st={st} value={ar.contestResets ? 'breaks' : 'pauses'}
             onChange={v => emitUpdate({ contestResets: v === 'breaks' })}
             options={[
-              { value: 'pauses', icon: 'snowflake', label: 'Freeze pausiert Capture', title: 'Freeze pausiert Capture', body: 'Ein ungefreezter Gegner pausiert die Einnahme nur — Fortschritt bleibt erhalten, sobald er weg ist geht es weiter.' },
-              { value: 'breaks', icon: 'close', label: 'Freeze bricht Capture', title: 'Freeze bricht Capture', body: 'Ein ungefreezter Gegner bricht den Versuch komplett ab — Fortschritt auf 0, von vorn beginnen.' },
+              { value: 'pauses', icon: 'snowflake', label: 'Pausiert', title: 'Freeze pausiert Capture', body: 'Ein ungefreezter Gegner pausiert die Einnahme nur — Fortschritt bleibt erhalten, sobald er weg ist geht es weiter.' },
+              { value: 'breaks', icon: 'snowflake', label: 'Unterbricht', title: 'Freeze bricht Capture', body: 'Ein ungefreezter Gegner bricht den Versuch komplett ab — Fortschritt auf 0, von vorn beginnen.' },
             ]} />
         </View>
       )}
@@ -797,7 +817,6 @@ export default function LobbyScreen({
           requirement). */}
       {isHost && subMode === 'seek_destroy' && (
         <View style={st.rowBtns}>
-          <Text style={st.wpCount}>Zerstören:</Text>
           {/* ffa hat keine Entschärfen-Lesart (zweiseitig, force-reset zu
               instant server-seitig) — dann nur die eine Option, der Button
               zeigt sie fest an statt durchzuschalten. */}
@@ -809,17 +828,6 @@ export default function LobbyScreen({
             ] : [
               { value: 'instant', icon: 'loop', label: 'Symmetrisch (Restore)', title: 'Symmetrisch (mit Restore)', body: 'Jede/r kann jedes Ziel einnehmen. Sind alle zerstört, reaktivieren sie sich automatisch.' },
             ]} />
-        </View>
-      )}
-      {isHost && teamMode && onHit === 'respawn' && !autoScale && (
-        <View style={st.rowBtns}>
-          <Text style={st.wpCount}>Leben:</Text>
-          {[1, 3, 5].map(n => (
-            <TouchableOpacity key={n} style={[st.smallBtn, livesPerPlayer === n && st.smallBtnActive]}
-              onPress={() => emitUpdate({ livesPerPlayer: n })}>
-              <Text style={[st.smallTxt, livesPerPlayer === n && st.smallTxtActive]}>{n}</Text>
-            </TouchableOpacity>
-          ))}
         </View>
       )}
       <View style={st.divider} />
@@ -1021,17 +1029,6 @@ export default function LobbyScreen({
                 </View>
               )}
             </>
-          )}
-          {showFreezeInPreview && !autoScale && (
-            <View style={st.rowBtns}>
-              <Text style={st.wpCount}>Freeze-Zeit:</Text>
-              {FREEZE_OPTIONS.map(o => (
-                <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
-                  onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
-                  <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
           )}
           <View style={st.divider} />
           <View style={st.rowBtns}>

@@ -250,9 +250,17 @@ function registerPlatformHandlers(io, socket, db) {
       // like "nothing happens when I tap this setting".
       const SUB_MODES = ['hide_and_seek', 'domination', 'ctf', 'seek_destroy', 'deathmatch'];
       if (SUB_MODES.includes(arSettings?.subMode)) next.subMode = arSettings.subMode;
-      if (['seeker', 'spectator', 'freeze'].includes(arSettings?.foundMode)) {
+      if (['seeker', 'spectator'].includes(arSettings?.foundMode)) {
         next.foundMode = arSettings.foundMode;
       }
+      // Whether a found H&S hider freezes instead of switching to
+      // seeker/spectator (see arops.js's cfg.foundMode derivation) — was
+      // missing here entirely, so a host's toggle got applied optimistically
+      // on the client, then immediately stomped back to its old value by
+      // this handler's own broadcast (the very next lobby:ar_updated left
+      // it untouched because it was never copied into `next`). Same bug,
+      // same fix for contestResets/teamCaptureEnabled/teamCaptureSize below.
+      if (typeof arSettings?.hiderCanFreeze === 'boolean') next.hiderCanFreeze = arSettings.hiderCanFreeze;
       // Hide & Seek variant: 'classic' (default), 'ffa' (Jeder gegen jeden)
       // or 'the_ship' — see MODES.hide_and_seek in arops.js.
       if (['classic', 'ffa', 'the_ship'].includes(arSettings?.hsVariant)) {
@@ -263,9 +271,13 @@ function registerPlatformHandlers(io, socket, db) {
       if (['instant', 'defuse'].includes(arSettings?.destroyVariant)) {
         next.destroyVariant = arSettings.destroyVariant;
       }
-      if (typeof arSettings?.destroyReactivate === 'boolean') {
-        next.destroyReactivate = arSettings.destroyReactivate;
-      }
+      // Whether an unfrozen enemy stepping into a contested zone/flag/plant
+      // pauses (default) or fully resets capture progress — Domination/CTF/
+      // Seek&Destroy, see arops.js's cfg.contestResets. Team Capture (size
+      // requirement) is the same class of missing-whitelist field.
+      if (typeof arSettings?.contestResets === 'boolean') next.contestResets = arSettings.contestResets;
+      if (typeof arSettings?.teamCaptureEnabled === 'boolean') next.teamCaptureEnabled = arSettings.teamCaptureEnabled;
+      if ([2, 3, 'all'].includes(arSettings?.teamCaptureSize)) next.teamCaptureSize = arSettings.teamCaptureSize;
       // On-hit consequence + lives (respawn variant only) — all 4 combat
       // modes (Domination, CTF, Seek&Destroy, Deathmatch), see MODES'
       // resolveCombatHit in arops.js.
