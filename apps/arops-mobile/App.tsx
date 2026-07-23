@@ -52,7 +52,11 @@ function AppShell({ themeName, setThemeName }: {
   themeName: ThemeName; setThemeName: (t: ThemeName) => void;
 }) {
   const theme = useTheme();
-  const st = useMemo(() => makeStyles(theme), [theme]);
+  // Same "dark vs. day" binary the status bar style below already uses —
+  // both dark themes ('color', 'night') get the launcher buttons' neon-
+  // yellow treatment, only 'day' keeps each button's own literal brand color.
+  const isDark = themeName !== 'day';
+  const st = useMemo(() => makeStyles(theme, isDark), [theme, isDark]);
   const setTheme = (name: ThemeName) => { saveTheme(name); setThemeName(name); };
 
   const [route, setRoute] = useState<Route>({ name: 'boot' });
@@ -247,24 +251,25 @@ function AppShell({ themeName, setThemeName }: {
               mode. */}
           {activeGame.type === 'game' && activeGame.gameMode === 'ar_ops' && (
             <TouchableOpacity style={st.rejoinBtn} onPress={rejoin}>
-              <Icon name="loop" size={16} color="#40e0ff" />
+              <Icon name="loop" size={16} color={st.rejoinTxt.color} />
               <Text style={st.rejoinTxt}>Zurück ins Game</Text>
             </TouchableOpacity>
           )}
           {/* Host/Join/Glossary keep their own distinct brand accents
-              (green/purple/gold) across every theme, same as rejoin above —
-              a deliberate per-action identity, not general page chrome, so
-              it stays recognizable regardless of Color/Night/Day. */}
+              (green/purple/gold) in 'day' mode, same as rejoin above — a
+              deliberate per-action identity there. In dark mode ('color'/
+              'night') all of them switch to one shared neon-yellow accent
+              instead (see makeStyles' `neon`/`isDark`). */}
           <TouchableOpacity style={[st.hostBtn, hosting && st.btnDisabled]} onPress={host} disabled={hosting}>
-            <Icon name="target" size={16} color="#80ff40" />
+            <Icon name="target" size={16} color={st.hostTxt.color} />
             <Text style={st.hostTxt}>{hosting ? 'Erstelle Lobby…' : 'Spiel hosten'}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={st.joinBtn} onPress={() => setRoute({ name: 'join' })}>
-            <Icon name="link" size={16} color="#e060ff" />
+            <Icon name="link" size={16} color={st.joinTxt.color} />
             <Text style={st.joinTxt}>Lobby beitreten</Text>
           </TouchableOpacity>
           <TouchableOpacity style={st.glossaryBtn} onPress={() => setRoute({ name: 'glossary' })}>
-            <Icon name="book" size={16} color="#f0c840" />
+            <Icon name="book" size={16} color={st.glossaryTxt.color} />
             <Text style={st.glossaryTxt}>Glossar</Text>
           </TouchableOpacity>
           {/* Debug-only, fixed-script test harness (see MatchSimScreen) —
@@ -272,7 +277,7 @@ function AppShell({ themeName, setThemeName }: {
               Einstellungen is on (default off). */}
           {debugEnabled && (
             <TouchableOpacity style={st.simBtn} onPress={() => setRoute({ name: 'matchsim' })}>
-              <Icon name="bug" size={16} color="#ff8040" />
+              <Icon name="bug" size={16} color={st.simTxt.color} />
               <Text style={st.simTxt}>Match-Simulation</Text>
             </TouchableOpacity>
           )}
@@ -399,46 +404,55 @@ function AppShell({ themeName, setThemeName }: {
   );
 }
 
-function makeStyles(theme: ThemeTokens) {
+function makeStyles(theme: ThemeTokens, isDark: boolean) {
+  // Rejoin/Host/Join/Glossary/Sim each had their own literal brand accent
+  // regardless of theme — in dark mode ('color'/'night') they now all use
+  // this one neon-yellow accent instead, 'day' keeps every button's own
+  // color unchanged. Same 25%/50% fill/border opacity convention as the
+  // rest of the app's overlays.
+  const neon = { bg: 'rgba(232,255,42,.25)', border: 'rgba(232,255,42,.5)', text: '#e8ff2a' };
   return StyleSheet.create({
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
     title: { fontSize: 30, fontWeight: '900', color: theme.accent, marginBottom: 2 },
     version: { fontSize: 10, color: theme.text3, marginBottom: 4 },
     subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 32 },
     sub: { fontSize: 13, color: theme.text3 },
-    // Rejoin/Host/Join/Glossary keep their literal brand accents across
-    // every theme — see the JSX comment above these buttons.
     rejoinBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(40,160,200,.25)', borderWidth: 2, borderColor: 'rgba(32,136,160,.5)',
+      backgroundColor: isDark ? neon.bg : 'rgba(40,160,200,.25)',
+      borderWidth: 2, borderColor: isDark ? neon.border : 'rgba(32,136,160,.5)',
       borderRadius: 12, padding: 14, marginBottom: 16,
     },
-    rejoinTxt: { color: '#40e0ff', fontSize: 15, fontWeight: '800' },
+    rejoinTxt: { color: isDark ? neon.text : '#40e0ff', fontSize: 15, fontWeight: '800' },
     btnDisabled: { opacity: 0.5 },
     hostBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: 'rgba(58,128,32,.5)',
+      backgroundColor: isDark ? neon.bg : 'rgba(60,160,20,.25)',
+      borderWidth: 2, borderColor: isDark ? neon.border : 'rgba(58,128,32,.5)',
       borderRadius: 12, padding: 16, marginBottom: 12,
     },
-    hostTxt: { color: '#80ff40', fontSize: 16, fontWeight: '800' },
+    hostTxt: { color: isDark ? neon.text : '#80ff40', fontSize: 16, fontWeight: '800' },
     joinBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: 'rgba(128,58,160,.5)',
+      backgroundColor: isDark ? neon.bg : 'rgba(160,60,200,.25)',
+      borderWidth: 2, borderColor: isDark ? neon.border : 'rgba(128,58,160,.5)',
       borderRadius: 12, padding: 16,
     },
-    joinTxt: { color: '#e060ff', fontSize: 16, fontWeight: '800' },
+    joinTxt: { color: isDark ? neon.text : '#e060ff', fontSize: 16, fontWeight: '800' },
     glossaryBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(240,200,64,.25)', borderWidth: 2, borderColor: 'rgba(138,112,32,.5)',
+      backgroundColor: isDark ? neon.bg : 'rgba(240,200,64,.25)',
+      borderWidth: 2, borderColor: isDark ? neon.border : 'rgba(138,112,32,.5)',
       borderRadius: 12, padding: 16, marginTop: 12,
     },
-    glossaryTxt: { color: '#f0c840', fontSize: 16, fontWeight: '800' },
+    glossaryTxt: { color: isDark ? neon.text : '#f0c840', fontSize: 16, fontWeight: '800' },
     simBtn: {
       width: 260, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: 'rgba(255,128,64,.25)', borderWidth: 2, borderColor: 'rgba(160,80,32,.5)',
+      backgroundColor: isDark ? neon.bg : 'rgba(255,128,64,.25)',
+      borderWidth: 2, borderColor: isDark ? neon.border : 'rgba(160,80,32,.5)',
       borderRadius: 12, padding: 14, marginTop: 12,
     },
-    simTxt: { color: '#ff8040', fontSize: 14, fontWeight: '800' },
+    simTxt: { color: isDark ? neon.text : '#ff8040', fontSize: 14, fontWeight: '800' },
     err: { color: theme.danger, fontSize: 12, marginTop: 12 },
     menuIconRow: { flexDirection: 'row', gap: 12, marginTop: 24 },
     menuIconBtn: {

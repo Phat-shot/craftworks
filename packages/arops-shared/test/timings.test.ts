@@ -101,12 +101,17 @@ test('scaleCoreConfig: beyond the large anchor stays at the ceiling (auto never 
   assert.equal(c.perkDurationMs, 30_000);
 });
 
-test('scaleCoreConfig: monotonic hiding/game duration + range with field size', () => {
+test('scaleCoreConfig: monotonic game duration + range with field size', () => {
   const a = scaleCoreConfig(40_000);     // L=200
   const b = scaleCoreConfig(4_000_000);  // L=2000
-  assert.ok(b.hidingDurationMs >= a.hidingDurationMs);
   assert.ok(b.gameDurationMs >= a.gameDurationMs);
   assert.ok(b.hitRangeM >= a.hitRangeM);
+});
+
+test('scaleCoreConfig: hidingDurationMs (H&S\'s base-less "warmup" phase) is fixed regardless of field size', () => {
+  assert.equal(scaleCoreConfig(400).hidingDurationMs, 60_000);
+  assert.equal(scaleCoreConfig(40_000).hidingDurationMs, 60_000);
+  assert.equal(scaleCoreConfig(1_000_000_000).hidingDurationMs, 60_000);
 });
 
 test('scaleCoreConfig: every other perk cooldown is always exactly 1/3 of radar\'s', () => {

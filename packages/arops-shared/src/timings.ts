@@ -167,10 +167,12 @@ export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
   // via its longer auto-derived match, not via its own separate area formula.
   const livesPerPlayer = clamp(Math.round(gameDurationMs / 90_000), 2, 6);
   return {
-    // Small ≈20s (floor), medium ≈36s, large(L=200) ≈71s. Floor lowered
-    // from 45s — a tiny field has nowhere to hide anyway, a long head start
-    // is wasted time, not fairness.
-    hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 20_000, 600_000),
+    // Hide & Seek's 'hiding' phase is structurally the same thing as
+    // Domination/S&D/Deathmatch's base-less 'warmup' phase (see
+    // ModeTimings.warmupMs in this same file) — a prep phase with nothing to
+    // place, just a head start. Same rule applies: fixed 1 minute, never
+    // field-size-scaled, not even in auto mode.
+    hidingDurationMs: 60_000,
     gameDurationMs,
     // Scout's base range: 5m @ 20m, 20m @ 100m, 100m @ 1000m+ (other classes'
     // ranges derive from this via their own shotRangeMultiplier, see

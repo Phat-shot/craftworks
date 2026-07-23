@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import { getSocket, getUser, fetchLobbyQr, saveLastPosition, getDebugEnabled } from '../api';
@@ -165,6 +165,15 @@ export default function LobbyScreen({
   // always-mounted app-wide scope that caused that regression.
   const telemetry = useTelemetry(getSocket(), null, true);
   const myPos = telemetry.sample ? { lat: telemetry.sample.lat, lon: telemetry.sample.lon } : null;
+  // Same grace-period concept as GameScreen's own GPS fab (see there): the
+  // first few seconds without a fix are normal, only shown as a real problem
+  // (red) once it's gone on long enough that it probably isn't just still
+  // starting up.
+  const [initGraceOver, setInitGraceOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setInitGraceOver(true), 10_000);
+    return () => clearTimeout(t);
+  }, []);
   // Keeps api.ts's getLastPosition() cache warm for other flows that fall
   // back to it (e.g. MatchSimScreen's origin resolution) — useTelemetry
   // itself has no equivalent (GameScreen never needed one), but there's no
@@ -497,6 +506,15 @@ export default function LobbyScreen({
       <View style={st.topRow}>
         <View style={st.topLeft}>
           <Icon name="satellite" size={19} color={theme.accent} />
+          {/* GPS-Status — identisches Icon/Verhalten wie GameScreens
+              Crosshair-Fab oben links: grün = Fix da, rot = Grace-Zeit um und
+              immer noch kein Fix, grau = sucht noch. Gleiche Klick-Routine
+              (nur telemetry.retryPosition, kein separater Berechtigungs-Pfad),
+              keine zusätzliche Statuszeile/Badge daneben. */}
+          <TouchableOpacity style={st.iconBtnLg} onPress={telemetry.retryPosition}>
+            <Icon name="crosshair" size={19}
+              color={telemetry.sample ? '#80ff40' : initGraceOver ? theme.danger : theme.text2} />
+          </TouchableOpacity>
           {isHost && (
             <>
               <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode !== 'ir' && st.smallBtnActive]}
@@ -737,24 +755,6 @@ export default function LobbyScreen({
             </ShapeSource>
           )}
         </MapView>
-        <TouchableOpacity
-          style={st.locateBtn}
-          onPress={() => (telemetry.granted === false ? Linking.openSettings() : telemetry.retryPosition())}
-        >
-          {(!myPos && telemetry.granted !== false) ? <ActivityIndicator size="small" color="#40a0ff" /> : (
-            <Icon name={telemetry.granted === false ? 'warning' : 'crosshair'} size={18} color={telemetry.granted === false ? theme.danger : '#40a0ff'} />
-          )}
-        </TouchableOpacity>
-        {!myPos && telemetry.granted !== false && (
-          <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>GPS wird gesucht…</Text>
-          </View>
-        )}
-        {telemetry.granted === false && (
-          <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>Standort-Zugriff verweigert — antippen für Einstellungen</Text>
-          </View>
-        )}
       </View>
 
       {ar.comicMap && (
@@ -1080,21 +1080,6 @@ function makeStyles(theme: ThemeTokens) {
     codeSub: { color: theme.text3, fontSize: 9 },
     hostHint: { color: theme.text3, fontSize: 11, marginBottom: 8 },
     mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
-    // Location UI (locate button, GPS status badge, own-position dot on the
-    // map, "copy link" text) keeps its own literal blue "location/info"
-    // identity across every theme — same convention a map pin's color
-    // usually doesn't change with light/dark mode.
-    locateBtn: {
-      position: 'absolute', bottom: 10, right: 10, width: 38, height: 38, borderRadius: 19,
-      backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
-      alignItems: 'center', justifyContent: 'center',
-    },
-    gpsStatusBadge: {
-      position: 'absolute', bottom: 14, left: 10, backgroundColor: 'rgba(20,16,32,.9)',
-      borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
-      borderWidth: 1, borderColor: '#40a0ff',
-    },
-    gpsStatusTxt: { color: '#40a0ff', fontSize: 10, fontWeight: '700' },
     comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
     // Stale/cached status badges — semantic (warning-gold / ok-green),
     // stays literal across themes same as everywhere else status color is used.

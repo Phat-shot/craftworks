@@ -91,12 +91,16 @@ const REF_AREA_M2 = 224 * 224; // a "medium" reference field, L≈224m
     strict_1.default.equal(c.radarCooldownMs, 15 * 60000);
     strict_1.default.equal(c.perkDurationMs, 30000);
 });
-(0, node_test_1.test)('scaleCoreConfig: monotonic hiding/game duration + range with field size', () => {
+(0, node_test_1.test)('scaleCoreConfig: monotonic game duration + range with field size', () => {
     const a = (0, timings_1.scaleCoreConfig)(40000); // L=200
     const b = (0, timings_1.scaleCoreConfig)(4000000); // L=2000
-    strict_1.default.ok(b.hidingDurationMs >= a.hidingDurationMs);
     strict_1.default.ok(b.gameDurationMs >= a.gameDurationMs);
     strict_1.default.ok(b.hitRangeM >= a.hitRangeM);
+});
+(0, node_test_1.test)('scaleCoreConfig: hidingDurationMs (H&S\'s base-less "warmup" phase) is fixed regardless of field size', () => {
+    strict_1.default.equal((0, timings_1.scaleCoreConfig)(400).hidingDurationMs, 60000);
+    strict_1.default.equal((0, timings_1.scaleCoreConfig)(40000).hidingDurationMs, 60000);
+    strict_1.default.equal((0, timings_1.scaleCoreConfig)(1000000000).hidingDurationMs, 60000);
 });
 (0, node_test_1.test)('scaleCoreConfig: every other perk cooldown is always exactly 1/3 of radar\'s', () => {
     for (const area of [400, 2000, REF_AREA_M2, 1000000, 1000000000]) {
