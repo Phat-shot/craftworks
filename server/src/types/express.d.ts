@@ -17,6 +17,7 @@ declare global {
         email_verified?: boolean;
         is_guest?: boolean;
         is_admin?: boolean;
+        is_creator?: boolean;
       };
       db?: Pool;
     }
