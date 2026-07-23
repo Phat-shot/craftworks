@@ -23,6 +23,7 @@ import GameScreen from './src/screens/GameScreen';
 import GlossaryScreen from './src/screens/GlossaryScreen';
 import MatchSimScreen from './src/screens/MatchSimScreen';
 import HuntSandboxScreen from './src/screens/HuntSandboxScreen';
+import HuntPlayScreen from './src/screens/HuntPlayScreen';
 import { ThemeProvider, useTheme, THEME_LABELS, ThemeTokens } from './src/theme';
 
 type Route =
@@ -34,7 +35,8 @@ type Route =
   | { name: 'game'; sessionId: string }
   | { name: 'glossary' }
   | { name: 'matchsim' }
-  | { name: 'huntsandbox' };
+  | { name: 'huntsandbox' }
+  | { name: 'huntplay' };
 
 // Owns the theme boot/selection state and wraps everything else in
 // ThemeProvider — AppShell (and every screen it renders) can then call
@@ -287,9 +289,18 @@ function AppShell({ themeName, setThemeName }: {
               <Text style={st.simTxt}>Match-Simulation</Text>
             </TouchableOpacity>
           )}
-          {/* Schnitzeljagd equivalent of Match-Simulation above — same
-              debug-only gate, no real scenario editor/scan-code flow exists
-              yet, this just exercises the hunt.js engine directly. */}
+          {/* Real, DB-backed Hunt play — join a host-built scenario (web
+              editor, client/src/pages/HuntEditor.jsx) by its scan code.
+              Always visible, unlike the debug-only sandbox below: this is
+              the actual player-facing entry point once a scenario exists. */}
+          <TouchableOpacity style={st.huntBtn} onPress={() => setRoute({ name: 'huntplay' })}>
+            <Icon name="flagCheckered" size={16} color="#40e0a0" />
+            <Text style={st.huntTxt}>Schnitzeljagd</Text>
+          </TouchableOpacity>
+          {/* Sandbox variant: fixed built-in scenario, no code needed —
+              exercises the hunt.js engine directly for testing, not the
+              real scan-code flow above. Debug-only since a real scenario
+              now covers the actual use case. */}
           {debugEnabled && (
             <TouchableOpacity style={st.huntBtn} onPress={() => setRoute({ name: 'huntsandbox' })}>
               <Icon name="crosshair" size={16} color="#40e0a0" />
@@ -320,6 +331,7 @@ function AppShell({ themeName, setThemeName }: {
           default as a last resort, never blocking on "keine Position". */}
       {route.name === 'matchsim' && <MatchSimScreen origin={null} onExit={() => setRoute({ name: 'menu' })} />}
       {route.name === 'huntsandbox' && <HuntSandboxScreen onExit={() => setRoute({ name: 'menu' })} />}
+      {route.name === 'huntplay' && <HuntPlayScreen onExit={() => setRoute({ name: 'menu' })} />}
       {route.name === 'lobby' && (
         <LobbyScreen lobbyId={route.lobbyId} isHost={route.isHost} lobbyCode={route.lobbyCode} onGameStart={onGameStart} />
       )}
