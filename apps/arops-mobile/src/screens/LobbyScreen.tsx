@@ -43,9 +43,10 @@ interface ArSettings {
   // Team/FFA variant for the 4 team-capable modes (domination, ctf,
   // seek_destroy, deathmatch) — see server's cfg.teamVariant in arops.js.
   teamVariant?: 'team' | 'ffa';
-  // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
+  // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses
+  // — 'instant' always reactivates destroyed targets ("mit Restore"), 'defuse'
+  // never does, no separate host toggle for that anymore (see arops.js).
   destroyVariant?: 'instant' | 'defuse';
-  destroyReactivate?: boolean;
   // Domination/Zerstören (instant): contested by an unfrozen opponent
   // cancels the capture attempt (progress resets to 0) instead of just
   // pausing it — see arops.js's cfg.contestResets.
@@ -741,26 +742,26 @@ export default function LobbyScreen({
           )}
         </View>
       )}
+      {/* Symmetrisch reaktiviert Ziele immer nach vollständiger Zerstörung
+          ("mit Restore") — Entschärfen (Angriff & Verteidigung) nie, ein
+          erfolgreicher Angriff ohne Verteidiger entscheidet das Match sofort.
+          Kein separater "Ziele reaktivieren"-Schalter mehr — die Wahl der
+          Variante entscheidet das jetzt fest mit (host requirement). */}
       {isHost && subMode === 'seek_destroy' && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Zerstören:</Text>
           <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'instant' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ destroyVariant: 'instant' })}>
-            <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch</Text>
+            onPress={() => emitUpdate({ destroyVariant: 'instant' })}
+            onLongPress={() => Alert.alert('Symmetrisch (mit Restore)', 'Beide Teams können jedes Ziel einnehmen. Sind alle zerstört, reaktivieren sie sich automatisch — das Match läuft bis zum Zeitlimit weiter.')}>
+            <Text style={[st.smallTxt, destroyVariant === 'instant' && st.smallTxtActive]}>Symmetrisch (Restore)</Text>
           </TouchableOpacity>
           {teamVariant === 'team' && (
             <TouchableOpacity style={[st.smallBtnRow, destroyVariant === 'defuse' && st.smallBtnActive]}
-              onPress={() => emitUpdate({ destroyVariant: 'defuse' })}>
-              <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
+              onPress={() => emitUpdate({ destroyVariant: 'defuse' })}
+              onLongPress={() => Alert.alert('Angriff & Verteidigung', 'Team A scharf machen, Team B entschärfen. Explodiert ein Ziel ohne Verteidiger, endet das Match sofort — keine Reaktivierung.')}>
+              <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Angriff & Verteidigung</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.toggleOn]}
-            onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
-            <Icon name="loop" size={13} color={ar.destroyReactivate ? theme.onAccent : theme.text2} />
-            <Text style={[st.smallTxt, ar.destroyReactivate && st.toggleOnTxt]}>
-              Ziele reaktivieren: {ar.destroyReactivate ? 'AN' : 'AUS'}
-            </Text>
-          </TouchableOpacity>
         </View>
       )}
       {/* Was passiert, wenn ein ungefreezter Gegner während der Einnahme/des

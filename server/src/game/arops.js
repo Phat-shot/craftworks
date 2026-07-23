@@ -1312,7 +1312,7 @@ function applySimOverrides(ar, players) {
     ...(scenario.targetScore ? { targetScore: scenario.targetScore } : {}),
     ...(scenario.targetCaptures ? { targetCaptures: scenario.targetCaptures } : {}),
     ...(scenario.livesPerPlayer ? { livesPerPlayer: scenario.livesPerPlayer } : {}),
-    ...(scenario.destroyReactivate !== undefined ? { destroyReactivate: scenario.destroyReactivate } : {}),
+    ...(scenario.destroyVariant ? { destroyVariant: scenario.destroyVariant } : {}),
     ...(scenario.foundMode ? { foundMode: scenario.foundMode } : {}),
     ...(scenario.hsVariant ? { hsVariant: scenario.hsVariant } : {}),
     debugMode: true, // ground-truth visibility — the tester must see real bot positions
@@ -1401,11 +1401,17 @@ function createAropsGame(sessionId, players, workshopConfig) {
   // 'respawn' instead.
   const defaultOnHit = subMode === 'deathmatch' ? 'respawn' : 'freeze';
   cfg.onHit = ['freeze', 'respawn'].includes(ar.onHit) ? ar.onHit : defaultOnHit;
-  // Zerstören: 'instant' (either team captures the active target, default)
-  // vs 'defuse' (attacker-arms/defender-defuses, mirrors the old
-  // single-bomb-site mechanic but generalized to a rotating target list).
+  // Zerstören: 'instant' ("Symmetrisch mit Restore" — either team captures
+  // the active target, default) vs 'defuse' ("Angriff & Verteidigung" —
+  // attacker-arms/defender-defuses, mirrors the old single-bomb-site
+  // mechanic but generalized to a rotating target list). Reactivating once
+  // every target is destroyed is no longer an independent host toggle —
+  // it's fixed to the variant choice: 'instant' always cycles/restores
+  // (hence "mit Restore" in its Lobby label), 'defuse' never does (a
+  // single successful detonation/defense settles the match). Host
+  // requirement, no exception — see the target-count invariant below,
+  // which now always applies whenever destroyVariant is 'instant'.
   cfg.destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
-  cfg.destroyReactivate = ar.destroyReactivate === true;
   // Domination zone capture / Seek&Destroy's 'instant' target capture: what
   // happens when an unfrozen opponent shows up in the zone alongside the
   // capturing side (contested). Default (false) pauses progress and keeps
@@ -1424,6 +1430,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
   // guard here too in case a stale ar_settings still has it set.
   cfg.teamVariant = (mode.usesTeams && ar.teamVariant === 'ffa') ? 'ffa' : 'team';
   if (cfg.teamVariant === 'ffa' && subMode === 'seek_destroy') cfg.destroyVariant = 'instant';
+  cfg.destroyReactivate = cfg.destroyVariant === 'instant';
   // "Team Capture" (Domination zones / Seek&Destroy's instant target):
   // requires several teammates simultaneously present instead of just one.
   // Never applies to ffa — there are no teams to require multiple of.

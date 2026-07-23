@@ -187,7 +187,7 @@ console.log('\n═══ CONTEST RESETS ═══');
   check('seek_destroy instant: contestResets=true cancels progress on contest', () => {
     const gs = createGame('snd_contest',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2, shared.destinationPoint(MUC, 0, 100)],
         timings: FAST, gameDurationMs: 600_000, contestResets: true } });
     skipWarmup(gs);
     tel(gs, 'A1', Z1);
@@ -715,7 +715,8 @@ console.log('\n═══ ON-HIT: FREEZE VS RESPAWN ═══');
   check('seek_destroy respawn: same base_setup/lives path as domination', () => {
     const gs = createGame('snd_respawn',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy',
+        zones: [Z1, shared.destinationPoint(MUC, 0, 100), shared.destinationPoint(MUC, 180, 100)],
         timings: FAST, onHit: 'respawn', livesPerPlayer: 1, gameDurationMs: 600_000 } });
     assert.equal(gs.phase, 'base_setup');
     const baseA = shared.destinationPoint(MUC, 270, 100);
@@ -740,7 +741,8 @@ console.log('\n═══ ON-HIT: FREEZE VS RESPAWN ═══');
   check('seek_destroy respawn: eliminating the last player of a team ends the match (was previously a hang — Domination/CTF/S&D had no elimination win-check at all)', () => {
     const gs = createGame('snd_respawn_elim',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy',
+        zones: [Z1, shared.destinationPoint(MUC, 0, 100), shared.destinationPoint(MUC, 180, 100)],
         timings: FAST, onHit: 'respawn', livesPerPlayer: 1, gameDurationMs: 600_000 } });
     const baseA = shared.destinationPoint(MUC, 270, 100);
     const baseB = shared.destinationPoint(MUC, 90, 100);
@@ -1036,10 +1038,17 @@ console.log('\n═══ THE SHIP ═══');
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {
+  // 3 zones by default, not 2 — instant variant ("Symmetrisch mit
+  // Restore") always reactivates now (host requirement, no exception, see
+  // arops.js's createAropsGame), which requires more targets than teams
+  // (2 here → minimum 3). Tests that need an exact/smaller zone count
+  // (mostly the 'defuse' variant ones, which never reactivates) override
+  // `zones` explicitly via `over`.
+  const Z3 = shared.destinationPoint(MUC, 0, 100);
   const mk = (over = {}) => {
     const gs = createGame('snd' + Math.random(),
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2, Z3],
         timings: FAST, gameDurationMs: 600_000, ...over } });
     skipWarmup(gs); // default onHit is freeze — no base, just a Warmup timer
     return gs;
@@ -1054,7 +1063,7 @@ console.log('\n═══ SEEK & DESTROY ═══');
     assert.equal(gs.modeState.destroyed[0], false, 'not yet — dwell not complete');
     tick(gs, 200);
     assert.equal(gs.modeState.destroyed[0], true);
-    assert.equal(gs.modeState.activeIndex, 1, 'next non-destroyed zone activates');
+    assert.ok([1, 2].includes(gs.modeState.activeIndex), 'a remaining, non-destroyed zone activates (random pick)');
     assert.ok(gs.events.some(e => e.type === 'target_destroyed' && e.byTeam === 'a'));
     assert.ok(gs.players.A1.score > 0, 'capturing player is credited');
   });
@@ -1077,26 +1086,27 @@ console.log('\n═══ SEEK & DESTROY ═══');
     assert.ok(snap.capture.pct > 0 && snap.capture.pct < 100, `expected partial pct, got ${snap.capture.pct}`);
   });
 
-  check('instant variant: destroying every target without reactivation ends the match for the capturing team', () => {
-    // A dedicated single-zone game — destroying the only target should end the match immediately.
-    const gsSolo = createGame('snd_solo',
+  check('instant variant always reactivates — a single-zone game is rejected (need_zones), no non-reactivating instant config exists', () => {
+    // 'defuse' ("Angriff & Verteidigung") is the only way left to get a
+    // non-reactivating single-target game — see its own explosion test
+    // below for that regression coverage (destroying the one target with
+    // no defender ends the match immediately).
+    assert.throws(() => createGame('snd_solo',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
-    skipWarmup(gsSolo);
-    tel(gsSolo, 'A1', Z1);
-    tick(gsSolo, 200); tick(gsSolo, 200);
-    assert.equal(gsSolo.gameOver, true);
-    assert.equal(gsSolo.winner, 'team_a');
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST, gameDurationMs: 600_000 } }),
+      /need_zones/);
   });
 
-  check('destroyReactivate: after all targets are destroyed, they reset and the match continues', () => {
-    // destroyReactivate requires at least one more target than teams (2
-    // teams here → minimum 3) — see the need_zones invariant test below.
+  check('instant variant: after all targets are destroyed, they reset and the match continues (always reactivates)', () => {
+    // Instant always reactivates now, which requires at least one more
+    // target than teams (2 teams here → minimum 3) — see the need_zones
+    // invariant test below.
     const Z3 = shared.destinationPoint(MUC, 0, 100);
     const gs = createGame('snd_reactivate',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
       { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2, Z3], timings: FAST,
-        gameDurationMs: 600_000, destroyReactivate: true } });
+        gameDurationMs: 600_000 } });
+    assert.equal(gs.cfg.destroyReactivate, true);
     skipWarmup(gs);
     // Destroy all 3 targets in turn, walking to whichever zone is currently
     // active (order is randomized among the remaining ones, see the
@@ -1111,18 +1121,20 @@ console.log('\n═══ SEEK & DESTROY ═══');
     assert.ok(gs.events.some(e => e.type === 'targets_reactivated'));
   });
 
-  check('destroyReactivate requires more targets than teams/players, otherwise need_zones', () => {
+  check('instant variant (always reactivates) requires more targets than teams/players, otherwise need_zones', () => {
     assert.throws(() => createGame('snd_reactivate_toofew',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
       { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2], timings: FAST,
-        gameDurationMs: 600_000, destroyReactivate: true } }), /need_zones/,
-      '2 teams need > 2 targets (3+) when reactivating');
-    // Without reactivate, the same 2 zones are fine.
-    const gs = createGame('snd_no_reactivate',
+        gameDurationMs: 600_000 } }), /need_zones/,
+      '2 teams need > 2 targets (3+) — instant always reactivates now, no opt-out');
+    // 'defuse' ("Angriff & Verteidigung") never reactivates — the same 2
+    // zones are fine there.
+    const gs = createGame('snd_defuse_no_reactivate',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2], timings: FAST,
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', destroyVariant: 'defuse', zones: [Z1, Z2], timings: FAST,
         gameDurationMs: 600_000 } });
     assert.equal(gs.zones.length, 2);
+    assert.equal(gs.cfg.destroyReactivate, false);
   });
 
   check('defuse variant: attacker arms the target, defender defuses it — target survives, stays active', () => {
@@ -1321,15 +1333,17 @@ console.log('\n═══ TEAM/FFA VARIANT ═══');
     const gs = createGame('snd_ffa',
       [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
       { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', teamVariant: 'ffa', destroyVariant: 'defuse',
-        zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
+        // ffa forces destroyVariant back to 'instant' (asserted below), which
+        // now always reactivates -> needs > players.length (2) zones.
+        zones: [Z1, shared.destinationPoint(MUC, 0, 100), shared.destinationPoint(MUC, 180, 100)],
+        timings: FAST, gameDurationMs: 600_000 } });
     skipWarmup(gs);
     assert.equal(gs.cfg.destroyVariant, 'instant', 'ffa forces defuse back to instant (two-sided, no ffa reading)');
     tel(gs, 'A1', Z1);
     tick(gs, 200); tick(gs, 200);
     assert.equal(gs.modeState.destroyed[0], true);
-    assert.equal(gs.gameOver, true);
-    assert.equal(gs.winner, 'player_A1');
     assert.ok(gs.events.some(e => e.type === 'target_destroyed' && e.byUserId === 'A1'));
+    assert.equal(gs.gameOver, false, 'more targets remain — instant always reactivates now, needs > players.length zones');
   });
 
   check('deathmatch ffa: no captains, each player sets own base, last standing wins', () => {

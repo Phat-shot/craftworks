@@ -85,7 +85,7 @@ export interface SimScenario {
     targetScore?: number;
     targetCaptures?: number;
     livesPerPlayer?: number;
-    destroyReactivate?: boolean;
+    destroyVariant?: 'instant' | 'defuse';
     foundMode?: 'spectator' | 'seeker' | 'freeze';
     hsVariant?: 'classic' | 'ffa' | 'the_ship';
 }

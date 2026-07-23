@@ -129,7 +129,7 @@ export interface SimScenario {
   targetScore?: number;
   targetCaptures?: number;
   livesPerPlayer?: number;
-  destroyReactivate?: boolean;
+  destroyVariant?: 'instant' | 'defuse';
   foundMode?: 'spectator' | 'seeker' | 'freeze';
   hsVariant?: 'classic' | 'ffa' | 'the_ship';
 }
@@ -540,8 +540,13 @@ function generateTimeLimitDrawScenarios(rand: () => number, startIndex: number):
           fieldSideM, durationMs: gameDurationMs + 1_500, gameDurationMs,
           timings: COMPRESSED_TIMINGS,
           livesPerPlayer: onHit === 'respawn' ? 3 : undefined,
+          // 3rd zone: seek_destroy's 'instant' variant ("Symmetrisch mit
+          // Restore") always reactivates now, which requires more targets
+          // than teams/players (2 here) — see the matching comment in
+          // generateActionWinScenarios below.
           zones: (subMode === 'domination' || subMode === 'seek_destroy')
-            ? [{ tMs: 0, bearingDeg: 0, distanceM: fieldSideM * 0.3 }, { tMs: 0, bearingDeg: 180, distanceM: fieldSideM * 0.3 + 30 }]
+            ? [{ tMs: 0, bearingDeg: 0, distanceM: fieldSideM * 0.3 }, { tMs: 0, bearingDeg: 180, distanceM: fieldSideM * 0.3 + 30 },
+               { tMs: 0, bearingDeg: 90, distanceM: fieldSideM * 0.3 }]
             : undefined,
           // One idle, non-interacting opponent — checkEliminationWin/H&S's
           // own checkWin both deliberately never end a solo (<2 player)
@@ -614,21 +619,28 @@ function generateActionWinScenarios(rand: () => number, startIndex: number): Sim
     });
   }
 
-  // Seek&Destroy: destroying the only target without reactivation ends it.
+  // Seek&Destroy 'defuse' variant ("Angriff & Verteidigung"): destroying
+  // the only target with no defender present ends the match — this is the
+  // only way left to get a non-reactivating single-target game, since
+  // 'instant' ("Symmetrisch mit Restore") now always reactivates (host
+  // requirement, no exception — see arops.js's createAropsGame). The bot
+  // arms the target (plantDwellMs); with nobody defending, it self-
+  // detonates after explodeAt = armedAt + plantDwellMs*2.
   for (let n = 0; n < 4; n++) {
     const fieldSideM = SAFE_ZONE_FIELD_M;
     const zoneDistance = randRange(rand, fieldSideM * 0.15, fieldSideM * 0.25);
     const zoneBearing = randRange(rand, 0, 360);
-    const dwellMs = COMPRESSED_TIMINGS.captureDwellMs;
+    const plantMs = COMPRESSED_TIMINGS.captureDwellMs;
+    const toExplodeMs = plantMs + plantMs * 2; // arm, then the undefended fuse
     push({
-      label: `Alle Ziele zerstört ohne Reaktivierung: Zerstören #${n + 1}`,
-      subMode: 'seek_destroy', onHit: 'freeze', testerClass: 'scout', testerTeam: 'b',
-      fieldSideM, durationMs: dwellMs + 1_500,
-      gameDurationMs: 600_000, destroyReactivate: false, timings: COMPRESSED_TIMINGS,
+      label: `Ziel zerstört ohne Verteidiger (Angriff & Verteidigung): Zerstören #${n + 1}`,
+      subMode: 'seek_destroy', destroyVariant: 'defuse', onHit: 'freeze', testerClass: 'scout', testerTeam: 'b',
+      fieldSideM, durationMs: toExplodeMs + 1_500,
+      gameDurationMs: 600_000, timings: { ...COMPRESSED_TIMINGS, plantDwellMs: plantMs },
       zones: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }],
-      bots: [{ id: `bot_${i}`, username: 'SimCapturer', class: 'scout', team: 'a', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] }],
+      bots: [{ id: `bot_${i}`, username: 'SimArmer', class: 'scout', team: 'a', route: [{ tMs: 0, bearingDeg: zoneBearing, distanceM: zoneDistance }] }],
       testerHeadingDeg: 0, shoots: [],
-      checkpoints: [{ tMs: dwellMs + 1_000, check: 'gameOver', targetIndex: -1, expected: 'team_a' }],
+      checkpoints: [{ tMs: toExplodeMs + 1_000, check: 'gameOver', targetIndex: -1, expected: 'team_a' }],
     });
   }
 
@@ -648,8 +660,17 @@ function generateActionWinScenarios(rand: () => number, startIndex: number): Sim
         // Diametrically opposite -> separation is 2×distanceM; needs to
         // clear validateZones' (r1+r2)*1.5 = zoneRadiusM*3 minimum (≈82.5m
         // at SAFE_ZONE_FIELD_M's L=220) — 45m each clears it with margin.
+        // 3rd zone: seek_destroy's 'instant' variant ("Symmetrisch mit
+        // Restore") always reactivates now (host requirement, no
+        // exception — see arops.js's createAropsGame), which requires more
+        // targets than teams/players (2 here, either team-mode or ffa) —
+        // harmless extra for domination, which only ever needed >=2. 100m
+        // (not 45m) so its ~100.6m separation from EACH of the other two
+        // still clears the 82.5m minimum (45m would only give ~63.6m at
+        // this 90°-apart placement, too close).
         zones: (subMode === 'domination' || subMode === 'seek_destroy')
-          ? [{ tMs: 0, bearingDeg: 90, distanceM: 45 }, { tMs: 0, bearingDeg: 270, distanceM: 45 }] : undefined,
+          ? [{ tMs: 0, bearingDeg: 90, distanceM: 45 }, { tMs: 0, bearingDeg: 270, distanceM: 45 },
+             { tMs: 0, bearingDeg: 0, distanceM: 100 }] : undefined,
         bots: [{ id: `bot_${i}`, username: 'SimTarget', class: 'scout', team: 'b', route: [{ tMs: 0, bearingDeg: bearing, distanceM: distance }] }],
         testerHeadingDeg: 0,
         shoots: [{ tMs: 500, shooterId: 'tester', targetId: `bot_${i}`, expectedHit: true }],
