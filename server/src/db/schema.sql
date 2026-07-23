@@ -501,3 +501,138 @@ CREATE TABLE IF NOT EXISTS comic_map_cache (
   fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_comic_map_cache_bounds ON comic_map_cache(south, west, north, east);
+
+-- ═══════════════════════════════════════════════════════════════
+-- SCHNITZELJAGD ("Hunt"): PC-built POI/route scavenger-hunt scenarios,
+-- played via reusable, time-limited scan codes. Foundation only (schema +
+-- minimal server-side state machine, see server/src/game/hunt.js) — no
+-- web editor, mobile play UI, photo upload, or PDF generation yet (those
+-- are separate follow-up milestones; hunt_photos/hunt_reports below are
+-- schema-only placeholders for them).
+-- ═══════════════════════════════════════════════════════════════
+
+-- A scenario template — the reusable "level", built once on the web,
+-- played any number of times via its hunt_sessions codes below.
+CREATE TABLE IF NOT EXISTS hunt_scenarios (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  creator_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title       VARCHAR(128) NOT NULL,
+  -- { progressMode: 'shared'|'teams'|'individual', defaultValidityDays: 300 }
+  -- plus any future scenario-wide settings — kept flexible/JSONB like every
+  -- other free-form config column in this schema (workshop_maps.config etc.)
+  -- rather than growing narrow columns per setting.
+  config      JSONB NOT NULL DEFAULT '{}',
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- One point of interest — placed on a real map (the existing Leaflet
+-- geo-editor pattern, see client/src/components/AropsLobbyPanel.jsx, is
+-- the model for the future web editor that writes these rows), in the
+-- scenario's own walk order (order_index).
+CREATE TABLE IF NOT EXISTS hunt_pois (
+  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  scenario_id      UUID NOT NULL REFERENCES hunt_scenarios(id) ON DELETE CASCADE,
+  order_index      INTEGER NOT NULL,
+  name             VARCHAR(128) NOT NULL,
+  lat              DOUBLE PRECISION NOT NULL,
+  lon              DOUBLE PRECISION NOT NULL,
+  radius_m         DOUBLE PRECISION NOT NULL DEFAULT 15,
+  poi_type         VARCHAR(16) NOT NULL DEFAULT 'target', -- 'puzzle'|'target'|'base'
+  -- puzzle: {question, answerType, answer/choices}; target/base: currently
+  -- unused, reserved for a future destroy/flag-carry-specific config.
+  puzzle_config    JSONB NOT NULL DEFAULT '{}',
+  task_time_limit_ms   INTEGER,           -- NULL = no per-task time limit
+  -- {type:'skip'|'fail'|'time_penalty', ...} — dispatched by hunt.js on timeout
+  timeout_action       JSONB NOT NULL DEFAULT '{}',
+  visualization    VARCHAR(16) NOT NULL DEFAULT 'satellite', -- 'satellite'|'comic'|'model3d'
+  model_asset_url  VARCHAR(512),          -- only for visualization='model3d'
+  created_at       TIMESTAMPTZ DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- The leg BETWEEN two consecutive POIs — freeform (just point at the next
+-- POI) or a host-defined path, each independently either enforced (must
+-- stay on it) or purely a visual guide.
+CREATE TABLE IF NOT EXISTS hunt_routes (
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  scenario_id         UUID NOT NULL REFERENCES hunt_scenarios(id) ON DELETE CASCADE,
+  from_poi_id         UUID NOT NULL REFERENCES hunt_pois(id) ON DELETE CASCADE,
+  to_poi_id           UUID NOT NULL REFERENCES hunt_pois(id) ON DELETE CASCADE,
+  route_type          VARCHAR(16) NOT NULL DEFAULT 'freeform', -- 'freeform'|'defined'
+  enforcement         VARCHAR(16) NOT NULL DEFAULT 'guidance', -- 'guidance'|'strict' (defined only)
+  travel_time_limit_ms INTEGER,           -- NULL = no time limit for this leg
+  timeout_action      JSONB NOT NULL DEFAULT '{}',
+  -- GeoJSON LineString {lat,lon} point array — only set when route_type='defined'.
+  path_geojson        JSONB,
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- A reusable, scannable code for a scenario — every scan starts a fresh
+-- hunt_runs row (or joins an existing one, see hunt.js's joinHuntRun),
+-- the code itself never expires until expires_at.
+CREATE TABLE IF NOT EXISTS hunt_sessions (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  scenario_id UUID NOT NULL REFERENCES hunt_scenarios(id) ON DELETE CASCADE,
+  code        VARCHAR(8) UNIQUE NOT NULL, -- nanoid(8), same convention as lobbies.code
+  expires_at  TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '300 days'),
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_hunt_sessions_code ON hunt_sessions(code);
+
+-- One concrete play-through of a session's scenario. lobby_id links back
+-- to the ordinary lobby used purely for team-forming before the hunt
+-- starts (see CLAUDE.md's Schnitzeljagd lobby-integration note) — nullable
+-- since a run can also be started directly from a scanned code with no
+-- lobby involved at all.
+CREATE TABLE IF NOT EXISTS hunt_runs (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id    UUID NOT NULL REFERENCES hunt_sessions(id) ON DELETE CASCADE,
+  lobby_id      UUID REFERENCES lobbies(id) ON DELETE SET NULL,
+  progress_mode VARCHAR(16) NOT NULL DEFAULT 'shared', -- 'shared'|'teams'|'individual'
+  started_at    TIMESTAMPTZ DEFAULT NOW(),
+  ended_at      TIMESTAMPTZ
+);
+
+-- Progress within a run — one row per progress "track": the whole group
+-- (progress_key='shared'), one row per team letter, or one row per player,
+-- depending on the run's progress_mode. Late-join clones an existing row
+-- (see hunt.js's joinHuntRun) into a new one rather than mutating it.
+CREATE TABLE IF NOT EXISTS hunt_progress (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id          UUID NOT NULL REFERENCES hunt_runs(id) ON DELETE CASCADE,
+  progress_key    VARCHAR(64) NOT NULL, -- 'shared' | team letter | userId
+  current_poi_id  UUID REFERENCES hunt_pois(id) ON DELETE SET NULL,
+  -- Free-form running state: task/leg deadlines, route-deviation flags,
+  -- puzzle attempt counts, etc. — deliberately not narrow columns, this is
+  -- exactly the kind of per-run scratch state workshop_maps.layout_items/
+  -- config already models as JSONB elsewhere in this schema.
+  state           JSONB NOT NULL DEFAULT '{}',
+  started_at      TIMESTAMPTZ DEFAULT NOW(),
+  completed_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_hunt_progress_run ON hunt_progress(run_id);
+
+-- Photos/selfies taken at a POI — schema-only for now (upload endpoint is
+-- a follow-up milestone, same multer+disk-storage pattern as brand_assets).
+CREATE TABLE IF NOT EXISTS hunt_photos (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id        UUID NOT NULL REFERENCES hunt_runs(id) ON DELETE CASCADE,
+  progress_key  VARCHAR(64) NOT NULL,
+  poi_id        UUID REFERENCES hunt_pois(id) ON DELETE SET NULL,
+  url           VARCHAR(512) NOT NULL,
+  taken_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Generated A4 PDF report (times + photos) — schema-only for now
+-- (generation itself is a follow-up milestone).
+CREATE TABLE IF NOT EXISTS hunt_reports (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id        UUID NOT NULL REFERENCES hunt_runs(id) ON DELETE CASCADE,
+  pdf_url       VARCHAR(512) NOT NULL,
+  generated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_hunt_pois_scenario   ON hunt_pois(scenario_id);
+CREATE INDEX IF NOT EXISTS idx_hunt_routes_scenario ON hunt_routes(scenario_id);
+CREATE INDEX IF NOT EXISTS idx_hunt_runs_session    ON hunt_runs(session_id);
