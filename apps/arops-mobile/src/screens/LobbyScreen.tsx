@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import * as Location from 'expo-location';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
-import { getSocket, getUser, fetchLobbyQr, getLastPosition, saveLastPosition } from '../api';
+import { getSocket, getUser, fetchLobbyQr, saveLastPosition, getDebugEnabled } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { OSM_STYLE, BLANK_STYLE } from '../mapStyle';
-import { polygonAreaM2, scaleCoreConfig, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
-import { withTimeout } from '../utils/withTimeout';
+import { OSM_STYLE, OSM_STYLE_DARK, blankMapStyle } from '../mapStyle';
+import { polygonAreaM2, scaleCoreConfig, scaleTimings, PLAYER_TYPE_PROFILES, GAME_MODE_PROFILES } from '@craftworks/arops-shared';
+import { useTelemetry } from '../hooks/useTelemetry';
+import { useTheme, ThemeTokens, THEMES } from '../theme';
 
 interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedAt: number; }
 const COMIC_MAP_ERR_DE: Record<string, string> = {
@@ -46,8 +46,9 @@ interface ArSettings {
   // Zerstören (seek_destroy): symmetric capture vs. attacker-arms/defender-defuses.
   destroyVariant?: 'instant' | 'defuse';
   destroyReactivate?: boolean;
-  // Deathmatch: on-hit consequence + lives (respawn variant only).
-  deathmatchOnHit?: 'respawn' | 'freeze';
+  // On-hit consequence + lives (respawn variant only) — all 4 combat modes
+  // (Domination, CTF, Seek&Destroy, Deathmatch).
+  onHit?: 'respawn' | 'freeze';
   livesPerPlayer?: number;
   bots?: { id: string; username: string }[];
   debugMode?: boolean;
@@ -58,6 +59,9 @@ interface ArSettings {
   // mode, optional (unset = classless, unchanged combat stats).
   classes?: Record<string, 'scout' | 'sniper' | 'bomber'>;
   hitConfig?: { maxRangeM?: number; baseConeHalfAngleDeg?: number };
+  // Freeze-time override (host-adjustable, see the Lobby's freeze-time row)
+  // — the rest of ModeTimings stays test-only, not host-facing.
+  timings?: { freezeMs?: number | null };
   autoScale?: boolean;
 }
 
@@ -121,6 +125,16 @@ const DEBUG_COOLDOWNS = {
 export default function LobbyScreen({
   lobbyId, isHost = false, lobbyCode, onGameStart,
 }: { lobbyId: string; isHost?: boolean; lobbyCode?: string; onGameStart: (sessionId: string) => void }) {
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
+  // Map tiles fake a dark-mode look (mapStyle.ts's OSM_STYLE_DARK) for both
+  // dark UI themes ('color', the original dark-purple default, and 'night') —
+  // only 'day' keeps the stock light OSM raster look. `theme` is the exact
+  // object reference ThemeProvider hands out per name (see theme.ts), so
+  // comparing against THEMES.day avoids threading the ThemeName itself down
+  // through props just for this.
+  const mapStyle = theme === THEMES.day ? OSM_STYLE : OSM_STYLE_DARK;
+  const comicMapStyle = useMemo(() => blankMapStyle(theme.bg), [theme]);
   const [members, setMembers] = useState<Member[]>([]);
   const [ar, setAr] = useState<ArSettings>({});
   const [polyErrs, setPolyErrs] = useState<string[]>([]);
@@ -131,179 +145,47 @@ export default function LobbyScreen({
   const [qrOpen, setQrOpen] = useState(false);
   const [copied, setCopied] = useState<'code' | 'link' | null>(null);
   const [tapMode, setTapMode] = useState<'polygon' | 'zones'>('polygon');
+  // Gates the per-lobby debug toggle below (fog-of-war off etc.) — app-wide
+  // Debug-Modus setting, see Einstellungen. Match-Simulation itself moved
+  // back to its own main-menu entry point (App.tsx) — see MatchSimScreen.tsx.
+  const debugEnabled = useMemo(() => getDebugEnabled(), []);
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
-  // Seeded from the last real fix persisted locally (see api.ts
-  // saveLastPosition) so the map already centers on roughly the right area
-  // on first render, instead of the world-view fallback, while a fresh fix
-  // is still pending — myPosStale marks it as "last known", not live.
-  const lastKnownPos = getLastPosition();
-  const [myPos, setMyPos] = useState<{ lat: number; lon: number } | null>(
-    lastKnownPos ? { lat: lastKnownPos.lat, lon: lastKnownPos.lon } : null
-  );
-  const [myPosStale, setMyPosStale] = useState(!!lastKnownPos);
-  const myPosStaleRef = useRef(myPosStale);
-  myPosStaleRef.current = myPosStale;
-  const [myPosLoading, setMyPosLoading] = useState(false);
-  const [myPosErr, setMyPosErr] = useState(false);
-  // Distinct from myPosErr — "permission denied" needs a Settings change
-  // (retrying can never succeed on its own, no matter which OS API is
-  // behind loadMyPosition), whereas a plain myPosErr (fix timed out) might
-  // resolve on the very next retry. Both used to collapse into the same
-  // generic warning icon with no way to tell them apart, which could read
-  // as "GPS is broken" indefinitely when the actual, fixable cause was a
-  // denied permission the whole time.
-  const [myPosPermDenied, setMyPosPermDenied] = useState(false);
-  // Surfaced in the UI while loading — a GPS cold fix can legitimately take
-  // up to ~24s (3 attempts × 8s timeout) outdoors; with nothing but a small
-  // spinner icon to show for it, that reads as "the app is stuck" instead of
-  // "still searching". Attempt count included so long waits stay legible.
-  const [myPosAttempt, setMyPosAttempt] = useState(0);
-  // Generation token for the watchdog below — a stale watchdog from an
-  // earlier loadMyPosition() call (e.g. superseded by a manual retry tap)
-  // must not clear the loading state of a newer, still-in-flight one.
-  const loadGenRef = useRef(0);
+  // GPS/compass acquisition — adopted from GameScreen's own useTelemetry()
+  // hook instead of this screen's former ~180-line bespoke retry/watchdog
+  // implementation (see git history for that version's own hard-won fixes,
+  // now superseded). Passing sessionId=null disables the hook's 1Hz
+  // telemetry-SEND loop entirely (gated on `socket && sessionId`, see
+  // useTelemetry.ts) — only the GPS/compass ACQUISITION side runs here,
+  // which is all this screen ever needed. The hook's own doc comment warns
+  // against mounting it outside GameScreen's lifetime (an earlier attempt
+  // hoisted to App.tsx correlated with the whole app becoming unresponsive)
+  // — LobbyScreen doesn't do that: it has the same bounded "in this one
+  // place for a while, then leave" lifecycle GameScreen itself has, not the
+  // always-mounted app-wide scope that caused that regression.
+  const telemetry = useTelemetry(getSocket(), null, true);
+  const myPos = telemetry.sample ? { lat: telemetry.sample.lat, lon: telemetry.sample.lon } : null;
+  // Same grace-period concept as GameScreen's own GPS fab (see there): the
+  // first few seconds without a fix are normal, only shown as a real problem
+  // (red) once it's gone on long enough that it probably isn't just still
+  // starting up.
+  const [initGraceOver, setInitGraceOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setInitGraceOver(true), 10_000);
+    return () => clearTimeout(t);
+  }, []);
+  // Keeps api.ts's getLastPosition() cache warm for other flows that fall
+  // back to it (e.g. MatchSimScreen's origin resolution) — useTelemetry
+  // itself has no equivalent (GameScreen never needed one), but there's no
+  // harm in this screen still doing it since GPS acquisition is otherwise
+  // identical.
+  useEffect(() => {
+    if (telemetry.sample) saveLastPosition(telemetry.sample.lat, telemetry.sample.lon);
+  }, [telemetry.sample]);
   const me = getUser();
   const arRef = useRef(ar);
   arRef.current = ar;
   const comicMapReqRef = useRef<string | null>(null);
-
-  // One-shot fetch (not a live watch) — this is just a reference point for
-  // drawing the field, not gameplay telemetry, so no need to keep polling.
-  // GPS can be unreliable on first try (cold fix, permission dialog timing).
-  // Earlier version: recursive getCurrentPositionAsync attempts each wrapped
-  // in withTimeout. Reported symptom: stuck showing "1/3" forever, spinner
-  // never stopping — getCurrentPositionAsync has known hangs on some Android/
-  // expo-location versions where the underlying NATIVE call itself never
-  // settles, and (unconfirmed but plausible) requestForegroundPermissionsAsync
-  // itself was never time-boxed at all, so a hang there before even reaching
-  // the timeout-wrapped call would freeze progress with no way out — not even
-  // the manual retry button, since it's disabled by myPosLoading which would
-  // then never flip back to false.
-  //
-  // Rebuilt so the retry loop's progress depends ONLY on a plain JS timer,
-  // never on any expo-location promise actually settling — it is therefore
-  // structurally impossible for this to hang indefinitely again, regardless
-  // of which native call turns out to be the culprit. watchPositionAsync is
-  // also generally more reliable for acquiring a first fix than one-shot
-  // getCurrentPositionAsync (keeps trying continuously instead of one single
-  // snapshot attempt) — take its first update, then unsubscribe immediately.
-  //
-  // Watchdog on top of that (WATCHDOG_MS, well past the 24s of the internal
-  // loop below): reported "hangs again" after the fix above means some path
-  // through this function can still leave myPosLoading stuck — possibly a
-  // synchronous throw before the loop is even reached. The watchdog and the
-  // surrounding try/catch/finally are a second, independent layer that does
-  // not rely on this function's own internals ever behaving — whatever goes
-  // wrong inside, the lobby can no longer get stuck on "GPS wird gesucht"
-  // forever, only ever fall back to the manual retry button.
-  //
-  // A native (FusedLocationProviderClient) Android module was tried here and
-  // in useTelemetry.ts's startPosition (see git history — "native GPS statt
-  // expo-location") — reverted after real-device testing showed it
-  // measurably WORSE (near a minute to a fix, vs. this) rather than better.
-  // Root cause not fully confirmed (the one-shot getCurrentLocation() call
-  // it used, instead of the continuous-watch-take-first-update strategy
-  // this function already uses, is the leading suspect), but with no device
-  // here to verify a fix, reverting to this known-working expo-location
-  // path for all platforms was the safer call. Revisit only with real
-  // hardware in hand to actually iterate against.
-  const WATCHDOG_MS = 30_000;
-  // Reported: GPS in the Lobby worked instantly the very first time
-  // (permission dialog just granted), then never again on later lobby
-  // visits. Root cause: the watchPositionAsync subscription this function
-  // starts was NEVER torn down if the component unmounted while a fix was
-  // still pending (leave the lobby, back out, create/join a different one
-  // before the up-to-24s window elapsed) — the old `useEffect(() => {
-  // loadMyPosition(); }, [])` had no cleanup at all. That leaked native
-  // location listener keeps running forever; a SECOND LobbyScreen mount
-  // then starts its OWN watchPositionAsync on top of it, and Android's
-  // FusedLocationProvider does not reliably serve every concurrent listener
-  // — the newer one can simply never fire. The very first visit is exactly
-  // the one case with no earlier leaked subscription to collide with,
-  // which is why only that one "just worked". posSubRef/mountedRef below
-  // are now reachable from the mount effect's cleanup so an in-flight
-  // subscription (and any pending state updates) actually get cancelled on
-  // unmount instead of leaking.
-  const posSubRef = useRef<Location.LocationSubscription | null>(null);
-  const mountedRef = useRef(true);
-  const loadMyPosition = async () => {
-    setMyPosLoading(true);
-    setMyPosErr(false);
-    setMyPosPermDenied(false);
-    setMyPosAttempt(0);
-
-    const gen = ++loadGenRef.current;
-    const watchdog = setTimeout(() => {
-      if (loadGenRef.current !== gen || !mountedRef.current) return; // superseded, or unmounted
-      setMyPosErr(true);
-      setMyPosLoading(false);
-    }, WATCHDOG_MS);
-
-    try {
-      const perm = await withTimeout(Location.requestForegroundPermissionsAsync(), 15_000).catch(() => null);
-      if (!mountedRef.current) return;
-      if (!perm || perm.status !== 'granted') {
-        // A perm object that came back but says !granted is a REAL denial
-        // (as opposed to the request itself timing out/throwing) — that
-        // can only ever be fixed in Settings, not by tapping retry again.
-        if (perm) setMyPosPermDenied(true);
-        setMyPosErr(true);
-        setMyPosLoading(false);
-        return;
-      }
-
-      // Fill from the OS's own cache if we don't have anything yet, or all
-      // we have is the (possibly much older) locally-persisted last fix —
-      // a fresher OS-cached fix is worth preferring over that.
-      Location.getLastKnownPositionAsync().then(cached => {
-        if (!mountedRef.current || !cached) return;
-        setMyPos(p => (p && !myPosStaleRef.current) ? p : { lat: cached.coords.latitude, lon: cached.coords.longitude });
-      }).catch(() => {});
-
-      let settled = false;
-      posSubRef.current?.remove();
-      Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 1000, distanceInterval: 0 }, pos => {
-        if (settled) return;
-        settled = true;
-        posSubRef.current?.remove();
-        posSubRef.current = null;
-        if (!mountedRef.current) return;
-        setMyPos({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-        setMyPosStale(false);
-        setMyPosLoading(false);
-        saveLastPosition(pos.coords.latitude, pos.coords.longitude);
-      }).then(s => {
-        if (settled || !mountedRef.current) { s.remove(); return; }
-        posSubRef.current = s;
-      }).catch(() => {});
-
-      const WINDOW_MS = 8000;
-      const WINDOWS = 3;
-      for (let i = 0; i < WINDOWS && !settled && mountedRef.current; i++) {
-        setMyPosAttempt(i);
-        await new Promise(r => setTimeout(r, WINDOW_MS));
-      }
-      if (!mountedRef.current) return;
-      posSubRef.current?.remove();
-      posSubRef.current = null;
-      if (!settled) { setMyPosErr(true); setMyPosLoading(false); }
-    } catch {
-      if (mountedRef.current) { setMyPosErr(true); setMyPosLoading(false); }
-    } finally {
-      clearTimeout(watchdog);
-    }
-  };
-
-  useEffect(() => {
-    mountedRef.current = true;
-    loadMyPosition();
-    return () => {
-      mountedRef.current = false;
-      posSubRef.current?.remove();
-      posSubRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     const socket = getSocket();
@@ -408,7 +290,10 @@ export default function LobbyScreen({
   const teamVariant = teamMode && ar.teamVariant === 'ffa' ? 'ffa' : 'team';
   const foundMode = ar.foundMode || 'spectator';
   const destroyVariant = ar.destroyVariant === 'defuse' ? 'defuse' : 'instant';
-  const deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
+  // 'freeze' is every combat mode's original, pre-toggle default (only
+  // Deathmatch defaulted to 'respawn') — mirrors arops.js createAropsGame's
+  // defaultOnHit exactly.
+  const onHit = ar.onHit === 'respawn' || ar.onHit === 'freeze' ? ar.onHit : (subMode === 'deathmatch' ? 'respawn' : 'freeze');
   const livesPerPlayer = ar.livesPerPlayer || 3;
   const bots = ar.bots || [];
   const debugMode = ar.debugMode || false;
@@ -454,19 +339,9 @@ export default function LobbyScreen({
 
   const onMapPress = (feature: any) => {
     if (!isHost) return;
-    // Placing a point is a strong signal the host is actively looking at the
-    // map right now — a good moment to retry a GPS fix that hasn't resolved
-    // yet (observed: a fix that seemed stuck often just appears shortly
-    // after the host starts tapping the map anyway). Checking myPosStale too
-    // (not just !myPos) matters now that myPos starts pre-seeded from the
-    // persisted last-known position: without it, this retry-on-tap safety
-    // net could never fire again once that seed was in place, even though
-    // it's stale — the exact case a fresh fix is still needed for.
-    // Excluded once myPosPermDenied: a denied permission can't be fixed by
-    // retrying, only by a Settings change — retrying anyway on every single
-    // tap while placing several points in a row was hammering the
-    // permission check for nothing every time (reported as "GPS churns").
-    if ((!myPos || myPosStale) && !myPosLoading && !myPosPermDenied) loadMyPosition();
+    // No explicit "retry GPS on tap" needed anymore — useTelemetry already
+    // retries continuously in the background on its own (see its internal
+    // watchdog), the same way GameScreen just lets it run.
     const c = feature?.geometry?.coordinates;
     if (!Array.isArray(c)) return;
     if (tapMode === 'zones' && NEEDS_ZONES[subMode] !== undefined) {
@@ -579,6 +454,13 @@ export default function LobbyScreen({
   const dur = ar.gameDurationMs || 1_200_000;
   const HIDING = [{ l: '1m', ms: 60_000 }, { l: '2m', ms: 120_000 }, { l: '3m', ms: 180_000 }];
   const DURATION = [{ l: '10m', ms: 600_000 }, { l: '15m', ms: 900_000 }, { l: '20m', ms: 1_200_000 }, { l: '30m', ms: 1_800_000 }];
+  // Freeze duration is always field-size-scaled by default (server's
+  // scaleTimings, 3-30s range, independent of autoScale) but host-adjustable
+  // here like Reichweite/Breite/Versteckzeit/Spielzeit — hidden while Auto
+  // is on (see !autoScale gate below), same convention as those.
+  const FREEZE_OPTIONS: { l: string; ms: number }[] = [
+    { l: '3s', ms: 3_000 }, { l: '10s', ms: 10_000 }, { l: '30s', ms: 30_000 },
+  ];
   const hitRangeM = ar.hitConfig?.maxRangeM || 75;
   const hitHalfAngleDeg = ar.hitConfig?.baseConeHalfAngleDeg;
   const setHitRange = (maxRangeM: number) => emitUpdate({ hitConfig: { ...ar.hitConfig, maxRangeM } });
@@ -597,29 +479,60 @@ export default function LobbyScreen({
     () => (polygon.length >= 3 ? scaleCoreConfig(polygonAreaM2(polygon)) : null),
     [autoScale, JSON.stringify(polygon)]
   );
+  // Freeze duration is always field-size-scaled server-side (scaleTimings,
+  // independent of the autoScale toggle — see arops.js createAropsGame) —
+  // computed here purely for the preview line below, same field area input
+  // as autoPreview.
+  const autoFreezeMs = useMemo(
+    () => (polygon.length >= 3 ? scaleTimings(polygonAreaM2(polygon)).freezeMs : null),
+    [JSON.stringify(polygon)]
+  );
   const round1 = (v: number) => Math.round(v * 10) / 10;
   const fmtMin = (ms: number) => `${round1(ms / 60_000)}min`;
   const fmtM = (m: number) => `${round1(m)}m`;
+  const fmtSec = (ms: number) => `${Math.round(ms / 1000)}s`;
+  // Lives only matter for the 4 combat modes' respawn variant (elimination),
+  // never under freeze — see resolveCombatHit in arops.js. Freeze time only
+  // matters wherever a freeze can actually happen: the combat modes' freeze
+  // variant, or Hide & Seek's foundMode==='freeze'.
+  const showLivesInPreview = teamMode && onHit === 'respawn';
+  const showFreezeInPreview = (teamMode && onHit === 'freeze')
+    || (subMode === 'hide_and_seek' && foundMode === 'freeze');
+  const freezeMs: number | null = ar.timings?.freezeMs ?? null;
 
   const header = (
     <View>
       {/* Oben: Erkennungsmodus + Debug links, Code rechts */}
       <View style={st.topRow}>
         <View style={st.topLeft}>
-          <Icon name="satellite" size={19} color="#f0c840" />
+          <Icon name="satellite" size={19} color={theme.accent} />
+          {/* GPS-Status — identisches Icon/Verhalten wie GameScreens
+              Crosshair-Fab oben links: grün = Fix da, rot = Grace-Zeit um und
+              immer noch kein Fix, grau = sucht noch. Gleiche Klick-Routine
+              (nur telemetry.retryPosition, kein separater Berechtigungs-Pfad),
+              keine zusätzliche Statuszeile/Badge daneben. */}
+          <TouchableOpacity style={st.iconBtnLg} onPress={telemetry.retryPosition}>
+            <Icon name="crosshair" size={19}
+              color={telemetry.sample ? '#80ff40' : initGraceOver ? theme.danger : theme.text2} />
+          </TouchableOpacity>
           {isHost && (
             <>
               <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode !== 'ir' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'compass' })}>
-                <Icon name="compass" size={19} color={hitTrackingMode !== 'ir' ? '#f0c840' : '#c0a0f0'} />
+                <Icon name="compass" size={19} color={hitTrackingMode !== 'ir' ? theme.accent : theme.text2} />
               </TouchableOpacity>
               <TouchableOpacity style={[st.iconBtnLg, hitTrackingMode === 'ir' && st.smallBtnActive]}
                 onPress={() => emitUpdate({ hitTrackingMode: 'ir' })}>
-                <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? '#f0c840' : '#c0a0f0'} />
+                <Icon name="flash" size={19} color={hitTrackingMode === 'ir' ? theme.accent : theme.text2} />
               </TouchableOpacity>
-              <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
-                <Icon name="bug" size={19} color={debugMode ? '#f0c840' : '#c0a0f0'} />
-              </TouchableOpacity>
+              {/* Per-Lobby-Debug (Fog-of-War aus etc.) — nur anbietbar, wenn
+                  der App-weite Entwickler-Schalter (Einstellungen) an ist,
+                  sonst bleibt dieser Toggle für alle Hosts unsichtbar. */}
+              {debugEnabled && (
+                <TouchableOpacity style={[st.iconBtnLg, debugMode && st.smallBtnActive]} onPress={toggleDebugMode}>
+                  <Icon name="bug" size={19} color={debugMode ? theme.accent : theme.text2} />
+                </TouchableOpacity>
+              )}
             </>
           )}
           {/* Non-Host: kein Toggle (das bleibt Host-Sache), aber sichtbare
@@ -630,7 +543,7 @@ export default function LobbyScreen({
               aktiv (kein totes Icon für den Normalfall). */}
           {!isHost && debugMode && (
             <View style={[st.iconBtnLg, st.smallBtnActive]}>
-              <Icon name="bug" size={19} color="#f0c840" />
+              <Icon name="bug" size={19} color={theme.accent} />
             </View>
           )}
         </View>
@@ -642,7 +555,7 @@ export default function LobbyScreen({
           >
             <Text style={st.codeTxt}>{lobbyCode}</Text>
             <View style={st.codeSubRow}>
-              {copied === 'code' && <Icon name="checkCircle" size={9} color="#807050" />}
+              {copied === 'code' && <Icon name="checkCircle" size={9} color={theme.text3} />}
               <Text style={st.codeSub}>
                 {copied === 'code' ? 'kopiert' : qr ? 'antippen: QR · halten: kopieren' : 'halten zum Kopieren'}
               </Text>
@@ -657,7 +570,7 @@ export default function LobbyScreen({
             <TouchableOpacity key={m.id} style={[st.smallBtnTight, subMode === m.id && st.smallBtnActive]}
               onPress={() => emitUpdate({ subMode: m.id })}
               onLongPress={() => Alert.alert(GAME_MODE_PROFILES[m.id]?.name || m.label, GAME_MODE_PROFILES[m.id]?.shortDescription || '')}>
-              <Icon name={m.icon} size={13} color={subMode === m.id ? '#f0c840' : '#c0a0f0'} />
+              <Icon name={m.icon} size={13} color={subMode === m.id ? theme.accent : theme.text2} />
               <Text style={[st.smallTxt, subMode === m.id && st.smallTxtActive]} numberOfLines={1}>{m.label}</Text>
             </TouchableOpacity>
           ))}
@@ -671,21 +584,21 @@ export default function LobbyScreen({
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'classic' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'classic' })}
             onLongPress={() => Alert.alert('Team', GAME_MODE_PROFILES.hide_and_seek?.shortDescription || '')}>
-            <Icon name="ghost" size={13} color={hsVariant === 'classic' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="ghost" size={13} color={hsVariant === 'classic' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'classic' && st.smallTxtActive]}>Team</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'ffa' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'ffa' })}
             onLongPress={() => Alert.alert('Jeder gegen jeden',
               GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
-            <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="crosshair" size={13} color={hsVariant === 'ffa' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, hsVariant === 'the_ship' && st.smallBtnActive]}
             onPress={() => emitUpdate({ hsVariant: 'the_ship' })}
             onLongPress={() => Alert.alert('The Ship',
               GAME_MODE_PROFILES.hide_and_seek?.submodes.find(sm => sm.id === 'the_ship')?.shortDescription || '')}>
-            <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="mask" size={13} color={hsVariant === 'the_ship' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, hsVariant === 'the_ship' && st.smallTxtActive]}>The Ship</Text>
           </TouchableOpacity>
         </View>
@@ -707,17 +620,17 @@ export default function LobbyScreen({
           <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'team' && st.smallBtnActive]}
             disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'team' })}
             onLongPress={() => Alert.alert('Team (A vs. B)', 'Zwei feste Seiten treten gegeneinander an.')}>
-            <Icon name="people" size={13} color={teamVariant === 'team' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="people" size={13} color={teamVariant === 'team' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, teamVariant === 'team' && st.smallTxtActive]}>Team (A vs. B)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, teamVariant === 'ffa' && st.smallBtnActive]}
             disabled={!isHost} onPress={() => emitUpdate({ teamVariant: 'ffa' })}
             onLongPress={() => Alert.alert('Jeder gegen jeden',
               GAME_MODE_PROFILES[subMode]?.submodes.find(sm => sm.id === 'ffa')?.shortDescription || '')}>
-            <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="crosshair" size={13} color={teamVariant === 'ffa' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, teamVariant === 'ffa' && st.smallTxtActive]}>Jeder gegen jeden</Text>
           </TouchableOpacity>
-          {(subMode === 'ctf' || subMode === 'deathmatch') && (
+          {(subMode === 'ctf' || onHit === 'respawn') && (
             <Text style={st.smallTxt}>
               {teamVariant === 'ffa' ? '· Jede/r platziert die eigene Basis' : '· Captain platziert die Basis'}
             </Text>
@@ -729,18 +642,18 @@ export default function LobbyScreen({
           <Text style={st.wpCount}>Gefunden:</Text>
           <TouchableOpacity style={[st.smallBtnRow, foundMode === 'spectator' && st.smallBtnActive]}
             onPress={() => emitUpdate({ foundMode: 'spectator' })}>
-            <Icon name="ghost" size={13} color={foundMode === 'spectator' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="ghost" size={13} color={foundMode === 'spectator' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, foundMode === 'spectator' && st.smallTxtActive]}>Zuschauer</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, foundMode === 'seeker' && st.smallBtnActive]}
             onPress={() => emitUpdate({ foundMode: 'seeker' })}>
-            <Icon name="loop" size={13} color={foundMode === 'seeker' ? '#f0c840' : '#c0a0f0'} />
+            <Icon name="loop" size={13} color={foundMode === 'seeker' ? theme.accent : theme.text2} />
             <Text style={[st.smallTxt, foundMode === 'seeker' && st.smallTxtActive]}>Weiterspielen (Sucher)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[st.smallBtnRow, foundMode === 'freeze' && st.smallBtnActive]}
             onPress={() => emitUpdate({ foundMode: 'freeze' })}>
-            <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+            <Icon name="snowflake" size={13} color={foundMode === 'freeze' ? theme.accent : theme.text2} />
+            <Text style={[st.smallTxt, foundMode === 'freeze' && st.smallTxtActive]}>Freeze für Hider</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -757,28 +670,30 @@ export default function LobbyScreen({
               <Text style={[st.smallTxt, destroyVariant === 'defuse' && st.smallTxtActive]}>Entschärfen</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.smallBtnActive]}
+          <TouchableOpacity style={[st.smallBtnRow, ar.destroyReactivate && st.toggleOn]}
             onPress={() => emitUpdate({ destroyReactivate: !ar.destroyReactivate })}>
-            <Icon name="loop" size={13} color={ar.destroyReactivate ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, ar.destroyReactivate && st.smallTxtActive]}>Ziele reaktivieren</Text>
+            <Icon name="loop" size={13} color={ar.destroyReactivate ? theme.onAccent : theme.text2} />
+            <Text style={[st.smallTxt, ar.destroyReactivate && st.toggleOnTxt]}>
+              Ziele reaktivieren: {ar.destroyReactivate ? 'AN' : 'AUS'}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
-      {isHost && subMode === 'deathmatch' && (
+      {isHost && teamMode && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Treffer:</Text>
-          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'respawn' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ deathmatchOnHit: 'respawn' })}>
-            <Text style={[st.smallTxt, deathmatchOnHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
+          <TouchableOpacity style={[st.smallBtnRow, onHit === 'respawn' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ onHit: 'respawn' })}>
+            <Text style={[st.smallTxt, onHit === 'respawn' && st.smallTxtActive]}>Leben verlieren</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[st.smallBtnRow, deathmatchOnHit === 'freeze' && st.smallBtnActive]}
-            onPress={() => emitUpdate({ deathmatchOnHit: 'freeze' })}>
-            <Icon name="snowflake" size={13} color={deathmatchOnHit === 'freeze' ? '#f0c840' : '#c0a0f0'} />
-            <Text style={[st.smallTxt, deathmatchOnHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
+          <TouchableOpacity style={[st.smallBtnRow, onHit === 'freeze' && st.smallBtnActive]}
+            onPress={() => emitUpdate({ onHit: 'freeze' })}>
+            <Icon name="snowflake" size={13} color={onHit === 'freeze' ? theme.accent : theme.text2} />
+            <Text style={[st.smallTxt, onHit === 'freeze' && st.smallTxtActive]}>Einfrieren</Text>
           </TouchableOpacity>
         </View>
       )}
-      {isHost && subMode === 'deathmatch' && deathmatchOnHit === 'respawn' && (
+      {isHost && teamMode && onHit === 'respawn' && !autoScale && (
         <View style={st.rowBtns}>
           <Text style={st.wpCount}>Leben:</Text>
           {[1, 3, 5].map(n => (
@@ -798,7 +713,7 @@ export default function LobbyScreen({
       )}
 
       <View style={st.mapBox}>
-        <MapView style={{ flex: 1 }} mapStyle={OSM_STYLE as any} onPress={onMapPress}>
+        <MapView style={{ flex: 1 }} mapStyle={mapStyle as any} onPress={onMapPress}>
           {/* key changes force MapLibre to re-apply defaultSettings: once when
               our own position resolves (async, arrives after mount), again
               once the field polygon is complete enough to re-center on it. */}
@@ -810,9 +725,16 @@ export default function LobbyScreen({
               geometry: { type: 'Point', coordinates: [myPos.lon, myPos.lat] },
             }}>
               <CircleLayer id="myPosDot" style={{
-                circleRadius: 8, circleColor: myPosStale ? '#807050' : '#40a0ff',
-                circleOpacity: myPosStale ? 0.5 : 0.85,
+                circleRadius: 8, circleColor: '#40a0ff', circleOpacity: 0.85,
                 circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
+                // 'map' instead of the default 'viewport': lets the dot tilt
+                // with the map plane instead of always facing the camera
+                // flat-on. This MapView's Camera never sets a non-zero pitch
+                // (defaultSettings only has centerCoordinate/zoomLevel, see
+                // above) though, so on this particular screen it's currently
+                // a no-op in practice — kept for consistency with GameScreen
+                // and in case this map ever gains tilt later.
+                circlePitchAlignment: 'map',
               }} />
             </ShapeSource>
           )}
@@ -833,35 +755,11 @@ export default function LobbyScreen({
             </ShapeSource>
           )}
         </MapView>
-        <TouchableOpacity
-          style={st.locateBtn}
-          onPress={() => (myPosPermDenied ? Linking.openSettings() : loadMyPosition())}
-          disabled={myPosLoading}
-        >
-          {myPosLoading ? <ActivityIndicator size="small" color="#40a0ff" /> : (
-            <Icon name={myPosErr ? 'warning' : 'crosshair'} size={18} color={myPosErr ? '#ff6040' : '#40a0ff'} />
-          )}
-        </TouchableOpacity>
-        {myPosLoading && (
-          <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>GPS wird gesucht… ({myPosAttempt + 1}/3)</Text>
-          </View>
-        )}
-        {!myPosLoading && myPosPermDenied && (
-          <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>Standort-Zugriff verweigert — antippen für Einstellungen</Text>
-          </View>
-        )}
-        {!myPosLoading && !myPosPermDenied && myPosStale && (
-          <View style={st.gpsStatusBadge}>
-            <Text style={st.gpsStatusTxt}>Letzte bekannte Position</Text>
-          </View>
-        )}
       </View>
 
       {ar.comicMap && (
         <View style={st.comicPreviewBox}>
-          <MapView style={{ flex: 1 }} mapStyle={BLANK_STYLE as any} scrollEnabled={false} zoomEnabled={false}>
+          <MapView style={{ flex: 1 }} mapStyle={comicMapStyle as any} scrollEnabled={false} zoomEnabled={false}>
             <Camera defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
             <ComicMapLayers features={ar.comicMap.features} />
           </MapView>
@@ -882,13 +780,13 @@ export default function LobbyScreen({
       {/* Drawing errors: only meaningful for the host while drawing */}
       {isHost && polyErrs.length > 0 && (
         <View style={st.errRow}>
-          <Icon name="warning" size={13} color="#ff6040" />
+          <Icon name="warning" size={13} color={theme.danger} />
           <Text style={st.err}>{polyErrs.map(e => POLY_ERR_DE[e] || e).join(' · ')}</Text>
         </View>
       )}
       {!isHost && polygon.length < 3 && (
         <View style={st.hintRow}>
-          <Icon name="hourglass" size={12} color="#807050" />
+          <Icon name="hourglass" size={12} color={theme.text3} />
           <Text style={st.hint}>Der Host zeichnet das Spielfeld…</Text>
         </View>
       )}
@@ -897,10 +795,10 @@ export default function LobbyScreen({
         <>
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: polygon.slice(0, -1) })} disabled={!polygon.length}>
-              <Icon name="undo" size={19} color="#c0a0f0" />
+              <Icon name="undo" size={19} color={theme.text2} />
             </TouchableOpacity>
             <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ polygon: [] })} disabled={!polygon.length}>
-              <Icon name="close" size={19} color="#c0a0f0" />
+              <Icon name="close" size={19} color={theme.text2} />
             </TouchableOpacity>
             <Text style={st.wpCount}>{polygon.length}</Text>
             {NEEDS_ZONES[subMode] !== undefined && (
@@ -912,7 +810,7 @@ export default function LobbyScreen({
                   <Text style={[st.smallTxt, tapMode === 'zones' && st.smallTxtActive]}>Zonen {zones.length}/{NEEDS_ZONES[subMode]}+</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={st.iconBtnLg} onPress={() => emitUpdate({ zones: [] })} disabled={!zones.length}>
-                  <Icon name="trash" size={19} color="#c0a0f0" />
+                  <Icon name="trash" size={19} color={theme.text2} />
                 </TouchableOpacity>
               </>
             )}
@@ -924,14 +822,14 @@ export default function LobbyScreen({
                   tap was still needed to "really" refresh. Once any map
                   exists at all, always show the refresh icon; onPress
                   already regenerates unconditionally either way. */}
-              {comicMapLoading ? <ActivityIndicator size="small" color="#c0a0f0" /> : (
-                <Icon name={ar.comicMap ? 'loop' : 'palette'} size={19} color="#c0a0f0" />
+              {comicMapLoading ? <ActivityIndicator size="small" color={theme.text2} /> : (
+                <Icon name={ar.comicMap ? 'loop' : 'palette'} size={19} color={theme.text2} />
               )}
             </TouchableOpacity>
           </View>
           {!!comicMapErr && (
             <View style={st.errRow}>
-              <Icon name="warning" size={13} color="#ff6040" />
+              <Icon name="warning" size={13} color={theme.danger} />
               <Text style={st.err}>{comicMapErr}</Text>
             </View>
           )}
@@ -940,7 +838,7 @@ export default function LobbyScreen({
           <View style={st.rowBtns}>
             <TouchableOpacity style={[st.smallBtnRow, autoScale && st.smallBtnActive]}
               onPress={() => emitUpdate({ autoScale: !autoScale })}>
-              <Icon name="loop" size={13} color={autoScale ? '#f0c840' : '#c0a0f0'} />
+              <Icon name="loop" size={13} color={autoScale ? theme.accent : theme.text2} />
               <Text style={[st.smallTxt, autoScale && st.smallTxtActive]}>
                 Auto (nach Feldgröße) {autoScale ? 'AN' : 'AUS'}
               </Text>
@@ -951,6 +849,8 @@ export default function LobbyScreen({
               <Text style={st.wpCount}>
                 {autoPreview
                   ? `Reichweite ~${fmtM(autoPreview.hitRangeM)} · Breite ~${fmtM(autoPreview.hitHalfWidthM * 2)} · Versteckzeit ${fmtMin(autoPreview.hidingDurationMs)} · Spielzeit ${fmtMin(autoPreview.gameDurationMs)}`
+                    + (showLivesInPreview ? ` · Leben ${autoPreview.livesPerPlayer}` : '')
+                    + (showFreezeInPreview && autoFreezeMs != null ? ` · Freeze ${fmtSec(autoFreezeMs)}` : '')
                   : 'Erst das Spielfeld zeichnen, um die Auto-Werte zu sehen'}
               </Text>
             </View>
@@ -1003,10 +903,21 @@ export default function LobbyScreen({
               </View>
             </>
           )}
+          {showFreezeInPreview && !autoScale && (
+            <View style={st.rowBtns}>
+              <Text style={st.wpCount}>Freeze-Zeit:</Text>
+              {FREEZE_OPTIONS.map(o => (
+                <TouchableOpacity key={o.l} style={[st.smallBtn, freezeMs === o.ms && st.smallBtnActive]}
+                  onPress={() => emitUpdate({ timings: { ...(ar.timings || {}), freezeMs: o.ms } })}>
+                  <Text style={[st.smallTxt, freezeMs === o.ms && st.smallTxtActive]}>{o.l}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           <View style={st.divider} />
           <View style={st.rowBtns}>
             <TouchableOpacity style={st.smallBtnRow} onPress={addBot} disabled={bots.length >= 12}>
-              <Icon name="robot" size={13} color="#c0a0f0" />
+              <Icon name="robot" size={13} color={theme.text2} />
               <Text style={st.smallTxt}>Bot hinzufügen</Text>
             </TouchableOpacity>
           </View>
@@ -1014,7 +925,7 @@ export default function LobbyScreen({
       )}
       <View style={st.divider} />
       <View style={st.sectionRow}>
-        <Icon name="people" size={13} color="#e0c080" />
+        <Icon name="people" size={13} color={theme.text} />
         <Text style={st.section}>
           Spieler {isHost ? ((teamMode && teamVariant === 'team') ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
         </Text>
@@ -1027,7 +938,7 @@ export default function LobbyScreen({
       {me && displayMembers.length > 0 && ((teamMode && teamVariant === 'team') || rolesApply) && (
         <View style={st.roleRow}>
           <Icon name={teamMode ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
-            size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : '#e0c080'} />
+            size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : theme.text} />
           <Text style={st.role}>
             {teamMode
               ? `Dein Team: ${teamOf(me.id) === 'a' ? 'A' : 'B'}`
@@ -1037,7 +948,7 @@ export default function LobbyScreen({
       )}
       {me && displayMembers.length > 0 && !(teamMode && teamVariant === 'team') && !rolesApply && (
         <View style={st.roleRow}>
-          <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color="#e0c080" />
+          <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color={theme.text} />
           <Text style={st.role}>
             {hsVariant === 'the_ship'
               ? 'Dein Ziel wird nur dir angezeigt, sobald das Spiel startet'
@@ -1049,7 +960,7 @@ export default function LobbyScreen({
       )}
       {!!startErr && (
         <View style={st.errRow}>
-          <Icon name="warning" size={13} color="#ff6040" />
+          <Icon name="warning" size={13} color={theme.danger} />
           <Text style={st.err}>{startErr}</Text>
         </View>
       )}
@@ -1080,7 +991,7 @@ export default function LobbyScreen({
         contentContainerStyle={{ paddingBottom: 32 }}
         renderItem={({ item }) => (
           <View style={st.row}>
-            {item.isBot && <Icon name="robot" size={13} color="#807050" />}
+            {item.isBot && <Icon name="robot" size={13} color={theme.text3} />}
             <Text style={st.name}>{item.username}</Text>
             {(teamMode && teamVariant === 'team') ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleTeam(item.id)}>
@@ -1091,13 +1002,13 @@ export default function LobbyScreen({
               </TouchableOpacity>
             ) : rolesApply ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleRole(item.id)}>
-                <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color="#c0a0f0" />
+                <Icon name={roleOf(item.id) === 'seeker' ? 'flashlight' : 'ghost'} size={13} color={theme.text2} />
                 <Text style={st.roleTag}>{roleOf(item.id) === 'seeker' ? 'Seeker' : 'Hider'}</Text>
               </TouchableOpacity>
             ) : null}
             {hitTrackingMode === 'ir' && (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => cycleIrId(item.id)}>
-                <Icon name="flash" size={12} color="#f0c840" />
+                <Icon name="flash" size={12} color={theme.accent} />
                 <Text style={st.roleTag}>{irIdOf(item.id) !== undefined ? `IR ${irIdOf(item.id)}` : 'IR –'}</Text>
               </TouchableOpacity>
             )}
@@ -1114,16 +1025,16 @@ export default function LobbyScreen({
                   cls ? PLAYER_TYPE_PROFILES[cls].shortDescription : 'Standard-Schusswerte, kein Klassen-Perk.'
                 );
               }}>
-              <Icon name="shieldAccount" size={12} color={classOf(item.id) ? '#f0c840' : '#807050'} />
-              <Text style={[st.roleTag, classOf(item.id) && { color: '#f0c840' }]}>
+              <Icon name="shieldAccount" size={12} color={classOf(item.id) ? theme.accent : theme.text3} />
+              <Text style={[st.roleTag, classOf(item.id) && { color: theme.accent }]}>
                 {classOf(item.id) ? PLAYER_TYPE_PROFILES[classOf(item.id)!].name : '–'}
               </Text>
             </TouchableOpacity>
             <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}
-              color={item.ready ? '#80ff40' : '#807050'} style={{ marginLeft: 8 }} />
+              color={item.ready ? '#80ff40' : theme.text3} style={{ marginLeft: 8 }} />
             {isHost && item.isBot && (
               <TouchableOpacity onPress={() => removeBot(item.id)} style={{ marginLeft: 8 }}>
-                <Icon name="close" size={14} color="#ff6040" />
+                <Icon name="close" size={14} color={theme.danger} />
               </TouchableOpacity>
             )}
           </View>
@@ -1152,76 +1063,76 @@ export default function LobbyScreen({
   );
 }
 
-const st = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0a0810', padding: 16, paddingTop: 52 },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 },
-  topLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
-  modeRowTight: { flexDirection: 'row', gap: 6, marginBottom: 8 },
-  smallBtnTight: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
-    borderRadius: 7, paddingHorizontal: 4, paddingVertical: 7,
-  },
-  codeChip: { backgroundColor: 'rgba(240,200,64,.12)', borderWidth: 1.5, borderColor: '#f0c840', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6, alignItems: 'center' },
-  codeTxt: { color: '#f0c840', fontSize: 18, fontWeight: '900', letterSpacing: 2, fontFamily: 'monospace' as any },
-  codeSubRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  codeSub: { color: '#807050', fontSize: 9 },
-  hostHint: { color: '#807050', fontSize: 11, marginBottom: 8 },
-  mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
-  locateBtn: {
-    position: 'absolute', bottom: 10, right: 10, width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(20,16,32,.9)', borderWidth: 1.5, borderColor: '#40a0ff',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  gpsStatusBadge: {
-    position: 'absolute', bottom: 14, left: 10, backgroundColor: 'rgba(20,16,32,.9)',
-    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
-    borderWidth: 1, borderColor: '#40a0ff',
-  },
-  gpsStatusTxt: { color: '#40a0ff', fontSize: 10, fontWeight: '700' },
-  comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
-  comicStaleBadge: {
-    position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
-  },
-  comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
-  comicCachedBadge: { backgroundColor: '#80e070' },
-  rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
-  smallBtn: { backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
-  smallBtnRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(40,32,64,.6)',
-    borderWidth: 1, borderColor: '#2a2040', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7,
-  },
-  smallBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.14)' },
-  smallBtnDisabled: { opacity: 0.5 },
-  iconBtnLg: {
-    width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
-  },
-  smallTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
-  smallTxtActive: { color: '#f0c840' },
-  wpCount: { color: '#807050', fontSize: 11 },
-  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 4 },
-  section: { color: '#e0c080', fontSize: 12, fontWeight: '800' },
-  divider: { height: 1, backgroundColor: '#2a2040', marginVertical: 10 },
-  hintRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 8 },
-  hint: { color: '#807050', fontSize: 12, textAlign: 'center' },
-  errRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
-  err: { color: '#ff6040', fontSize: 12 },
-  roleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 8 },
-  role: { color: '#e0c080', fontSize: 14, fontWeight: '700' },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#1a1428', gap: 8 },
-  name: { flex: 1, color: '#e0c080', fontSize: 14 },
-  roleTagRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  roleTag: { fontSize: 13, color: '#c0a0f0', fontWeight: '700' },
-  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  btn: { backgroundColor: 'rgba(60,160,20,.2)', borderWidth: 2, borderColor: '#3a8020', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
-  btnActive: { backgroundColor: 'rgba(60,160,20,.45)' },
-  btnTxt: { color: '#80ff40', fontSize: 15, fontWeight: '800' },
-  startBtn: { backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: '#803aa0', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
-  startTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },
-  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,.85)', alignItems: 'center', justifyContent: 'center' },
-  modalBox: { backgroundColor: '#141020', borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 24, alignItems: 'center', gap: 12 },
-  modalCode: { color: '#f0c840', fontSize: 26, fontWeight: '900', letterSpacing: 4, fontFamily: 'monospace' as any },
-  linkTxt: { color: '#40a0ff', fontSize: 12, fontFamily: 'monospace' as any, maxWidth: 260, textDecorationLine: 'underline' },
-});
+function makeStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    wrap: { flex: 1, backgroundColor: theme.bg, padding: 16, paddingTop: 52 },
+    topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 },
+    topLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+    modeRowTight: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+    smallBtnTight: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+      backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
+      borderRadius: 7, paddingHorizontal: 4, paddingVertical: 7,
+    },
+    codeChip: { backgroundColor: theme.bg3, borderWidth: 1.5, borderColor: theme.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6, alignItems: 'center' },
+    codeTxt: { color: theme.accent, fontSize: 18, fontWeight: '900', letterSpacing: 2, fontFamily: 'monospace' as any },
+    codeSubRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    codeSub: { color: theme.text3, fontSize: 9 },
+    hostHint: { color: theme.text3, fontSize: 11, marginBottom: 8 },
+    mapBox: { height: 230, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+    comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+    // Stale/cached status badges — semantic (warning-gold / ok-green),
+    // stays literal across themes same as everywhere else status color is used.
+    comicStaleBadge: {
+      position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
+      backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+    },
+    comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
+    comicCachedBadge: { backgroundColor: '#80e070' },
+    rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
+    smallBtn: { backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
+    smallBtnRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: theme.bg3,
+      borderWidth: 1, borderColor: theme.border, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7,
+    },
+    smallBtnActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg2 },
+    smallBtnDisabled: { opacity: 0.5 },
+    // A true on/off toggle, not a pick-one-of-several option (smallBtnActive
+    // above) — filled solid when on instead of just a faint tint, so it reads
+    // unambiguously as ON/OFF rather than "another choice in this row".
+    toggleOn: { borderColor: theme.borderStrong, backgroundColor: theme.accent },
+    toggleOnTxt: { color: theme.onAccent, fontWeight: '800' },
+    iconBtnLg: {
+      width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
+    },
+    smallTxt: { color: theme.text2, fontSize: 12, fontWeight: '700' },
+    smallTxtActive: { color: theme.accent },
+    wpCount: { color: theme.text3, fontSize: 11 },
+    sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6, marginBottom: 4 },
+    section: { color: theme.text, fontSize: 12, fontWeight: '800' },
+    divider: { height: 1, backgroundColor: theme.border, marginVertical: 10 },
+    hintRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 8 },
+    hint: { color: theme.text3, fontSize: 12, textAlign: 'center' },
+    errRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
+    err: { color: theme.danger, fontSize: 12 },
+    roleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 8 },
+    role: { color: theme.text, fontSize: 14, fontWeight: '700' },
+    row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.border, gap: 8 },
+    name: { flex: 1, color: theme.text, fontSize: 14 },
+    roleTagRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    roleTag: { fontSize: 13, color: theme.text2, fontWeight: '700' },
+    btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    // Ready/Start keep their literal green/purple brand accents, same
+    // convention as every other primary CTA across the app.
+    btn: { backgroundColor: 'rgba(60,160,20,.25)', borderWidth: 2, borderColor: 'rgba(58,128,32,.5)', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
+    btnActive: { backgroundColor: 'rgba(60,160,20,.45)' },
+    btnTxt: { color: '#80ff40', fontSize: 15, fontWeight: '800' },
+    startBtn: { backgroundColor: 'rgba(160,60,200,.25)', borderWidth: 2, borderColor: 'rgba(128,58,160,.5)', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
+    startTxt: { color: '#e060ff', fontSize: 15, fontWeight: '800' },
+    modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,.85)', alignItems: 'center', justifyContent: 'center' },
+    modalBox: { backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent, borderRadius: 16, padding: 24, alignItems: 'center', gap: 12 },
+    modalCode: { color: theme.accent, fontSize: 26, fontWeight: '900', letterSpacing: 4, fontFamily: 'monospace' as any },
+    linkTxt: { color: '#40a0ff', fontSize: 12, fontFamily: 'monospace' as any, maxWidth: 260, textDecorationLine: 'underline' },
+  });
+}

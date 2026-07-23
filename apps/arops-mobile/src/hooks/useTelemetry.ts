@@ -109,7 +109,7 @@ export function useTelemetry(socket: Socket | null, sessionId: string | null, en
   // GameScreen never has to reconcile the two by hand.
   const sampleIntervalMsRef = useRef(250);
   const interpolationEnabledRef = useRef(true);
-  const renderTickMsRef = useRef(80); // ~12Hz default
+  const renderTickMsRef = useRef(1000 / 30); // ~30Hz default
   // Latest ACCEPTED real sample (post-throttle) — the interpolation ticker
   // eases the displayed heading toward this every tick; when interpolation
   // is off, this doubles as the direct display value (same as before).

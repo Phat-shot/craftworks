@@ -1,8 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState } from 'react-native';
+import { AppState, NativeEventSubscription } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { SERVER_URL } from './config';
 import { withTimeout } from './utils/withTimeout';
+import type { ThemeName } from './theme';
+export type { ThemeName } from './theme';
 
 // fetch() has no built-in timeout — a slow/unresponsive server (or a bad
 // mobile network) can leave it hanging far longer than any user will wait,
@@ -20,6 +22,7 @@ let accessToken: string | null = null;
 let refreshToken: string | null = null;
 let currentUser: User | null = null;
 let socket: Socket | null = null;
+let appStateSub: NativeEventSubscription | null = null;
 let lastPosition: LastPosition | null = null;
 
 export function getUser(): User | null { return currentUser; }
@@ -46,7 +49,7 @@ export async function loadLastPosition(): Promise<void> {
 }
 
 export interface HeadingSettings { interpolation: boolean; sampleMs: number; renderHz: number; }
-const DEFAULT_HEADING_SETTINGS: HeadingSettings = { interpolation: true, sampleMs: 250, renderHz: 12 };
+const DEFAULT_HEADING_SETTINGS: HeadingSettings = { interpolation: true, sampleMs: 250, renderHz: 30 };
 let headingSettings: HeadingSettings = { ...DEFAULT_HEADING_SETTINGS };
 
 /** Compass smoothing prefs (see useTelemetry's setHeadingInterpolation/
@@ -67,6 +70,45 @@ export async function loadHeadingSettings(): Promise<void> {
   const raw = await AsyncStorage.getItem('heading_settings').catch(() => null);
   if (!raw) return;
   try { headingSettings = { ...DEFAULT_HEADING_SETTINGS, ...JSON.parse(raw) }; } catch {}
+}
+
+// UI theme (Color/Nacht/Tag) — device-level, same persistence shape as
+// HeadingSettings above. Default 'color' (today's only look, unchanged) so
+// existing installs see no visual change until the player explicitly opts
+// into Night/Day via the Einstellungen picker. Type lives in theme.ts (the
+// canonical definition, re-exported here) rather than duplicated.
+const DEFAULT_THEME: ThemeName = 'night';
+let currentTheme: ThemeName = DEFAULT_THEME;
+
+export function getTheme(): ThemeName { return currentTheme; }
+
+export async function saveTheme(name: ThemeName): Promise<void> {
+  currentTheme = name;
+  await AsyncStorage.setItem('theme', name).catch(() => {});
+}
+
+/** Independent of restoreSession, same as loadLastPosition/loadHeadingSettings. */
+export async function loadTheme(): Promise<void> {
+  const raw = await AsyncStorage.getItem('theme').catch(() => null);
+  if (raw === 'color' || raw === 'night' || raw === 'day') currentTheme = raw;
+}
+
+// App-wide Debug-Modus toggle — device-level, same persistence shape as
+// theme/heading above. Gates the Match-Simulation menu entry (see App.tsx);
+// distinct from the per-lobby ar_settings.debugMode (fog-of-war etc.),
+// which only exists once a lobby has been created.
+let debugEnabled = false;
+
+export function getDebugEnabled(): boolean { return debugEnabled; }
+
+export async function saveDebugEnabled(v: boolean): Promise<void> {
+  debugEnabled = v;
+  await AsyncStorage.setItem('debug_enabled', v ? '1' : '0').catch(() => {});
+}
+
+export async function loadDebugEnabled(): Promise<void> {
+  const raw = await AsyncStorage.getItem('debug_enabled').catch(() => null);
+  debugEnabled = raw === '1';
 }
 
 // 'ok' — refreshed successfully. 'rejected' — the SERVER actually responded
@@ -323,6 +365,27 @@ export function parseLobbyCode(raw: string): string | null {
   return null;
 }
 
+// Notifies the app that the session is truly dead (server explicitly
+// rejected the refresh token) so it can route to LoginScreen immediately,
+// the same way req()'s callers already do on a 401. Without this, the two
+// tryRefresh() call sites below silently dropped a 'rejected' result: with
+// reconnectionAttempts uncapped (see getSocket()'s own comment), a dead
+// refresh token now retries connect_error forever instead of ever giving up
+// — nothing told the player their session was over, so the lobby just
+// looked permanently broken ("lobby not found") until they force-quit and
+// relaunched, which is the only path that already handled 'rejected'
+// correctly (via restoreSession()). Set once by App.tsx at boot.
+let sessionExpiredHandler: (() => void) | null = null;
+export function onSessionExpired(cb: () => void): void {
+  sessionExpiredHandler = cb;
+}
+async function handleDeadSession(): Promise<void> {
+  stopProactiveRefresh(); // matches logout() — no refreshToken left for the 10-min interval to use
+  await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user']).catch(() => {});
+  accessToken = null; refreshToken = null;
+  sessionExpiredHandler?.();
+}
+
 /** Shared authenticated socket (created lazily after login). */
 export function getSocket(): Socket {
   if (!socket) {
@@ -356,6 +419,7 @@ export function getSocket(): Socket {
     socket.on('connect_error', async () => {
       const r = await tryRefresh();
       if (r === 'ok') socket?.connect();
+      else if (r === 'rejected') await handleDeadSession();
     });
     // Backgrounded JS timers (startProactiveRefresh) can be paused/throttled
     // by the OS for far longer than 10 minutes, and the transport itself is
@@ -364,9 +428,10 @@ export function getSocket(): Socket {
     // player is about to tap something. Proactively refresh + reconnect
     // right away instead of waiting for the player's tap to surface it as a
     // confusing "lobby not found".
-    AppState.addEventListener('change', async (state) => {
+    appStateSub = AppState.addEventListener('change', async (state) => {
       if (state !== 'active') return;
-      await tryRefresh();
+      const r = await tryRefresh();
+      if (r === 'rejected') { await handleDeadSession(); return; }
       if (socket && !socket.connected) socket.connect();
     });
   }
@@ -376,6 +441,8 @@ export function getSocket(): Socket {
 export function resetSocket(): void {
   socket?.disconnect();
   socket = null;
+  appStateSub?.remove();
+  appStateSub = null;
 }
 
 export async function logout(): Promise<void> {

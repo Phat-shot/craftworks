@@ -4,6 +4,14 @@
 //  Reference: walking speed ~1.4 m/s. Per user requirement all
 //  values err LONGER rather than shorter and are clamped to
 //  sane bounds. Every value can be overridden via ar_settings.
+//
+//  Size categories: small = 20×20m (L=20, 400m², the platform minimum — see
+//  DEFAULT_POLYGON_OPTIONS.minAreaM2 in types.ts), medium starts at 100×100m
+//  (L=100), large starts at 1000×1000m (L=1000). Several values (see scale3()
+//  below) are literally anchored to these 3 points: flat below 20m, linear
+//  20→100m, linear 100→1000m, flat above 1000m. The rest remain smooth clamp()
+//  functions of L tuned to land in a similar range at those same reference
+//  points, without being formally anchored to them.
 // ═══════════════════════════════════════════════════════════
 
 export interface ModeTimings {
@@ -15,8 +23,14 @@ export interface ModeTimings {
   freezeMoveToleranceM: number;
   /** Extension applied per movement violation. */
   freezeExtensionMs: number;
-  /** CTF phase 1: time to place the team base. */
+  /** Base-placement phase (CTF always; Domination/S&D/Deathmatch when
+   *  cfg.onHit === 'respawn'): time to place the team base. Field-size-scaled. */
   baseSettingMs: number;
+  /** Warmup phase (Domination/S&D/Deathmatch when cfg.onHit === 'freeze' —
+   *  no base to place). Deliberately FIXED, never field-size-scaled, not even
+   *  in auto mode — a plain "get ready" pause doesn't need more time just
+   *  because the field is bigger. */
+  warmupMs: number;
   /** CTF: dwell time in enemy base / at dropped flag to pick it up. */
   flagPickupDwellMs: number;
   /** CTF: dropped flag auto-returns after this. */
@@ -45,31 +59,61 @@ export interface ModeTimings {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * Piecewise-linear 3-anchor-point scale: flat floor below `sSmall`, linear
+ * ramp small→medium, linear ramp medium→large, flat ceiling above `sLarge`.
+ * Anchor field-length points are fixed platform-wide: 20m (small), 100m
+ * (medium), 1000m (large) — see DEFAULT_POLYGON_OPTIONS.minAreaM2 (types.ts)
+ * for the matching 20×20m minimum field size.
+ */
+const SMALL_L = 20, MEDIUM_L = 100, LARGE_L = 1000;
+function scale3(L: number, atSmall: number, atMedium: number, atLarge: number): number {
+  if (L <= SMALL_L) return atSmall;
+  if (L <= MEDIUM_L) return atSmall + (atMedium - atSmall) * ((L - SMALL_L) / (MEDIUM_L - SMALL_L));
+  if (L <= LARGE_L) return atMedium + (atLarge - atMedium) * ((L - MEDIUM_L) / (LARGE_L - MEDIUM_L));
+  return atLarge;
+}
+
 /** Compute all mode timings from the playfield area. */
 export function scaleTimings(areaM2: number): ModeTimings {
   const L = Math.sqrt(Math.max(1, areaM2)); // characteristic length in m
   return {
-    zoneRadiusM:          clamp(L / 25, 12, 45),
-    freezeMs:             clamp(((L / 2) / 1.4) * 1000, 30_000, 120_000),
+    // ~L/8: small ≈10m (floor), medium ≈13m, large(L=200) ≈25m.
+    zoneRadiusM:          clamp(L / 8, 10, 40),
+    // 3s @ 20m, 10s @ 100m, 30s @ 1000m+.
+    freezeMs:             scale3(L, 3_000, 10_000, 30_000),
     freezeMoveToleranceM: 15, // fixed: below GPS drift would punish standing still
-    freezeExtensionMs:    clamp((((L / 2) / 1.4) * 1000) * 0.25, 10_000, 30_000),
-    baseSettingMs:        clamp((L / 1.4) * 1000, 90_000, 300_000),
-    flagPickupDwellMs:    clamp((L / 50) * 1000, 4_000, 15_000),
-    flagReturnMs:         clamp(L * 200, 30_000, 90_000),
-    minBaseSeparationM:   clamp(L * 0.5, 60, 600),
-    captureDwellMs:       clamp((L / 40) * 1000, 5_000, 20_000),
-    plantDwellMs:         clamp((L / 30) * 1000, 8_000, 20_000),
-    defuseDwellMs:        clamp((L / 40) * 1000, 6_000, 15_000),
-    bombTimerMs:          clamp(((L / 1.4) + 30) * 1200, 90_000, 300_000),
-    revealTrapRadiusM:    clamp(L * 0.15, 15, 60),
-    spawnCheckDwellMs:    clamp((L / 40) * 1000, 5_000, 15_000),
+    freezeExtensionMs:    clamp(L * 25, 1_000, 8_000),
+    // Base-placement phase: 1min @ 20m, 2min @ 100m, 5min @ 1000m+.
+    baseSettingMs:        scale3(L, 60_000, 120_000, 300_000),
+    // Warmup phase: fixed 1 minute regardless of field size.
+    warmupMs:             60_000,
+    // Small ≈2.5s, medium ≈5s, large(L=200) ≈10s.
+    flagPickupDwellMs:    clamp((L / 20) * 1000, 2_000, 12_000),
+    // Small ≈15s, medium ≈30s, large(L=200) ≈60s.
+    flagReturnMs:         clamp(L * 300, 10_000, 90_000),
+    // Small ≈30m, medium ≈60m, large(L=200) ≈120m — the old 60m floor left
+    // almost no room to place 2 bases at all on a small/medium field.
+    minBaseSeparationM:   clamp(L * 0.6, 15, 500),
+    // Small ≈3.3s, medium ≈6.7s, large(L=200) ≈13.3s.
+    captureDwellMs:       clamp((L / 15) * 1000, 3_000, 20_000),
+    plantDwellMs:         clamp((L / 15) * 1000, 4_000, 20_000),
+    defuseDwellMs:        clamp((L / 20) * 1000, 3_000, 15_000),
+    // Small ≈51s, medium ≈86s, large(L=200) ≈158s.
+    bombTimerMs:          clamp(((L / 1.4) + 15) * 1000, 45_000, 240_000),
+    // Small ≈10m, medium ≈20m, large(L=200) ≈40m.
+    revealTrapRadiusM:    clamp(L * 0.2, 8, 60),
+    spawnCheckDwellMs:    clamp((L / 20) * 1000, 3_000, 15_000),
   };
 }
 
 /** Drohne perk (hider): "opponent within range" alert radius, scaled to field size. */
 export function scaleDroneRangeM(areaM2: number): number {
   const L = Math.sqrt(Math.max(1, areaM2));
-  return clamp(L * 0.4, 50, 200);
+  // Small ≈25m, medium ≈50m, large(L=200) ≈100m — the old L*0.4 floor of
+  // 50m was already the WHOLE field on a small/medium field (near-useless
+  // as a "nearby" signal, it'd fire almost constantly).
+  return clamp(L * 0.5, 15, 200);
 }
 
 export interface CoreScaledConfig {
@@ -88,11 +132,17 @@ export interface CoreScaledConfig {
   /** Scout class perk (any mode) — previously not auto-scaled at all (stuck
    *  at the fixed DEFAULTS value regardless of field/match size). */
   revealTrapCooldownMs: number;
+  /** How long a perk's effect/reveal actually lasts once triggered (radar
+   *  contacts staying visible, cloak active, fake marker shown, etc.) — same
+   *  scale3 anchor points as radarCooldownMs, shared by every perk that has
+   *  a duration. Previously fixed, non-field-scaled constants per perk. */
+  perkDurationMs: number;
+  /** Combat modes' respawn variant (cfg.onHit === 'respawn'): lives before
+   *  elimination. Longer matches can afford more lives before someone's
+   *  permanently out — previously not auto-scaled at all (stuck at the
+   *  fixed DEFAULTS value of 3 regardless of match length). */
+  livesPerPlayer: number;
 }
-
-// A "medium" reference field (~50,000 m², L≈224m) roughly matching the
-// fixed defaults these values replace (server/src/game/arops.js DEFAULTS).
-const REF_L_M = 224;
 
 /**
  * "Auto" mode: derive hiding/game duration, shot range, and perk cooldowns
@@ -104,36 +154,45 @@ const REF_L_M = 224;
  */
 export function scaleCoreConfig(areaM2: number): CoreScaledConfig {
   const L = Math.sqrt(Math.max(1, areaM2));
-  const gameDurationMs = clamp((L / 1.4) * 1000 * 2.5, 300_000, 3_600_000);
-  // Perk cooldowns used to be derived purely from a field-size ratio against
-  // a fixed reference (bigger field → shorter cooldown, capped at the
-  // reference value) — completely decoupled from gameDurationMs. A small
-  // field's cooldown sat at (or near) that fixed reference ceiling
-  // regardless of how short its own auto-derived match actually was, e.g.
-  // radar's 15min reference cooldown inside a field whose whole match lasts
-  // 5min (gameDurationMs's own lower clamp) — the perk was then barely or
-  // never usable ("cooldowns nicht an die Match-Dauer angepasst"). Deriving
-  // each cooldown as a fraction of the match's own gameDurationMs instead
-  // fixes that directly — field size still matters, just indirectly via its
-  // effect on gameDurationMs, same as every timing above. The old reference
-  // constants now only serve as the absolute ceiling for a very long match
-  // (huge field), so a differently-tuned bomb-timer-scale match doesn't
-  // suddenly grant an absurdly long cooldown either.
-  const perkCooldown = (fractionOfMatch: number, referenceMs: number) =>
-    clamp(gameDurationMs * fractionOfMatch, 15_000, referenceMs);
+  // Auto: 5min @ 20m, 15min @ 100m, 60min @ 1000m+. Manual override can go
+  // up to 6h (see platform.js's ceiling on ar_settings.gameDurationMs) —
+  // this auto-derived value is deliberately never that long.
+  const gameDurationMs = scale3(L, 5 * 60_000, 15 * 60_000, 60 * 60_000);
+  // Radar cooldown: 1min @ 20m, 5min @ 100m, 15min @ 1000m+ — every other
+  // perk's cooldown is a fixed fraction of radar's (radar reveals positions
+  // outright, so it's the rarest; every other perk is a cheaper signal).
+  const radarCooldownMs = scale3(L, 60_000, 5 * 60_000, 15 * 60_000);
+  const otherPerkCooldownMs = radarCooldownMs / 3;
+  // One life per ~90s of match — bigger field naturally affords more lives
+  // via its longer auto-derived match, not via its own separate area formula.
+  const livesPerPlayer = clamp(Math.round(gameDurationMs / 90_000), 2, 6);
   return {
-    hidingDurationMs: clamp(((L / 2) / 1.4) * 1000, 45_000, 600_000),
+    // Hide & Seek's 'hiding' phase is structurally the same thing as
+    // Domination/S&D/Deathmatch's base-less 'warmup' phase (see
+    // ModeTimings.warmupMs in this same file) — a prep phase with nothing to
+    // place, just a head start. Same rule applies: fixed 1 minute, never
+    // field-size-scaled, not even in auto mode.
+    hidingDurationMs: 60_000,
     gameDurationMs,
-    hitRangeM:        clamp(L * 0.5, 20, 500),
-    hitHalfWidthM:    clamp((L / REF_L_M) * 1, 0.5, 5),
-    // Fractions reflect relative perk power (radar reveals positions outright
-    // → rarest; drone/aufscheuchen are cheap one-bit signals → most frequent).
-    radarCooldownMs:        perkCooldown(1 / 4, 15 * 60_000),
-    droneCooldownMs:        perkCooldown(1 / 10, 60_000),
-    cloakCooldownMs:        perkCooldown(1 / 6, 90_000),
-    fakeMarkerCooldownMs:   perkCooldown(1 / 6, 90_000),
-    aufscheuchenCooldownMs: perkCooldown(1 / 10, 45_000),
-    revealTrapCooldownMs:   perkCooldown(1 / 8, 60_000),
+    // Scout's base range: 5m @ 20m, 20m @ 100m, 100m @ 1000m+ (other classes'
+    // ranges derive from this via their own shotRangeMultiplier, see
+    // profiles.ts's PLAYER_TYPE_PROFILES).
+    hitRangeM:        scale3(L, 5, 20, 100),
+    // Fixed, NOT field-size-scaled (unlike hitRangeM above) — matches the
+    // Lobby's manual "Normal (2m)" preset (REF_DIST_M=10, halfWidthM=1)
+    // regardless of field size.
+    hitHalfWidthM:    1,
+    radarCooldownMs,
+    droneCooldownMs:        otherPerkCooldownMs,
+    cloakCooldownMs:        otherPerkCooldownMs,
+    fakeMarkerCooldownMs:   otherPerkCooldownMs,
+    aufscheuchenCooldownMs: otherPerkCooldownMs,
+    revealTrapCooldownMs:   otherPerkCooldownMs,
+    // Perk effect duration (radar contacts visible, cloak active, etc.):
+    // 5s @ 20m, 15s @ 100m, 30s @ 1000m+ — same anchor points as radar's
+    // own cooldown above.
+    perkDurationMs:   scale3(L, 5_000, 15_000, 30_000),
+    livesPerPlayer,
   };
 }
 

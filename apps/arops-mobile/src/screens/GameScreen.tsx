@@ -12,7 +12,8 @@ import CameraLayer from '../components/CameraLayer';
 import { useIrScan } from '../hooks/useIrScan';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
-import { BLANK_STYLE, OSM_STYLE } from '../mapStyle';
+import { blankMapStyle, OSM_STYLE, OSM_STYLE_DARK } from '../mapStyle';
+import { useTheme, ThemeTokens, THEMES } from '../theme';
 
 // owner/capture's key is a team letter in team mode, a userId in the ffa
 // variant (every player captures individually) — see arops.js's Domination
@@ -48,6 +49,7 @@ interface Snap {
   timings?: {
     freezeMs: number; captureDwellMs: number; flagPickupDwellMs: number;
     plantDwellMs: number; defuseDwellMs: number; zoneRadiusM: number;
+    radarDurationMs: number;
   };
   winner: string | null;
   hidersRemaining: number;
@@ -166,6 +168,11 @@ const MODES: { id: ViewMode; icon: IconName; label: string }[] = [
 // blend — no longer a user-facing setting.
 const OVERLAY_OPACITY = 0.5;
 
+function hexToRgba(hex: string, alpha: number) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
 // Cooldown/duration indicator for the action-bar buttons below — a glowing
 // border traced around the BUTTON ITSELF (not a separate icon-sized donut).
 // Previous version was a pie/ring badge next to the icon that just vanished
@@ -190,32 +197,124 @@ function GlowBorder({ progress, color }: { progress: number; color: string }) {
   }, [pulse]);
   const p = Math.max(0, Math.min(1, progress));
   if (p <= 0) return null;
-  // Unfurls from TOP-CENTER outward in two mirrored halves (top-arm → side
-  // → bottom-arm), instead of starting at a corner — both halves share the
-  // same `p`, so the lit border is always symmetric and always recedes back
-  // to the top-middle point as the perk approaches ready, rather than to
-  // one arbitrary corner.
-  const halfFrac = (i: number): `${number}%` => `${Math.max(0, Math.min(1, p * 3 - i)) * 100}%`;
-  // Plain backgroundColor + the pulsing opacity above IS the "glow" — no
-  // shadow/elevation here anymore. RN shadows are never clipped to the
-  // View's own box, so a thin 3px bar with shadowRadius/elevation painted a
-  // soft halo well past its actual rectangle — harmless on the short side
-  // segments, but the top segments are lit for 2/3 of the whole cooldown
-  // (unfurl from center reaches full width at p=1/3, stays full until
-  // p=0), so that halo read as a long, permanently-visible line bursting
-  // past the button's own static border. Segments now sit flush with (not
-  // outside) the button's edge (0 instead of a −2 outward offset) too.
-  const glow = { backgroundColor: color, borderRadius: 2, opacity: pulse };
+  // Single continuous CLOCKWISE sweep starting at top-center ("0°", 12
+  // o'clock) — a classic pie/countdown-timer read: at p=1 the whole border
+  // is lit, and as p depletes toward 0 the ELAPSED portion erases starting
+  // at the top and sweeping clockwise (top-right arm -> right edge ->
+  // bottom-right arm -> bottom-left arm -> left edge -> top-left arm, 6
+  // legs of equal 1/6 weight), always finishing the very last sliver
+  // exactly back at top-center. Replaces an earlier symmetric two-sided
+  // shrink (both halves depleting from their own center simultaneously)
+  // that fixed a prior "reads as a static line" bug but gave up the actual
+  // clockwise-timer semantics in the process.
+  const legQ = (i: number) => Math.max(0, Math.min(1, 6 * p - (5 - i)));
+  const armFrac = (i: number) => `${legQ(i) * 50}%` as `${number}%`;
+  const edgeFrac = (i: number) => `${legQ(i) * 100}%` as `${number}%`;
+  // Two layers per leg instead of one flat bar — a soft, low-opacity halo
+  // (thicker) behind a crisp, bright core (thin, pulsing) — to actually read
+  // as "glowing" rather than a hard-edged stroke. Both anchored flush INSIDE
+  // the button's own edge, whole overlay clipped to the button's own corner
+  // radius so the straight per-leg bars don't visibly overshoot the rounded
+  // corners.
+  const haloStyle = { backgroundColor: color, opacity: 0.22, borderRadius: 3 };
+  const coreStyle = { backgroundColor: color, opacity: pulse as any, borderRadius: 1 };
+  return (
+    <View style={[StyleSheet.absoluteFill, { borderRadius: 12, overflow: 'hidden' }]} pointerEvents="none">
+      {/* The border-sweep alone is still hard to read as "how much time is
+          left" at a glance — a plain fill rising from the bottom (classic
+          gauge/battery-level look) reads instantly, added as a first,
+          lowest layer. Uses the overall `p` directly (not the per-leg
+          sweep) — a supplementary reading aid, not part of the clockwise
+          motion itself. */}
+      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: `${p * 100}%`, backgroundColor: color, opacity: 0.22 }} />
+      {/* leg0: top-center -> top-right corner */}
+      <View style={[{ position: 'absolute', top: 0, right: 0, height: 4, width: armFrac(0) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: 0, height: 2, width: armFrac(0) }, coreStyle]} />
+      {/* leg1: top-right corner -> bottom-right corner */}
+      <View style={[{ position: 'absolute', bottom: 0, right: 0, width: 4, height: edgeFrac(1) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, width: 2, height: edgeFrac(1) }, coreStyle]} />
+      {/* leg2: bottom-right corner -> bottom-center */}
+      <View style={[{ position: 'absolute', bottom: 0, left: '50%', height: 4, width: armFrac(2) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, left: '50%', height: 2, width: armFrac(2) }, coreStyle]} />
+      {/* leg3: bottom-center -> bottom-left corner */}
+      <View style={[{ position: 'absolute', bottom: 0, left: 0, height: 4, width: armFrac(3) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 2, width: armFrac(3) }, coreStyle]} />
+      {/* leg4: bottom-left corner -> top-left corner */}
+      <View style={[{ position: 'absolute', top: 0, left: 0, width: 4, height: edgeFrac(4) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 2, height: edgeFrac(4) }, coreStyle]} />
+      {/* leg5: top-left corner -> top-center */}
+      <View style={[{ position: 'absolute', top: 0, right: '50%', height: 4, width: armFrac(5) }, haloStyle]} />
+      <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 2, width: armFrac(5) }, coreStyle]} />
+    </View>
+  );
+}
+
+// Screen-space shot-range overlay for the map views (2D/3D/Split) — a
+// stylized, fixed-pixel wedge/lane anchored at the player's own screen
+// position (always screen-center, same convention the camera-mode aim
+// overlays below already use), NOT a geo-referenced shape scaled to real
+// meters/zoom. See the "Shot-range indicator" comment above (near
+// activeHeadingDeg) for why this is deliberately a plain rotated View
+// instead of a MapLibre ShapeSource baked into the map's own MapView.
+// `rotateDeg` is 0 in every compass-driven view mode (map itself rotates,
+// this stays screen-fixed) and the live heading-vs-map-bearing delta in
+// free-2D mode (map doesn't rotate on its own, this does) — see renderMap.
+// `pitchDeg` mirrors the MapView's own Camera pitch (mapPitch, 0 in free-2D,
+// 45° once compass-oriented) — without it this flat overlay reads as a
+// sticker "slapped on top" of the map's own tilted 3D perspective instead of
+// looking like it lies on the same ground plane.
+// `lengthPx` is the on-screen px equivalent of effectiveMaxRangeM at the
+// map's current meters-per-pixel scale (see shotOverlayLengthPx above) — the
+// cone/lane's reach then lines up with the map's own geo-referenced range
+// ring instead of a fixed pixel guess that drifts out of sync on zoom.
+// `anchorPx` is the player's actual screen position in free-2D mode (where
+// the Camera is user-panned, not locked to the player) — null everywhere
+// else, where the Camera is always centered on the player and '50%'/'50%'
+// is already correct.
+function ShotOverlay({ rotateDeg, pitchDeg, lengthPx, anchorPx, myHitShape, effectiveConeHalfAngleDeg, color }: {
+  rotateDeg: number; pitchDeg: number; lengthPx: number; anchorPx: [number, number] | null;
+  myHitShape: 'cone' | 'lateral' | 'omni'; effectiveConeHalfAngleDeg: number; color: string;
+}) {
+  if (myHitShape === 'omni') return null; // omni's range circle stays map-anchored (rotation-irrelevant)
+  const LENGTH_PX = lengthPx;
+  const fill = hexToRgba(color, 0.45);
+  const border = hexToRgba(color, 0.8);
+  // Wrapper is a zero-size anchor pinned exactly at the player's screen
+  // position — rotating IT (not the shape itself) pivots the whole wedge
+  // around that point, regardless of how far the shape extends above it.
+  // `rotateX` tilts that same rigid (already heading-rotated, since `rotate`
+  // is listed AFTER `rotateX` and so is applied to the point first/innermost)
+  // shape to match the map's own pitch — `perspective` first in the list is
+  // what makes that tilt read as actual depth instead of a flat vertical
+  // squash, the standard RN recipe for a "tilted card" look.
+  const anchor = {
+    position: 'absolute' as const,
+    top: anchorPx ? anchorPx[1] : ('50%' as const),
+    left: anchorPx ? anchorPx[0] : ('50%' as const),
+    width: 0, height: 0,
+    transform: [{ perspective: 800 }, { rotateX: `${pitchDeg}deg` }, { rotate: `${rotateDeg}deg` }] as any,
+  };
+  // Apex AT the anchor (the player's own position, y=0 here), widening
+  // AWAY (upward/outward, toward -LENGTH_PX) — a cone of fire narrows to a
+  // point at the shooter and spreads out with range, not the other way
+  // around. Reported inverted once already: borderBottomColor put the WIDE
+  // edge at the anchor and the point pointing away instead.
+  const shape = myHitShape === 'cone'
+    ? (() => {
+        const halfWidthPx = Math.tan(effectiveConeHalfAngleDeg * Math.PI / 180) * LENGTH_PX;
+        return {
+          position: 'absolute' as const, left: -halfWidthPx, top: -LENGTH_PX, width: 0, height: 0,
+          borderLeftWidth: halfWidthPx, borderRightWidth: halfWidthPx, borderTopWidth: LENGTH_PX,
+          borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: fill,
+        };
+      })()
+    : { position: 'absolute' as const, left: -18, top: -LENGTH_PX, width: 36, height: LENGTH_PX,
+        backgroundColor: fill, borderWidth: 1.5, borderColor: border };
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {/* Right half: top-center → top-right corner → down → bottom-center. */}
-      <Animated.View style={[{ position: 'absolute', top: 0, left: '50%', height: 3, width: halfFrac(0) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, right: 0, width: 3, height: halfFrac(1) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: 0, right: 0, height: 3, width: halfFrac(2) }, glow]} />
-      {/* Left half, mirrored. */}
-      <Animated.View style={[{ position: 'absolute', top: 0, right: '50%', height: 3, width: halfFrac(0) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', top: 0, left: 0, width: 3, height: halfFrac(1) }, glow]} />
-      <Animated.View style={[{ position: 'absolute', bottom: 0, left: 0, height: 3, width: halfFrac(2) }, glow]} />
+      <View style={anchor}>
+        <View style={shape} />
+      </View>
     </View>
   );
 }
@@ -224,11 +323,29 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   sessionId: string; onExit: () => void; watchSync: ReturnType<typeof useWatchSync>;
 }) {
   useKeepAwake(); // screen lock would stop GPS → target_stale for everyone else
+  // Only the game screen's own structural chrome (backgrounds, popup/modal
+  // borders, action-bar frame, status bar) follows the Color/Nacht/Tag
+  // theme — gameplay-semantic colors (class accents, team colors, hit/
+  // freeze/status banners, the aim reticle) stay literal, see theme.ts's
+  // header comment for why.
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
+  // Same dark-map treatment as LobbyScreen for both dark UI themes ('color',
+  // 'night') — only 'day' keeps the light OSM look. See LobbyScreen.tsx's
+  // equivalent comment for why comparing against THEMES.day works without
+  // threading the ThemeName down separately.
+  const isDarkUiTheme = theme !== THEMES.day;
+  // Comic-map backdrop tracks the theme's own background color (see
+  // mapStyle.ts's blankMapStyle) so it blends into the surrounding chrome
+  // instead of a fixed color — matters most in the split-screen layout
+  // where the map sits directly next to themed UI.
+  const comicMapStyle = useMemo(() => blankMapStyle(theme.bg), [theme]);
   const socket = getSocket();
   const me = getUser();
   const [snap, setSnap] = useState<Snap | null>(null);
   const telemetry = useTelemetry(socket, sessionId);
   const hitRangeRef = useRef(DEFAULT_HIT_CONFIG.maxRangeM);
+  const radarDurationMsRef = useRef(15_000);
   // Action-bar cooldown/duration indicators (GlowBorder above): the server only
   // ever sends *RemainingMs, never each perk's total duration (which varies
   // by field-size auto-scaling and host overrides anyway) — so the ring's
@@ -253,7 +370,28 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const [radarContacts, setRadarContacts] = useState<RadarContact[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('comic3d');
   const cameraRef = useRef<any>(null);
+  const mapRef = useRef<any>(null);
   const [showRange, setShowRange] = useState(false);
+  // Live map bearing + zoom, read back from the MapView itself. Bearing only
+  // actually changes in free-2D mode (user's own rotate gesture, see
+  // rotateEnabled below); every other mode drives the map's heading directly
+  // (mapHeading) so there's nothing to read back there. Zoom can change in
+  // EVERY mode (zoomEnabled follows `interactive`, independent of rotate) —
+  // needed so ShotOverlay's on-screen size can track the same meters-per-
+  // pixel scale the map's own geo-referenced range ring renders at,
+  // regardless of how far the player has pinch-zoomed.
+  const [mapBearingDeg, setMapBearingDeg] = useState(0);
+  const [mapZoomLevel, setMapZoomLevel] = useState(16.5); // matches the initial Camera zoomLevel prop below
+  const onMapRegionChange = (feature: any) => {
+    const h = feature?.properties?.heading;
+    if (typeof h === 'number') setMapBearingDeg(h);
+    const z = feature?.properties?.zoomLevel;
+    if (typeof z === 'number') setMapZoomLevel(z);
+  };
+  // Screen-space position of the player's own marker, in px relative to the
+  // MapView — only needed in free-2D mode (see the effect near isFree2D
+  // below for why).
+  const [screenAnchorPx, setScreenAnchorPx] = useState<[number, number] | null>(null);
   // Compass smoothing (see useTelemetry's setHeadingInterpolation/
   // setHeadingSampleIntervalMs/setHeadingRenderRateHz doc for the full
   // performance investigation) is a device-level tradeoff, not a per-match
@@ -359,6 +497,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       // Reichweite" toast below used to always show the match-wide default,
       // wrong for anyone with a non-default class.
       if (s.me?.hitRangeM ?? s.hitRangeM) hitRangeRef.current = (s.me?.hitRangeM ?? s.hitRangeM)!;
+      if (s.timings?.radarDurationMs) radarDurationMsRef.current = s.timings.radarDurationMs;
       setSnap(s);
     };
     const onResult = (r: any) => {
@@ -376,7 +515,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         setTimeout(() => setLastResult(null), 4500);
       } else if (r.action === 'ar_use_perk' && r.contacts) {
         setRadarContacts(r.contacts);
-        setTimeout(() => setRadarContacts([]), 15_000);
+        setTimeout(() => setRadarContacts([]), radarDurationMsRef.current);
       } else if (r.action === 'ar_use_perk' && typeof r.alert === 'boolean') {
         setLastResult({ icon: 'drone', text: r.alert ? 'Gegner in der Nähe!' : 'Nichts entdeckt' });
         setTimeout(() => setLastResult(null), 4000);
@@ -634,37 +773,60 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     : myHitShape === 'cone'
     ? `${Math.round(effectiveMaxRangeM)}m Reichweite · ${Math.round(effectiveConeHalfAngleDeg * 2)}° Sichtfeld`
     : `${Math.round(effectiveMaxRangeM)}m Reichweite · ${effectiveLaneWidthM.toFixed(1)}m breit`;
-  const hexToRgba = (hex: string, alpha: number) => {
-    const n = parseInt(hex.slice(1), 16);
-    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
-  };
 
   const hasCam = viewMode === 'split' || viewMode === 'overlay' || viewMode === 'camera';
   const isFree2D = viewMode === 'comic2d';
+  // Every non-free-2D mode keeps a CONTROLLED Camera centered exactly on the
+  // player (see `center`/`<Camera centerCoordinate={center}>` in renderMap
+  // below), so the player is always dead-center there and ShotOverlay can
+  // just anchor at '50%'/'50%' directly, no lookup needed (screenAnchorPx
+  // stays null). Free-2D's Camera is uncontrolled (the user pans/zooms it
+  // freely) — the player can be anywhere on screen, or off it entirely — so
+  // the overlay has to track their actual projected screen point instead of
+  // assuming screen-center, recomputed whenever the player moves or the map
+  // itself is panned/zoomed/rotated (region-change) under them. Reported:
+  // without this, the overlay sat at screen-center regardless of where the
+  // player's marker actually was once the map had been panned away from it.
+  useEffect(() => {
+    if (!isFree2D || !telemetry.sample || !mapRef.current?.getPointInView) { setScreenAnchorPx(null); return; }
+    let cancelled = false;
+    mapRef.current.getPointInView([telemetry.sample.lon, telemetry.sample.lat])
+      .then((pt: [number, number]) => { if (!cancelled) setScreenAnchorPx(pt); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isFree2D, telemetry.sample?.lat, telemetry.sample?.lon, mapBearingDeg, mapZoomLevel]);
   // Whichever heading is actually meaningful for how the phone is currently
   // expected to be held: flat/screen-up in pure map mode (top-edge heading),
   // upright/screen-towards-you once the camera is showing (camera-forward
-  // heading — the same one used for aiming/hit-validation). Computed here
-  // (not just once near the map-rendering code below) because coneGeoJSON
-  // needs it too — it used to always read telemetry.heading regardless of
-  // mode, which is the camera-forward sensor even while the phone is held
-  // flat for a pure map view. That mismatch against the map's own rotation
-  // (which already correctly switched on hasCam) is exactly what produced
-  // the reported "hybrid" cone in comic3d: map rotates by top-edge heading,
-  // cone polygon rotates by camera-forward heading, so they disagree the
-  // moment the two sensor readings diverge (any non-flat, non-upright hold).
+  // heading — the same one used for aiming/hit-validation). It used to
+  // always read telemetry.heading regardless of mode, which is the
+  // camera-forward sensor even while the phone is held flat for a pure map
+  // view — that mismatch against the map's own rotation (which already
+  // correctly switched on hasCam) is what produced a reported "hybrid" cone
+  // in comic3d: map rotates by top-edge heading, the old cone overlay
+  // rotated by camera-forward heading, disagreeing the moment the two
+  // sensor readings diverged (any non-flat, non-upright hold).
   const activeHeadingDeg = hasCam ? telemetry.heading : telemetry.topEdgeHeadingDeg;
   activeHeadingDegRef.current = activeHeadingDeg;
-  // A previous version of this drew the cone at a CONSTANT bearing in every
-  // compass-locked mode, on the theory that the map's own rotation would
-  // carry it to the same on-screen spot regardless — backwards. A map with
-  // camera heading H shows an absolute-bearing-B feature at screen angle
-  // (B − H); that's only ever a constant (pointing "up") when B TRACKS H,
-  // i.e. B = activeHeadingDeg — a fixed B instead drifts by −H as H changes,
-  // which is exactly the "hybrid" cone reported again across comic3d/split/
-  // overlay. There's no way around the cone needing the same live sensor
-  // value as the map's own heading; both must move together — see
-  // coneGeoJSON below, which just uses activeHeadingDeg directly again.
+  // Shot-range indicator: TWO independent layers (see ShotOverlay below),
+  // not one geo-referenced shape baked into the same MapView as the map
+  // tiles. That used to still visibly "swim" against the map's own native
+  // rotation even once both were driven by the identical activeHeadingDeg
+  // value (reported again after two earlier fixes) — MapLibre's native
+  // Camera.heading transform and a ShapeSource geometry update go through
+  // separate, independently-scheduled native paint passes, so they can
+  // still land a frame apart under rapid heading changes even with matching
+  // source data. A plain screen-space View with its own `transform: rotate`
+  // has no such second pipeline to race against.
+  //  - compass/3D view modes: the MAP layer rotates (native Camera.heading);
+  //    the overlay applies NO rotation of its own, so it just stays
+  //    screen-fixed "pointing up" while the world turns under it — nothing
+  //    to desync since it never re-renders on a heading change at all.
+  //  - map/2D mode: the map only rotates via the user's own manual gesture,
+  //    never the compass — the OVERLAY layer rotates instead, driven by
+  //    activeHeadingDeg minus the map's own live bearing (mapBearingDeg,
+  //    read back from the MapView itself below), so it keeps pointing the
+  //    real heading regardless of how the user has the map oriented.
 
   // Approximate hit range around own position (toggleable)
   const rangeGeoJSON = useMemo(() => {
@@ -681,54 +843,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     };
   }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, effectiveMaxRangeM]);
 
-  // Cone (Scout/default) gets a true widening angular fan — the honest shape
-  // for an angle-based hit-test viewed from the shooter's own apex; it was
-  // previously converted to a constant-METERS lane (same rectangle Sniper's
-  // fixed-tolerance shape uses), which silently misrepresented it as
-  // constant-width instead of widening with distance. Lateral (Sniper) still
-  // gets that rectangle — a fixed-meters lane, unrelated to any angle, is the
-  // honest shape for ITS shot. Not the wider GPS-tolerance cone the server
-  // actually validates with (hitToleranceDeg still widens at close range for
-  // the real inCone check above; this is deliberately the simpler, honest-
-  // about-the-target-size preview, and previews the fixed-width IR lane too).
-  const coneGeoJSON = useMemo(() => {
-    // Must rotate around the SAME heading basis as the map itself
-    // (activeHeadingDeg — camera-forward while a cam view is showing,
-    // top-edge while it's a pure flat map) every tick, in every mode — see
-    // activeHeadingDeg's and this section's own comments above for why.
-    if (!showRange || !telemetry.sample || activeHeadingDeg === null) return null;
-    const origin = { lat: telemetry.sample.lat, lon: telemetry.sample.lon };
-    const h = activeHeadingDeg;
-    if (myHitShape === 'cone') {
-      const steps = 20;
-      const ring: [number, number][] = [[origin.lon, origin.lat]];
-      for (let i = 0; i <= steps; i++) {
-        const brg = h - effectiveConeHalfAngleDeg + (2 * effectiveConeHalfAngleDeg) * (i / steps);
-        const p = destinationPoint(origin, brg, effectiveMaxRangeM);
-        ring.push([p.lon, p.lat]);
-      }
-      ring.push([origin.lon, origin.lat]);
-      return {
-        type: 'Feature' as const, properties: {},
-        geometry: { type: 'Polygon' as const, coordinates: [ring] },
-      };
-    }
-    const halfW = effectiveLaneWidthM / 2;
-    const nearLeft = destinationPoint(origin, h - 90, halfW);
-    const nearRight = destinationPoint(origin, h + 90, halfW);
-    const farLeft = destinationPoint(nearLeft, h, effectiveMaxRangeM);
-    const farRight = destinationPoint(nearRight, h, effectiveMaxRangeM);
-    const ring = [
-      [nearLeft.lon, nearLeft.lat], [farLeft.lon, farLeft.lat],
-      [farRight.lon, farRight.lat], [nearRight.lon, nearRight.lat],
-      [nearLeft.lon, nearLeft.lat],
-    ];
-    return {
-      type: 'Feature' as const, properties: {},
-      geometry: { type: 'Polygon' as const, coordinates: [ring] },
-    };
-  }, [showRange, telemetry.sample?.lat, telemetry.sample?.lon, activeHeadingDeg, myHitShape,
-      effectiveConeHalfAngleDeg, effectiveLaneWidthM, effectiveMaxRangeM]);
+  // The directional cone/lane itself is now the screen-space ShotOverlay
+  // layer (see its own component below + renderMap) instead of a geo
+  // ShapeSource here — only the rotation-invariant omni range circle/ring
+  // above stays map-anchored.
 
   // Zones (domination), targets (Zerstören), bases (CTF/Deathmatch) as
   // circles — real-world-meter-accurate polygons (not CircleLayer's
@@ -963,6 +1081,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     : snap?.phase === 'ended' ? { icon: 'flagCheckered', text: 'Beendet' }
     : (snap?.subMode && snap?.phase && PHASE_LABELS[snap.subMode]?.[snap.phase])
     || (snap?.phase === 'base_setup' ? { icon: 'flag', text: 'Base setzen' }
+      : snap?.phase === 'warmup' ? { icon: 'hourglass', text: 'Warmup' }
       : snap?.phase === 'live' ? { icon: 'circle', text: 'Live' } : { icon: 'hourglass', text: '' });
   const frozenMs = snap?.me?.frozenRemainingMs ?? 0;
   const isCaptainSetup = snap?.phase === 'base_setup' && snap?.me?.isCaptain;
@@ -1027,6 +1146,28 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // mode is compass-oriented (heading-up).
   const mapHeading = isFree2D ? 0 : (activeHeadingDeg ?? 0);
   const mapPitch = isFree2D ? 0 : (activeHeadingDeg !== null ? 45 : 0);
+  // ShotOverlay rotation: screen-fixed (0) wherever the MAP is the layer
+  // doing the rotating (mapHeading above already = activeHeadingDeg there);
+  // in free-2D mode the map doesn't rotate on its own, so the OVERLAY makes
+  // up the difference between the real heading and however the map is
+  // currently (manually) oriented.
+  const shotOverlayRotateDeg = isFree2D ? (activeHeadingDeg ?? 0) - mapBearingDeg : 0;
+  // Standard Web Mercator meters-per-pixel at a given latitude/zoom — lets
+  // ShotOverlay's screen-space wedge be sized in real px that match the SAME
+  // scale the map's own geo-referenced range ring (rangeGeoJSON) renders at,
+  // so the two stay visually congruent instead of the overlay's reach
+  // silently disagreeing with the actual max-range circle drawn on the map.
+  // The textbook constant (156543.03392) assumes classic 256px raster
+  // tiles; MapLibre GL's vector tiles are 512px, i.e. one full zoom level
+  // coarser at the same reported zoomLevel — reported (and confirmed): the
+  // overlay was rendering exactly half the map's own range-ring diameter
+  // with the 256px constant. +1 to the exponent (equivalently doubling the
+  // constant) corrects for the 512px tile convention.
+  const metersPerPixel = (latDeg: number, zoom: number) =>
+    (156543.03392 * Math.cos(latDeg * Math.PI / 180)) / Math.pow(2, zoom + 1);
+  const shotOverlayLengthPx = telemetry.sample
+    ? Math.max(8, effectiveMaxRangeM / metersPerPixel(telemetry.sample.lat, mapZoomLevel))
+    : 130;
   const recenterMap = () => {
     if (!telemetry.sample) return;
     cameraRef.current?.setCamera({
@@ -1048,7 +1189,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             hiccup on THIS particular call could land here without it being
             a real denial. Retry re-asks instead of being a dead end. */}
         <TouchableOpacity style={st.permRetryBtn} onPress={telemetry.retryPermission}>
-          <Icon name="crosshair" size={16} color="#f0c840" />
+          <Icon name="crosshair" size={16} color={theme.accent} />
           <Text style={st.permRetryTxt}>Erneut versuchen</Text>
         </TouchableOpacity>
       </View>
@@ -1069,8 +1210,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // playable with a real map underneath.
   const hasComicMap = (snap?.comicMap?.features?.length ?? 0) > 0;
   const renderMap = (interactive: boolean, free2d: boolean = false) => (
-    <MapView style={{ flex: 1 }} mapStyle={(hasComicMap ? BLANK_STYLE : OSM_STYLE) as any} onPress={onMapPress}
-      scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}>
+    <View style={{ flex: 1 }}>
+    <MapView ref={mapRef} style={{ flex: 1 }} mapStyle={(hasComicMap ? comicMapStyle : (isDarkUiTheme ? OSM_STYLE_DARK : OSM_STYLE)) as any} onPress={onMapPress}
+      scrollEnabled={interactive} zoomEnabled={interactive} rotateEnabled={free2d}
+      // Zoom can change whenever zoomEnabled/`interactive` is true, in every
+      // view mode (not just free-2D) — tracked here regardless of free2d so
+      // ShotOverlay's meters-per-pixel sizing (shotOverlayLengthPx) stays
+      // correct if the player pinch-zooms in compass/3D mode too. Bearing is
+      // only ever read back for the free-2D rotation calc, but there's no
+      // harm updating it here unconditionally as well.
+      onRegionIsChanging={interactive ? onMapRegionChange : undefined}
+      onRegionDidChange={interactive ? onMapRegionChange : undefined}>
       {/* Pitch only once the compass is actually driving the rotation — a
           tilted-but-static (non-rotating) map reads as broken, not "3D".
           The free-2D mode is uncontrolled (defaultSettings, no ref-less
@@ -1083,14 +1233,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       ) : (
         // animationDuration=0 (unlike the free2d Camera above): heading comes
         // from the live compass and changes on every telemetry tick, same as
-        // coneGeoJSON/hitboxGeoJSON below — those redraw instantly on each
-        // tick since they're plain synchronous geometry, but an eased
-        // transition here would still be mid-flight catching up to the
-        // previous tick's heading when the next one already lands, so the
-        // map perpetually lags a beat behind the overlay instead of the two
-        // staying rigidly pinned together — reported as the hitbox/cone
-        // overlay "swaying" on its own in 3D mode instead of just rotating
-        // along with the map like everything else drawn on it.
+        // hitboxGeoJSON below — that redraws instantly on each tick since
+        // it's plain synchronous geometry, but an eased transition here would
+        // still be mid-flight catching up to the previous tick's heading when
+        // the next one already lands, so the map perpetually lags a beat
+        // behind everything drawn on it instead of staying rigidly pinned
+        // together — reported as the hitbox overlay "swaying" on its own in
+        // 3D mode instead of just rotating along with the map.
         <Camera centerCoordinate={center} zoomLevel={16.5} heading={mapHeading}
           pitch={mapPitch} animationDuration={0} />
       )}
@@ -1101,22 +1250,15 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </ShapeSource>
       )}
       {/* Bomber (omni) has no aim direction at all — a circle is the honest
-          shape for "hit anything within range, any direction". Everyone
-          else (cone: Scout/default, lateral: Sniper) gets the directional
-          corridor instead — showing both at once (the old, class-blind
-          behavior) was misleading for whichever shape didn't actually apply.
-          Soft 50%-opacity fill, no hard edge (dropped the LineLayer border
-          every shape used to carry) — reads as a translucent zone instead of
-          a harshly outlined shape. The range ring below still marks the
-          overall boundary for every class, this is just the shot AREA. */}
+          shape for "hit anything within range, any direction", and stays
+          map-anchored since a circle is rotation-invariant either way.
+          Everyone else (cone: Scout/default, lateral: Sniper) gets the
+          directional corridor instead, via the screen-space ShotOverlay
+          layer below (outside this MapView) rather than a shape here — see
+          the "Shot-range indicator" comment near activeHeadingDeg above. */}
       {myHitShape === 'omni' && rangeGeoJSON && (
         <ShapeSource id="range" shape={rangeGeoJSON}>
           <FillLayer id="rangeFill" style={{ fillColor: classAccentColor, fillOpacity: 0.5 }} />
-        </ShapeSource>
-      )}
-      {myHitShape !== 'omni' && coneGeoJSON && (
-        <ShapeSource id="hitcone" shape={coneGeoJSON}>
-          <FillLayer id="coneFill" style={{ fillColor: classAccentColor, fillOpacity: 0.5 }} />
         </ShapeSource>
       )}
       {/* Range ring — every class, not just Bomber: a thin dashed outline at
@@ -1168,6 +1310,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <CircleLayer id="actorDots" style={{
             circleRadius: 9, circleColor: ['get', 'color'] as any,
             circleStrokeWidth: 2, circleStrokeColor: '#ffffff', circleOpacity: ['get', 'op'] as any,
+            // 'map' instead of the default 'viewport': the own-position dot
+            // (first feature pushed into actorsGeoJSON, from telemetry.sample)
+            // shares this single layer/style with every other actor dot
+            // (teammates, enemies, radar contacts) — circlePitchAlignment is
+            // a whole-layer paint property, not per-feature, so this tilts
+            // all of them together with the map plane instead of always
+            // facing the camera flat-on. Unlike LobbyScreen's map, this one's
+            // Camera does set a real non-zero pitch (mapPitch, 45° once the
+            // compass is driving 3D/compass mode — see mapPitch above), so
+            // the effect is actually visible here.
+            circlePitchAlignment: 'map',
           }} />
         </ShapeSource>
       )}
@@ -1180,6 +1333,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </ShapeSource>
       )}
     </MapView>
+    {showRange && telemetry.sample && activeHeadingDeg !== null && (
+      <ShotOverlay rotateDeg={shotOverlayRotateDeg} pitchDeg={mapPitch}
+        lengthPx={shotOverlayLengthPx} anchorPx={screenAnchorPx} myHitShape={myHitShape}
+        effectiveConeHalfAngleDeg={effectiveConeHalfAngleDeg} color={classAccentColor} />
+    )}
+    </View>
   );
 
   const crosshair = (
@@ -1561,7 +1720,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         {!hasCam && viewMode === 'comic3d' && renderMap(true, false)}
         {!hasCam && viewMode === 'comic2d' && (
           <TouchableOpacity style={st.recenterBtn} onPress={recenterMap}>
-            <Icon name="crosshair" size={20} color="#f0c840" />
+            <Icon name="crosshair" size={20} color={theme.accent} />
           </TouchableOpacity>
         )}
         {hasCam && (
@@ -1601,6 +1760,17 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               <Icon name="bug" size={12} color="#40ff80" />
               <Text style={st.debugBarTxt}>Ping {pingMs ?? '–'}ms · {ticksPerSec}/s</Text>
             </View>
+            {/* proximityAlert is a passive per-tick server sensor (any
+                alive opponent within range, see arops.js's tick loop) —
+                separate from the Drone perk's own one-shot alert toast, but
+                easy to mistake for "only ever works via the perk" since
+                nothing else surfaced its live state. */}
+            <View style={st.iconTextRow}>
+              <Icon name="warning" size={11} color={snap?.me?.proximityAlert ? '#ff4040' : '#80e0a0'} />
+              <Text style={[st.debugBarTxt, snap?.me?.proximityAlert && st.debugBarTxtHot]}>
+                proximityAlert: {snap?.me?.proximityAlert ? 'true' : 'false'}
+              </Text>
+            </View>
             {visibleEnemies.map(e => (
               <View key={e.userId} style={st.iconTextRow}>
                 <Icon name={e.inCone ? 'crosshair' : 'circle'} size={11} color={e.inCone ? '#ff4040' : '#80e0a0'} />
@@ -1621,7 +1791,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           <TouchableOpacity style={st.rosterOverlay} activeOpacity={1} onPress={() => setRosterOpen(false)}>
             <View style={st.rosterCard}>
               <View style={st.rosterHeader}>
-                <Icon name="trophy" size={16} color="#f0c840" />
+                <Icon name="trophy" size={16} color={theme.accent} />
                 <Text style={st.rosterTitle}>Rangliste</Text>
               </View>
               {[...(snap?.players || [])].sort((a, b) => b.score - a.score).map((p, i) => (
@@ -1654,7 +1824,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         return (
           <View style={st.endOverlay}>
             <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => setEndRecapOpen(o => !o)}>
-              <Icon name={end.icon} size={32} color="#f0c840" style={{ marginBottom: 8 }} />
+              <Icon name={end.icon} size={32} color={theme.accent} style={{ marginBottom: 8 }} />
               <Text style={st.endTitle}>{end.text}</Text>
               <Text style={st.endScore}>Deine Punkte: {snap.me?.score ?? 0}</Text>
               {!endRecapOpen && <Text style={st.endHint}>Antippen für Recap</Text>}
@@ -1663,16 +1833,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               <View style={st.endRecap}>
                 {!!scoreLine && (
                   <View style={st.iconTextRow}>
-                    <Icon name={scoreIcon} size={13} color="#f0c840" />
+                    <Icon name={scoreIcon} size={13} color={theme.accent} />
                     <Text style={st.endRecapTxt}>{scoreLine}</Text>
                   </View>
                 )}
                 <View style={st.iconTextRow}>
-                  <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color="#a090c0" />
+                  <Icon name={isSeeker ? 'flashlight' : 'ghost'} size={13} color={theme.text2} />
                   <Text style={st.endRecapTxt}>Verbleibende Hider: {snap.hidersRemaining}</Text>
                 </View>
                 <TouchableOpacity style={st.endExitBtn} onPress={onExit}>
-                  <Icon name="home" size={16} color="#0a0810" />
+                  <Icon name="home" size={16} color={theme.onAccent} />
                   <Text style={st.endExitTxt}>Beenden</Text>
                 </TouchableOpacity>
               </View>
@@ -1694,19 +1864,19 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
               <TouchableOpacity key={m.id}
                 style={[st.modeBtn, viewMode === m.id && st.modeBtnActive]}
                 onPress={() => setViewMode(m.id)}>
-                <Icon name={m.icon} size={18} color={viewMode === m.id ? '#f0c840' : '#c0a0f0'} />
+                <Icon name={m.icon} size={18} color={viewMode === m.id ? theme.accent : theme.text2} />
               </TouchableOpacity>
             ))}
             <TouchableOpacity
               style={[st.modeBtn, showRange && st.modeBtnActive]}
               onPress={() => setShowRange(r => !r)}>
-              <Icon name="target" size={18} color={showRange ? '#f0c840' : '#c0a0f0'} />
+              <Icon name="target" size={18} color={showRange ? theme.accent : theme.text2} />
             </TouchableOpacity>
             {debugMode && (
               <TouchableOpacity
                 style={[st.modeBtn, debugOpen && st.modeBtnActive]}
                 onPress={() => setDebugOpen(o => !o)}>
-                <Icon name="bug" size={18} color={debugOpen ? '#f0c840' : '#c0a0f0'} />
+                <Icon name="bug" size={18} color={debugOpen ? theme.accent : theme.text2} />
               </TouchableOpacity>
             )}
           </View>
@@ -1762,7 +1932,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       <TouchableOpacity
         style={[st.settingsFab, { bottom: bottomBarH + 8 }, viewPopupOpen && st.modeBtnActive]}
         onPress={() => setViewPopupOpen(o => !o)}>
-        <Icon name="settings" size={20} color={viewPopupOpen ? '#f0c840' : '#c0a0f0'} />
+        <Icon name="settings" size={20} color={viewPopupOpen ? theme.accent : theme.text2} />
       </TouchableOpacity>
 
       {/* Bottom bar: Perk1 | Schuss | Perk2 */}
@@ -1775,7 +1945,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       }}>
         {isCaptainSetup && (
           <TouchableOpacity style={[st.baseBtn, st.btnRow, st.baseBtnRow]} onPress={() => setBase()}>
-            <Icon name="flag" size={14} color="#f0c840" />
+            <Icon name="flag" size={14} color={theme.accent} />
             <Text style={st.baseTxt}>Base HIER setzen</Text>
           </TouchableOpacity>
         )}
@@ -1789,17 +1959,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   );
 }
 
-const st = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0a0810' },
+function makeStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+  wrap: { flex: 1, backgroundColor: theme.bg },
   permRetryBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
-    backgroundColor: 'rgba(240,200,64,.15)', borderWidth: 2, borderColor: '#f0c840',
+    backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent,
     borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12,
   },
-  permRetryTxt: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
+  permRetryTxt: { color: theme.accent, fontWeight: '800', fontSize: 14 },
   status: {
     paddingTop: 52, paddingHorizontal: 16, paddingBottom: 10,
-    backgroundColor: '#141020',
+    backgroundColor: theme.bg2,
   },
   statusRow: { flexDirection: 'row', alignItems: 'center' },
   // Three-slot single row: timer/indicator each take an equal side flex
@@ -1810,16 +1981,16 @@ const st = StyleSheet.create({
   statusSideRight: { justifyContent: 'flex-end' },
   statusCenter: { flex: 1.3, justifyContent: 'center' },
   iconTextRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  phase: { color: '#f0c840', fontWeight: '800', fontSize: 14 },
+  phase: { color: theme.accent, fontWeight: '800', fontSize: 14 },
   timer: { color: '#80ff80', fontWeight: '800', fontSize: 14 },
-  info: { color: '#a090c0', fontSize: 13 },
+  info: { color: theme.text2, fontSize: 13 },
   proxAlert: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(224,48,32,.9)', padding: 8, alignItems: 'center' },
   cloakBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(120,60,200,.9)', padding: 8, alignItems: 'center' },
   cloakTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   frozenBanner: { flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(80,160,255,.92)', padding: 8, alignItems: 'center' },
   frozenTxt: { color: '#04121f', fontWeight: '900', fontSize: 12 },
-  baseBtn: { backgroundColor: 'rgba(240,200,64,.2)', borderWidth: 2, borderColor: '#f0c840', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
-  baseTxt: { color: '#f0c840', fontWeight: '800', fontSize: 13 },
+  baseBtn: { backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
+  baseTxt: { color: theme.accent, fontWeight: '800', fontSize: 13 },
   proxTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   geoWarn: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(240,200,64,.85)', padding: 6, alignItems: 'center' },
   geoOut: { flexDirection: 'row', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(224,48,32,.95)', padding: 6, alignItems: 'center' },
@@ -1833,36 +2004,36 @@ const st = StyleSheet.create({
   targetDist: { position: 'absolute', bottom: -16, color: '#fff', fontSize: 10, fontWeight: '800' },
   shutter: {
     width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(240,200,64,.25)',
-    borderWidth: 4, borderColor: '#f0c840', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 4, borderColor: 'rgba(240,200,64,.5)', alignItems: 'center', justifyContent: 'center',
   },
   shutterCd: { borderColor: '#605030' },
   shutterTxt: { fontSize: 24, color: '#f0c840', fontWeight: '800' },
   endOverlay: {
-    position: 'absolute', top: '35%', left: 24, right: 24, backgroundColor: 'rgba(10,8,16,.95)',
-    borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 24, alignItems: 'center', zIndex: 50,
+    position: 'absolute', top: '35%', left: 24, right: 24, backgroundColor: theme.bg2,
+    borderWidth: 2, borderColor: theme.accent, borderRadius: 16, padding: 24, alignItems: 'center', zIndex: 50,
   },
-  endTitle: { color: '#f0c840', fontSize: 22, fontWeight: '900', marginBottom: 8 },
+  endTitle: { color: theme.accent, fontSize: 22, fontWeight: '900', marginBottom: 8 },
   endScore: { color: '#80ff80', fontSize: 16 },
-  endHint: { color: '#807050', fontSize: 11, marginTop: 8 },
+  endHint: { color: theme.text3, fontSize: 11, marginTop: 8 },
   endRecap: { marginTop: 16, width: '100%', gap: 8, alignItems: 'center' },
-  endRecapTxt: { color: '#c0a0f0', fontSize: 13, fontWeight: '700' },
+  endRecapTxt: { color: theme.text2, fontSize: 13, fontWeight: '700' },
   endExitBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
-    backgroundColor: '#f0c840', borderRadius: 12, paddingHorizontal: 22, paddingVertical: 12,
+    backgroundColor: theme.accent, borderRadius: 12, paddingHorizontal: 22, paddingVertical: 12,
   },
-  endExitTxt: { color: '#0a0810', fontWeight: '900', fontSize: 15 },
+  endExitTxt: { color: theme.onAccent, fontWeight: '900', fontSize: 15 },
   viewPopup: {
     // Floating flyout anchored to the left of the settings FAB (right: 60 —
     // FAB width 42 + margin) instead of a full-width bar; `bottom` is set
     // inline to match the FAB's own measured offset above the action bar.
-    position: 'absolute', right: 60, backgroundColor: '#1a1428',
-    borderWidth: 1, borderColor: '#2a2040', borderRadius: 10,
+    position: 'absolute', right: 60, backgroundColor: theme.bg2,
+    borderWidth: 1, borderColor: theme.border, borderRadius: 10,
     paddingHorizontal: 10, paddingVertical: 8, gap: 8, zIndex: 20,
   },
   debugBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center',
-    backgroundColor: 'rgba(8,16,8,.85)', borderBottomWidth: 1, borderBottomColor: '#40ff80',
+    backgroundColor: 'rgba(8,16,8,.25)', borderBottomWidth: 1, borderBottomColor: 'rgba(64,255,128,.5)',
     paddingHorizontal: 12, paddingVertical: 6,
   },
   debugBarTxt: { color: '#a0e0a0', fontSize: 11, fontWeight: '700' },
@@ -1872,44 +2043,44 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(5,4,10,.7)', alignItems: 'center', justifyContent: 'center', zIndex: 60,
   },
   rosterCard: {
-    width: '82%', maxHeight: '70%', backgroundColor: 'rgba(20,16,32,.97)',
-    borderWidth: 2, borderColor: '#f0c840', borderRadius: 16, padding: 16,
+    width: '82%', maxHeight: '70%', backgroundColor: theme.bg2,
+    borderWidth: 2, borderColor: theme.accent, borderRadius: 16, padding: 16,
   },
   rosterHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10, justifyContent: 'center' },
-  rosterTitle: { color: '#f0c840', fontSize: 16, fontWeight: '900' },
+  rosterTitle: { color: theme.accent, fontSize: 16, fontWeight: '900' },
   rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  rosterRank: { color: '#807050', fontSize: 12, width: 20 },
+  rosterRank: { color: theme.text3, fontSize: 12, width: 20 },
   rosterDot: { width: 10, height: 10, borderRadius: 5 },
-  rosterName: { color: '#e0d8f0', fontSize: 14, flex: 1 },
-  rosterNameMe: { color: '#f0c840', fontWeight: '900' },
+  rosterName: { color: theme.text, fontSize: 14, flex: 1 },
+  rosterNameMe: { color: theme.accent, fontWeight: '900' },
   rosterScore: { color: '#80ff80', fontSize: 14, fontWeight: '800' },
-  bottomBar: { backgroundColor: '#141020', paddingBottom: 24, paddingTop: 8 },
+  bottomBar: { backgroundColor: theme.bg2, paddingBottom: 24, paddingTop: 8 },
   modeRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 },
   modeBtn: {
-    width: 46, height: 40, borderRadius: 8, backgroundColor: 'rgba(40,32,64,.6)',
-    borderWidth: 1, borderColor: '#2a2040', alignItems: 'center', justifyContent: 'center',
+    width: 46, height: 40, borderRadius: 8, backgroundColor: theme.bg3,
+    borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center',
   },
-  modeBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
+  modeBtnActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg2 },
   bottomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
   bottomSide: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   bottomCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
   btnRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   radarBtn: {
-    backgroundColor: 'rgba(40,32,64,.9)', borderWidth: 2, borderColor: '#4a3a70',
+    backgroundColor: theme.bg3, borderWidth: 2, borderColor: theme.border,
     borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
   },
-  actTxt: { color: '#c0a0f0', fontWeight: '800', fontSize: 14 },
+  actTxt: { color: theme.text2, fontWeight: '800', fontSize: 14 },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
   settingsFab: {
     // `bottom` here is just a fallback for the first render before bottomBarH
     // is measured — the actual value is always overridden inline (bottomBarH + 8).
     position: 'absolute', right: 14, bottom: 108, width: 42, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   recenterBtn: {
     position: 'absolute', right: 14, bottom: 70, width: 46, height: 46, borderRadius: 23,
-    backgroundColor: 'rgba(20,16,32,.85)', borderWidth: 2, borderColor: '#f0c840',
+    backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   classBadge: {
@@ -1922,23 +2093,24 @@ const st = StyleSheet.create({
   // Left row, in order: esp/IR, gps, watch (see the render comment above).
   espStatusFab: {
     position: 'absolute', left: 14, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   gpsStatusFab: {
     position: 'absolute', left: 58, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   watchStatusFab: {
     position: 'absolute', left: 102, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   // Right side, mirrors the left row.
   compassStatusFab: {
     position: 'absolute', right: 14, top: 86, width: 38, height: 38, borderRadius: 8,
-    backgroundColor: 'rgba(40,32,64,.75)', borderWidth: 1, borderColor: '#2a2040',
+    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
     alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
-});
+  });
+}

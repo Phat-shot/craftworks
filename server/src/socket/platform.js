@@ -230,8 +230,17 @@ function registerPlatformHandlers(io, socket, db) {
           if (['scout', 'sniper', 'bomber'].includes(cls)) next.classes[uid] = cls;
         }
       }
+      // Per-field ceilings: gameDurationMs up to 6h, radarCooldownMs up to
+      // 60min (both manual-only — auto-scaling never derives values this
+      // high, see scaleCoreConfig). hidingDurationMs/proximityRangeM keep no
+      // ceiling (unchanged from before).
+      const MS_CEILINGS = { gameDurationMs: 6 * 60 * 60_000, radarCooldownMs: 60 * 60_000 };
       for (const k of ['hidingDurationMs', 'gameDurationMs', 'radarCooldownMs', 'proximityRangeM']) {
-        if (Number.isFinite(arSettings?.[k])) next[k] = Math.max(0, +arSettings[k]);
+        if (Number.isFinite(arSettings?.[k])) {
+          const ceiling = MS_CEILINGS[k];
+          const v = Math.max(0, +arSettings[k]);
+          next[k] = ceiling ? Math.min(ceiling, v) : v;
+        }
       }
       // Mode selection + mode-specific settings. Whitelist MUST be kept in
       // sync with server/src/game/arops.js's MODES table and the DEFAULTS/
@@ -257,9 +266,11 @@ function registerPlatformHandlers(io, socket, db) {
       if (typeof arSettings?.destroyReactivate === 'boolean') {
         next.destroyReactivate = arSettings.destroyReactivate;
       }
-      // Deathmatch: on-hit consequence + lives (respawn variant only).
-      if (['respawn', 'freeze'].includes(arSettings?.deathmatchOnHit)) {
-        next.deathmatchOnHit = arSettings.deathmatchOnHit;
+      // On-hit consequence + lives (respawn variant only) — all 4 combat
+      // modes (Domination, CTF, Seek&Destroy, Deathmatch), see MODES'
+      // resolveCombatHit in arops.js.
+      if (['respawn', 'freeze'].includes(arSettings?.onHit)) {
+        next.onHit = arSettings.onHit;
       }
       // Team/FFA variant for the 4 team-capable modes (domination, ctf,
       // seek_destroy, deathmatch) — see MODES.*'s cfg.teamVariant handling
@@ -272,6 +283,18 @@ function registerPlatformHandlers(io, socket, db) {
         next.livesPerPlayer = Math.min(10, Math.max(1, Math.round(+arSettings.livesPerPlayer)));
       }
       if (typeof arSettings?.debugMode === 'boolean') next.debugMode = arSettings.debugMode;
+      // Debug-only on-device match simulation (see packages/arops-shared/
+      // src/simScript.ts) — client only ever sends `polygon` + these two
+      // fields; subMode/classes/teams/zones/hitConfig/onHit/destroyVariant
+      // and the bot roster all come from the fixed snippet definition
+      // itself server-side (createAropsGame's applySimOverrides / this
+      // handler's lobby:start bot-append below), never from the client, so
+      // there is nothing here to whitelist beyond the flag + which snippet.
+      if (typeof arSettings?.simulation === 'boolean') next.simulation = arSettings.simulation;
+      if (typeof arSettings?.simSnippetKey === 'string'
+          && aropsShared.SIM_SCENARIOS.some(s => s.key === arSettings.simSnippetKey)) {
+        next.simSnippetKey = arSettings.simSnippetKey;
+      }
       if (arSettings?.hitTrackingMode === 'compass' || arSettings?.hitTrackingMode === 'ir') {
         next.hitTrackingMode = arSettings.hitTrackingMode;
       }
@@ -301,6 +324,21 @@ function registerPlatformHandlers(io, socket, db) {
       // get derived from field size in createAropsGame instead — overrides
       // the manual presets above once a match actually starts.
       if (typeof arSettings?.autoScale === 'boolean') next.autoScale = arSettings.autoScale;
+      // Freeze duration — always field-size-scaled by default (scaleTimings,
+      // independent of autoScale, see arops.js createAropsGame), but
+      // host-adjustable like any other manual preset via the Lobby's
+      // freeze-time row. Only freezeMs is exposed here, not the rest of
+      // ModeTimings — that broader surface stays test-only. Explicit `null`
+      // clears a previous override back to the auto-scaled value (the
+      // Lobby's "Auto" preset button) — dropping the key isn't distinguishable
+      // from "no change", so unsetting needs its own explicit signal.
+      if (arSettings?.timings && typeof arSettings.timings === 'object') {
+        if (Number.isFinite(arSettings.timings.freezeMs)) {
+          next.timings = { freezeMs: Math.min(300_000, Math.max(3_000, Math.round(+arSettings.timings.freezeMs))) };
+        } else if (arSettings.timings.freezeMs === null) {
+          delete next.timings;
+        }
+      }
       if (Array.isArray(arSettings?.bots)) {
         next.bots = arSettings.bots
           .filter(b => b && typeof b.id === 'string' && b.id.startsWith('bot_') && typeof b.username === 'string')

@@ -23,12 +23,16 @@ test('distanceToZone: signed', () => {
 });
 
 test('scaleTimings: bigger field → longer timings, within clamps', () => {
+  // freezeMs' 3-30s range is narrow enough that a 200m and a 1km field both
+  // saturate the upper clamp (not useful for demonstrating monotonicity) —
+  // a small field well under the ceiling is needed for `tiny` instead.
+  const tiny = scaleTimings(400);        // 20x20m, L=20 — stays unclamped
   const small = scaleTimings(40_000);    // 200x200m park, L=200
   const big = scaleTimings(1_000_000);   // 1km², L=1000
-  assert.ok(big.freezeMs > small.freezeMs);
+  assert.ok(small.freezeMs > tiny.freezeMs);
   assert.ok(big.captureDwellMs >= small.captureDwellMs);
-  assert.ok(small.freezeMs >= 30_000, 'freeze floor');
-  assert.ok(big.freezeMs <= 120_000, 'freeze cap');
+  assert.ok(tiny.freezeMs >= 3_000, 'freeze floor');
+  assert.ok(big.freezeMs <= 30_000, 'freeze cap');
   assert.ok(small.captureDwellMs >= 5_000, 'user-specified 5s minimum dwell');
   assert.equal(small.freezeMoveToleranceM, 15, 'move tolerance fixed (GPS drift)');
 });

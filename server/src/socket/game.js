@@ -53,6 +53,15 @@ async function finalizeGameFromWorker(io, db, sessionId, players, win, abandoned
 
   for (let i = 0; i < all.length; i++) {
     const p = all[i];
+    // AR Ops bots (userId 'bot_...', see platform.js's own bot-id check)
+    // never get a real game_players row in the first place — they're not
+    // real users, just synthetic in-memory opponents — so this UPDATE was
+    // guaranteed to fail every single time for every bot in every finished
+    // match (Postgres: "invalid input syntax for type uuid"), silently
+    // swallowed by the .catch below but spamming the server log on every
+    // AR Ops game with bots. Skip them outright instead of querying for a
+    // row that structurally can't exist.
+    if (p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('bot_'))) continue;
     await db.query(
       `UPDATE game_players SET status='finished', wave=$1, score=$2, kills=$3, rank=$4, finished_at=NOW()
        WHERE session_id=$5 AND user_id=$6`,
@@ -112,14 +121,22 @@ function registerGameHandlers(io, socket, db) {
       if (!polyCheck.ok) {
         return socket.emit('error', { code: 'ar_invalid_polygon', details: polyCheck.errors });
       }
+      // Match-simulation (see packages/arops-shared/src/simScript.ts): the
+      // bot roster and zones come from the fixed snippet, not from
+      // ar.bots/ar.zones (the client never sends those for a sim run) — the
+      // player-count and zone-count preflights below would otherwise reject
+      // a perfectly valid sim lobby. createAropsGame's own applySimOverrides
+      // + validateZones call still guards correctness once the match
+      // actually starts.
+      const isSim = ar?.simulation === true;
       const { rows: cnt } = await db.query('SELECT COUNT(*) AS n FROM lobby_members WHERE lobby_id=$1', [lobbyId]);
       const botCount = Array.isArray(ar?.bots) ? ar.bots.length : 0;
-      if (!ar?.debugMode && (+cnt[0].n + botCount) < 2) {
+      if (!isSim && !ar?.debugMode && (+cnt[0].n + botCount) < 2) {
         return socket.emit('error', { code: 'ar_need_two_players' });
       }
       // Zone preflight for zone-based modes
       const sub = ar?.subMode || 'hide_and_seek';
-      if (sub === 'domination' || sub === 'seek_destroy') {
+      if (!isSim && (sub === 'domination' || sub === 'seek_destroy')) {
         const minZones = sub === 'domination' ? 2 : 1;
         const zonesRaw = Array.isArray(ar?.zones) ? ar.zones : [];
         if (zonesRaw.length < minZones) {
@@ -162,8 +179,17 @@ function registerGameHandlers(io, socket, db) {
 
     // Bots have no `users` row (FK constraint) — appended AFTER persistence,
     // in-memory only, same order convention as effectiveArSettings' defaulting.
-    if (lobby.game_mode === 'ar_ops' && Array.isArray(lobby.workshop_map_config?.ar_settings?.bots)) {
-      for (const b of lobby.workshop_map_config.ar_settings.bots) {
+    const arForBots = lobby.workshop_map_config?.ar_settings;
+    if (lobby.game_mode === 'ar_ops' && arForBots?.simulation === true) {
+      // Match-simulation: bot roster comes from the fixed snippet, not from
+      // arForBots.bots (see the lobby:start preflight above) — same
+      // in-memory-only convention as regular bots.
+      const snippet = aropsShared.SIM_SCENARIOS.find(s => s.key === arForBots.simSnippetKey);
+      for (const b of snippet?.bots || []) {
+        members.push({ userId: b.id, username: b.username, avatar_color: null, isBot: true });
+      }
+    } else if (lobby.game_mode === 'ar_ops' && Array.isArray(arForBots?.bots)) {
+      for (const b of arForBots.bots) {
         members.push({ userId: b.id, username: b.username, avatar_color: null, isBot: true });
       }
     }
@@ -208,6 +234,40 @@ function registerGameHandlers(io, socket, db) {
   // ── GAME ACTIONS (server-authoritative) ──
   socket.on('game:join', ({ sessionId }) => {
     socket.join(`game:${sessionId}`);
+  });
+
+  // Debug-only, Match-Simulation-exclusive self-cleanup (see
+  // MatchSimScreen.tsx) — each sim run creates its own throwaway lobby+
+  // session and previously just let it run out its own gameDurationMs
+  // instead of tearing itself down. Deliberately NOT gated behind
+  // requireAdmin (a sim run's own host must be able to clean up after
+  // itself without needing admin rights) — the ar_settings.simulation
+  // check below is the real safety boundary instead: this can only ever
+  // end a session createAropsGame's own applySimOverrides flagged as a
+  // simulation in the first place, never a real match, regardless of who
+  // calls it. Same worker-destroy + finished/ended_at pattern as
+  // admin.js's force-end route.
+  socket.on('game:sim_end', async ({ sessionId }) => {
+    try {
+      const { rows } = await db.query(
+        `SELECT gs.id, gs.lobby_id, l.host_id, l.workshop_map_config
+         FROM game_sessions gs JOIN lobbies l ON l.id = gs.lobby_id
+         WHERE gs.id=$1 AND gs.ended_at IS NULL`, [sessionId]
+      );
+      const row = rows[0];
+      if (!row) return socket.emit('error', { code: 'session_not_found' });
+      if (row.host_id !== userId) return socket.emit('error', { code: 'not_host' });
+      if (row.workshop_map_config?.ar_settings?.simulation !== true) {
+        return socket.emit('error', { code: 'not_a_simulation' });
+      }
+      if (gameManager.has(sessionId)) gameManager.destroy(sessionId);
+      await db.query(`UPDATE game_sessions SET status='finished', ended_at=NOW() WHERE id=$1`, [sessionId]);
+      await db.query(`UPDATE lobbies SET status='finished' WHERE id=$1`, [row.lobby_id]);
+      socket.emit('game:sim_end_result', { ok: true });
+    } catch (e) {
+      console.error('game:sim_end error:', e.message);
+      socket.emit('error', { code: 'server_error', detail: e.message });
+    }
   });
 
   // Debug-mode RTT probe (AR Ops debug overlay) — immediate echo, no cost

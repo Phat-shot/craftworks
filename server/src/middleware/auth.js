@@ -6,16 +6,32 @@
 // for the shared req.user/req.db augmentation this file relies on).
 const { verifyToken } = require('../auth/verifyToken');
 
+// Codes verifyToken() actually throws for a genuine token/session problem
+// (missing/invalid/expired JWT, or the user row no longer exists) — see
+// auth/verifyToken.js. Anything else (notably: a DB error with no .code at
+// all, from users.findById inside verifyToken failing on a transient
+// connection/pool problem) is NOT one of these, and must not be reported as
+// 401 — the client (apps/arops-mobile/src/api.ts) treats 401 on an
+// authenticated request as "refresh and retry", and if refresh ALSO 401s it
+// treats that as a truly dead session and forces a logout. A DB hiccup
+// getting misreported as 401 here was exactly what caused the recurring,
+// hard-to-reproduce "session_expired" mid-session (worst during a
+// DB-heavy stretch, e.g. the Match-Simulation's ~50 back-to-back
+// scenarios) — see /refresh's identical fix in routes/auth.js for the
+// other half of this same bug.
+const TOKEN_ERROR_CODES = new Set(['unauthorized', 'token_invalid', 'user_not_found']);
+
 /** @type {import('express').RequestHandler} */
 async function requireAuth(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1]
+              || req.cookies?.access_token;
   try {
-    const token = req.headers.authorization?.split(' ')[1]
-                || req.cookies?.access_token;
     req.user = await verifyToken(token);
     next();
   } catch (e) {
     const code = /** @type {{ code?: string }} */ (e)?.code;
-    return res.status(401).json({ error: code || 'token_invalid' });
+    if (code && TOKEN_ERROR_CODES.has(code)) return res.status(401).json({ error: code });
+    throw e; // unexpected (e.g. DB) error — Express 5 forwards this to errorHandler as a 500
   }
 }
 

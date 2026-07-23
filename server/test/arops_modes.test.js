@@ -43,12 +43,22 @@ function tel(gs, uid, pos, over = {}) {
     sample: { lat: pos.lat, lon: pos.lon, ts: TS, accuracyM: 5, headingDeg: null, ...over },
   });
 }
+// Domination/Seek&Destroy default to 'freeze' onHit (unchanged pre-existing
+// default behavior) — which now gets a base-less "Warmup" phase 1 instead of
+// starting straight in 'live' (see MODES' initialPhase in arops.js). Tests
+// below that need the mode already live skip it exactly the way CTF/
+// Deathmatch's base_setup is skipped elsewhere in this file: rewind
+// phaseStartTime past baseSettingMs and tick once.
+function skipWarmup(gs) {
+  gs.phaseStartTime = Date.now() - (gs.timings.warmupMs + 100);
+  tick(gs, 100);
+}
 // Fast timings for tests (explicit override wins over scaling)
 const FAST = {
   captureDwellMs: 300, flagPickupDwellMs: 300, flagReturnMs: 800,
   plantDwellMs: 300, defuseDwellMs: 300, bombTimerMs: 2000,
   freezeMs: 1000, freezeExtensionMs: 500, freezeMoveToleranceM: 15,
-  baseSettingMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
+  baseSettingMs: 500, warmupMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
 };
 
 const Z1 = shared.destinationPoint(MUC, 90, 100);
@@ -69,6 +79,12 @@ console.log('\n═══ DOMINATION ═══');
     assert.equal(gs.players.A2.team, 'a');
     assert.equal(gs.captains.a, 'A1');
     assert.equal(gs.captains.b, 'B1');
+  });
+
+  check('starts in a base-less Warmup phase 1 (default onHit is freeze), then goes live', () => {
+    assert.equal(gs.phase, 'warmup');
+    assert.equal(gs.modeState.bases, undefined, 'freeze needs no base at all');
+    skipWarmup(gs);
     assert.equal(gs.phase, 'live');
   });
 
@@ -118,6 +134,7 @@ console.log('\n═══ FREEZE ═══');
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       timings: { ...FAST, freezeMs: 60_000 }, hitCooldownMs: 50 } });
+  skipWarmup(gs);
 
   const pA = MUC, pB = shared.destinationPoint(MUC, 0, 40);
   tel(gs, 'A1', pA); tel(gs, 'B1', pB);
@@ -427,12 +444,14 @@ console.log('\n═══ TEAM PING ═══');
     // Explicit team assignment — domination's default alternates by array
     // index (A1='a', A2='b', ...), which would make A1/A2 opponents instead
     // of the teammates this test needs.
-    return createGame(sessionId,
+    const gs = createGame(sessionId,
       [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' },
        { userId: 'B1', username: 'B1' }],
       { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
         teams: { A1: 'a', A2: 'a', B1: 'b' },
         timings: FAST, gameDurationMs: 600_000, pingCooldownMs: 50, ...over } });
+    skipWarmup(gs);
+    return gs;
   }
 
   check('ping is visible to teammates, never to the opposing team', () => {
@@ -515,7 +534,7 @@ console.log('\n═══ DEATHMATCH ═══');
   });
 
   check('respawn variant: hit downs the target and costs a life, does not remove them from the match', () => {
-    const { gs, baseA, baseB } = setupDeathmatch('dm_respawn', { deathmatchOnHit: 'respawn', livesPerPlayer: 2 });
+    const { gs, baseA, baseB } = setupDeathmatch('dm_respawn', { onHit: 'respawn', livesPerPlayer: 2 });
     let posA = baseA, posB = baseB;
     const brgA = shared.bearingDeg(baseA, MUC), brgB = shared.bearingDeg(baseB, MUC);
     for (let i = 0; i < 12; i++) { posA = shared.destinationPoint(posA, brgA, 9); tel(gs, 'A1', posA); }
@@ -530,7 +549,7 @@ console.log('\n═══ DEATHMATCH ═══');
   });
 
   check('respawn variant: a downed player revives after dwelling in their own base', () => {
-    const { gs, baseB } = setupDeathmatch('dm_revive', { deathmatchOnHit: 'respawn', livesPerPlayer: 2 });
+    const { gs, baseB } = setupDeathmatch('dm_revive', { onHit: 'respawn', livesPerPlayer: 2 });
     gs.players.B1.status = 'downed';
     gs.players.B1.spawnDwellMs = 0;
     tel(gs, 'B1', baseB);
@@ -539,7 +558,7 @@ console.log('\n═══ DEATHMATCH ═══');
   });
 
   check('respawn variant: 0 lives eliminates the player and ends the match for their team', () => {
-    const { gs, baseA } = setupDeathmatch('dm_elim', { deathmatchOnHit: 'respawn', livesPerPlayer: 1 });
+    const { gs, baseA } = setupDeathmatch('dm_elim', { onHit: 'respawn', livesPerPlayer: 1 });
     const shooterPos = baseA; // A1 is already there (setupDeathmatch's tel), no jump
     const targetPos = shared.destinationPoint(baseA, 0, 5);
     tel(gs, 'B1', targetPos);
@@ -555,7 +574,7 @@ console.log('\n═══ DEATHMATCH ═══');
   });
 
   check('freeze variant: hit freezes the target, no life lost, no elimination', () => {
-    const { gs, baseA } = setupDeathmatch('dm_freeze', { deathmatchOnHit: 'freeze', freezeMs: 5000 });
+    const { gs, baseA } = setupDeathmatch('dm_freeze', { onHit: 'freeze', freezeMs: 5000 });
     const shooterPos = baseA;
     const targetPos = shared.destinationPoint(baseA, 0, 20);
     tel(gs, 'B1', targetPos);
@@ -571,7 +590,7 @@ console.log('\n═══ DEATHMATCH ═══');
   });
 
   check('a downed player cannot shoot (reuses the generic status gate)', () => {
-    const { gs, baseA } = setupDeathmatch('dm_downed_gate', { deathmatchOnHit: 'respawn' });
+    const { gs, baseA } = setupDeathmatch('dm_downed_gate', { onHit: 'respawn' });
     gs.players.A1.status = 'downed';
     TS += 1100;
     const r = arops.actionArHitAttempt(gs, 'A1', {
@@ -579,6 +598,88 @@ console.log('\n═══ DEATHMATCH ═══');
     });
     assert.equal(r.ok, false);
     assert.equal(r.err, 'downed');
+  });
+}
+
+// ═══ ON-HIT: FREEZE VS RESPAWN, ALL 4 COMBAT MODES ═══════════
+// Domination/CTF/Seek&Destroy/Deathmatch all share the same cfg.onHit
+// toggle now (resolveCombatHit in arops.js). Deathmatch's respawn path is
+// already covered above (its long-standing default); this block covers the
+// newly-generalized respawn path for Domination/Seek&Destroy (which have no
+// base concept of their own — 'respawn' borrows the base_setup/spawn-
+// checkpoint machinery, 'freeze' skips it via the base-less Warmup phase),
+// and the Deathmatch freeze-mode bug fix (base_setup used to run
+// unconditionally even under 'freeze', wrongly downing anyone outside a
+// base nobody needed).
+console.log('\n═══ ON-HIT: FREEZE VS RESPAWN ═══');
+{
+  check('domination respawn: gets a base_setup phase 1 (unlike its freeze default), hit downs + costs a life', () => {
+    const gs = createGame('dom_respawn',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
+        timings: FAST, onHit: 'respawn', livesPerPlayer: 2, gameDurationMs: 600_000 } });
+    assert.equal(gs.phase, 'base_setup');
+    assert.ok(gs.modeState.bases, 'respawn needs somewhere to revive');
+    const baseA = shared.destinationPoint(MUC, 270, 100);
+    const baseB = shared.destinationPoint(MUC, 90, 100);
+    arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: baseB.lat, lon: baseB.lon });
+    tel(gs, 'A1', baseA); tel(gs, 'B1', baseB);
+    skipWarmup(gs);
+    assert.equal(gs.phase, 'live');
+
+    const targetPos = shared.destinationPoint(baseA, 0, 5);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(baseA, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA.lat, lon: baseA.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'downed');
+    assert.equal(gs.modeState.lives.B1, 1);
+  });
+
+  check('seek_destroy respawn: same base_setup/lives path as domination', () => {
+    const gs = createGame('snd_respawn',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1],
+        timings: FAST, onHit: 'respawn', livesPerPlayer: 1, gameDurationMs: 600_000 } });
+    assert.equal(gs.phase, 'base_setup');
+    const baseA = shared.destinationPoint(MUC, 270, 100);
+    const baseB = shared.destinationPoint(MUC, 90, 100);
+    arops.actionArSetBase(gs, 'A1', { lat: baseA.lat, lon: baseA.lon });
+    arops.actionArSetBase(gs, 'B1', { lat: baseB.lat, lon: baseB.lon });
+    tel(gs, 'A1', baseA); tel(gs, 'B1', baseB);
+    skipWarmup(gs);
+    assert.equal(gs.phase, 'live');
+
+    const targetPos = shared.destinationPoint(baseA, 0, 5);
+    tel(gs, 'B1', targetPos);
+    TS += 1100;
+    const heading = shared.bearingDeg(baseA, targetPos);
+    const r = arops.actionArHitAttempt(gs, 'A1', {
+      sample: { lat: baseA.lat, lon: baseA.lon, ts: TS, accuracyM: 5, headingDeg: heading },
+    });
+    assert.equal(r.hit, true, JSON.stringify(r));
+    assert.equal(gs.players.B1.status, 'found', 'eliminated at 0 lives, same as deathmatch');
+  });
+
+  check('deathmatch freeze: Warmup phase 1 (no base_setup), nobody wrongly downed at the checkpoint', () => {
+    const gs = createGame('dm_freeze_warmup',
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'deathmatch', onHit: 'freeze',
+        timings: FAST, gameDurationMs: 600_000 } });
+    assert.equal(gs.phase, 'warmup', 'freeze needs no base — no base_setup phase at all');
+    assert.equal(gs.modeState.bases, undefined);
+    // Neither player ever sends telemetry before the phase-1 timer elapses —
+    // under the old unconditional base_setup this used to wrongly mark them
+    // 'downed' (applySpawnCheckpoint gates on being IN a base that, in freeze
+    // mode, was never asked for and never existed).
+    skipWarmup(gs);
+    assert.equal(gs.phase, 'live');
+    assert.equal(gs.players.A1.status, 'alive', 'freeze mode never downs anyone at the checkpoint');
+    assert.equal(gs.players.B1.status, 'alive');
   });
 }
 
@@ -816,10 +917,14 @@ console.log('\n═══ THE SHIP ═══');
 // ═══ SEEK & DESTROY ═════════════════════════════════════════
 console.log('\n═══ SEEK & DESTROY ═══');
 {
-  const mk = (over = {}) => createGame('snd' + Math.random(),
-    [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
-    { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2],
-      timings: FAST, gameDurationMs: 600_000, ...over } });
+  const mk = (over = {}) => {
+    const gs = createGame('snd' + Math.random(),
+      [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
+      { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1, Z2],
+        timings: FAST, gameDurationMs: 600_000, ...over } });
+    skipWarmup(gs); // default onHit is freeze — no base, just a Warmup timer
+    return gs;
+  };
 
   check('instant variant (default): either team can capture the active target, destroying it and scoring', () => {
     const gs = mk();
@@ -858,6 +963,7 @@ console.log('\n═══ SEEK & DESTROY ═══');
     const gsSolo = createGame('snd_solo',
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
       { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
+    skipWarmup(gsSolo);
     tel(gsSolo, 'A1', Z1);
     tick(gsSolo, 200); tick(gsSolo, 200);
     assert.equal(gsSolo.gameOver, true);
@@ -869,6 +975,7 @@ console.log('\n═══ SEEK & DESTROY ═══');
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
       { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', zones: [Z1], timings: FAST,
         gameDurationMs: 600_000, destroyReactivate: true } });
+    skipWarmup(gs);
     tel(gs, 'A1', Z1);
     tick(gs, 200); tick(gs, 200);
     assert.equal(gs.gameOver, false, 'reactivation keeps the match going instead of ending it');
@@ -942,6 +1049,7 @@ console.log('\n═══ TEAM/FFA VARIANT ═══');
       [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
       { ar_settings: { polygon: FIELD, subMode: 'domination', teamVariant: 'ffa', zones: [Z1, Z2],
         timings: FAST, targetScore: 3, gameDurationMs: 600_000 } });
+    skipWarmup(gs);
     assert.equal(gs.players.A1.team, null);
     assert.equal(gs.players.A2.team, null);
     tel(gs, 'A1', Z1);
@@ -962,6 +1070,7 @@ console.log('\n═══ TEAM/FFA VARIANT ═══');
       [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
       { ar_settings: { polygon: FIELD, subMode: 'domination', teamVariant: 'ffa', zones: [Z1, Z2],
         timings: FAST, targetScore: 100, gameDurationMs: 600_000 } });
+    skipWarmup(gs);
     tel(gs, 'A1', Z1); tel(gs, 'A2', Z1);
     tick(gs, 500);
     assert.equal(gs.modeState.owners.z1, null, 'contested, nobody alone');
@@ -972,6 +1081,7 @@ console.log('\n═══ TEAM/FFA VARIANT ═══');
       [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
       { ar_settings: { polygon: FIELD, subMode: 'seek_destroy', teamVariant: 'ffa', destroyVariant: 'defuse',
         zones: [Z1], timings: FAST, gameDurationMs: 600_000 } });
+    skipWarmup(gs);
     assert.equal(gs.cfg.destroyVariant, 'instant', 'ffa forces defuse back to instant (two-sided, no ffa reading)');
     tel(gs, 'A1', Z1);
     tick(gs, 200); tick(gs, 200);
@@ -985,7 +1095,7 @@ console.log('\n═══ TEAM/FFA VARIANT ═══');
     const gs = createGame('dm_ffa',
       [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
       { ar_settings: { polygon: FIELD, subMode: 'deathmatch', teamVariant: 'ffa', gameDurationMs: 600_000,
-        timings: { ...FAST, spawnCheckDwellMs: 300 }, deathmatchOnHit: 'respawn', livesPerPlayer: 1 } });
+        timings: { ...FAST, spawnCheckDwellMs: 300 }, onHit: 'respawn', livesPerPlayer: 1 } });
     assert.equal(gs.players.A1.team, null);
     const baseA1 = shared.destinationPoint(MUC, 270, 100);
     const baseA2 = shared.destinationPoint(MUC, 90, 100);
@@ -1200,6 +1310,7 @@ console.log('\n═══ H&S PERKS ═══');
     const gs = createGame('teamperk' + Math.random(),
       [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
       { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2], timings: FAST } });
+    skipWarmup(gs);
     for (const perk of ['drone', 'cloak', 'fake_marker', 'aufscheuchen']) {
       const r = arops.actionArUsePerk(gs, 'A1', { perk });
       assert.equal(r.err, 'wrong_mode', perk);
@@ -1423,6 +1534,7 @@ console.log('\n═══ MISS-DIAGNOSE ═══');
     [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       teams: { A1: 'a', A2: 'a' }, timings: FAST, hitCooldownMs: 50 } });
+  skipWarmup(gs);
   const pB = shared.destinationPoint(MUC, 0, 40);
   tel(gs, 'A1', MUC); tel(gs, 'A2', pB);
   check('same team → reason no_candidates', () => {
@@ -1439,6 +1551,7 @@ console.log('\n═══ MISS-DIAGNOSE ═══');
     [{ userId: 'A1', username: 'A1' }, { userId: 'B1', username: 'B1' }],
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       timings: FAST, hitCooldownMs: 50 } });
+  skipWarmup(gs);
   const pB = shared.destinationPoint(MUC, 0, 40);
   tel(gs, 'A1', MUC); tel(gs, 'B1', pB);
   check('stale target telemetry → reason target_stale', () => {

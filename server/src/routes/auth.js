@@ -79,6 +79,20 @@ router.post('/register', authLimiter,
       );
       const userId = rows[0].id;
 
+      // Admin bootstrap: if the platform currently has zero admins (a
+      // brand-new deployment's very first registration, OR an
+      // already-running instance that predates is_admin ever being set),
+      // the next real (non-guest — this route only) account to register
+      // becomes admin automatically. Never fires again once any admin
+      // exists — further admin grants go through the Admin panel itself
+      // (POST /admin/users/:id/set-admin). Small benign race window on two
+      // simultaneous first-ever registrations (worst case: two admins
+      // instead of one) — accepted rather than adding locking for this.
+      const { rows: adminCount } = await db.query('SELECT COUNT(*)::int AS n FROM users WHERE is_admin=true');
+      if (adminCount[0].n === 0) {
+        await db.query('UPDATE users SET is_admin=true WHERE id=$1', [userId]);
+      }
+
       // Create verification token
       const token = nanoid(64);
       const exp = new Date(Date.now() + 24*3600*1000);
@@ -137,7 +151,7 @@ router.post('/guest', authLimiter,
       await freeStaleGuestUsername(db, username);
       const { rows } = await db.query(
         `INSERT INTO users (email, username, password_hash, email_verified, is_guest, language)
-         VALUES ($1,$2,$3,true,true,$4) RETURNING id, username, avatar_color`,
+         VALUES ($1,$2,$3,true,true,$4) RETURNING id, username, avatar_color, is_admin, is_guest`,
         [email, username, hash, language]
       );
       const user = rows[0];
@@ -186,7 +200,7 @@ router.post('/login', authLimiter,
       user: {
         id: user.id, username: user.username, email: user.email,
         avatar_color: user.avatar_color, language: user.language,
-        email_verified: user.email_verified,
+        email_verified: user.email_verified, is_admin: user.is_admin, is_guest: user.is_guest,
       }
     });
   }
@@ -212,24 +226,40 @@ router.get('/verify-email', async (req, res) => {
 });
 
 // ── REFRESH TOKEN ────────────────────────
+// The client (apps/arops-mobile/src/api.ts's tryRefresh()) treats a 401 here
+// as an authoritative "this session is truly dead" — it wipes both stored
+// tokens and forces a re-login. That contract only holds if 401 ONLY ever
+// means "the token itself is invalid/expired/unknown". A bare try/catch
+// around BOTH the jwt.verify (a real token check) and the db.query (plain
+// I/O — a transient pool/connection error has nothing to do with the token's
+// validity) used to collapse either failure into the same 401, so a brief DB
+// hiccup during a DB-heavy stretch (e.g. the Match-Simulation's ~50
+// back-to-back scenarios) could get misreported as a dead session and force
+// a real logout mid-run. jwt.verify's failure (genuinely invalid/expired
+// token) is now the only thing that produces 401; a DB error propagates as
+// a 500 instead, which the client already treats as a retryable
+// 'network_error', not a fatal one.
 router.post('/refresh', async (req, res) => {
   const { refresh_token } = req.body;
   if (!refresh_token) return res.status(401).json({ error: 'missing_token' });
 
+  let payload;
   try {
-    const payload = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
-    const { rows } = await db.query(
-      'SELECT * FROM refresh_tokens WHERE token=$1 AND expires_at > NOW()',
-      [refresh_token]
-    );
-    if (!rows[0] || rows[0].user_id !== payload.sub)
-      return res.status(401).json({ error: 'invalid_token' });
-
-    const access = signAccess(payload.sub);
-    res.json({ access_token: access });
+    payload = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
   } catch {
-    res.status(401).json({ error: 'invalid_token' });
+    return res.status(401).json({ error: 'invalid_token' });
   }
+
+  const { rows } = await db.query(
+    'SELECT * FROM refresh_tokens WHERE token=$1 AND expires_at > NOW()',
+    [refresh_token]
+  );
+  if (!rows[0] || rows[0].user_id !== payload.sub) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+
+  const access = signAccess(payload.sub);
+  res.json({ access_token: access });
 });
 
 // ── LOGOUT ───────────────────────────────

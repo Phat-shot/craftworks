@@ -38,6 +38,7 @@ const DEFAULTS = {
   gameDurationMs: 20 * 60_000,
   hitCooldownMs: 3_000,
   radarCooldownMs: 15 * 60_000,
+  radarDurationMs: 15_000,        // how long revealed radar contacts stay visible to the client
   proximityRangeM: 40,
   geofenceWarnM: 10,
   geofenceGraceMs: 30_000,
@@ -76,6 +77,36 @@ function applyFreeze(gs, target, byUserId, t) {
     ? { lat: target.lastAccepted.lat, lon: target.lastAccepted.lon } : null;
   target.freezeViolations = 0;
   pushEvent(gs, 'player_frozen', { userId: target.userId, byUserId, durationMs: gs.timings.freezeMs });
+}
+
+/**
+ * Shared on-hit resolution for the 4 combat modes (Domination, CTF,
+ * Seek&Destroy, Deathmatch) — host-configurable via cfg.onHit:
+ *  'respawn' — lose a life, 'downed' until the base/respawn checkpoint (see
+ *              applySpawnCheckpoint/tickSpawnRespawn) revives it, eliminated
+ *              ('found') at 0 lives.
+ *  'freeze'  — the plain team-mode freeze mechanic, no lives lost at all.
+ * Returns 'eliminated' | 'downed' | 'frozen' so callers that track their own
+ * win condition on elimination (currently only Deathmatch) know when to
+ * check it.
+ */
+function resolveCombatHit(gs, target, byUserId, t) {
+  if (gs.cfg.onHit === 'respawn') {
+    const ms = gs.modeState;
+    const remaining = Math.max(0, (ms.lives[target.userId] ?? gs.cfg.livesPerPlayer) - 1);
+    ms.lives[target.userId] = remaining;
+    if (remaining <= 0) {
+      target.status = 'found'; // eliminated — out for the rest of the match
+      pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId });
+      return 'eliminated';
+    }
+    target.status = 'downed';
+    target.spawnDwellMs = 0;
+    pushEvent(gs, 'player_downed', { userId: target.userId, byUserId, livesRemaining: remaining });
+    return 'downed';
+  }
+  applyFreeze(gs, target, byUserId, t);
+  return 'frozen';
 }
 
 /**
@@ -331,15 +362,29 @@ const MODES = {
   // ── DOMINATION ────────────────────────────────────────────
   domination: {
     usesTeams: true,
-    initialPhase: () => 'live',
+    // No base concept to the mode itself (points are zones, not spawns) —
+    // only needed when 'respawn' is chosen (somewhere to revive), same
+    // reasoning as Deathmatch. 'freeze' needs no base at all, but still gets
+    // a short prep phase 1 (see MODES.seek_destroy's comment for why).
+    initialPhase: (cfg) => cfg.onHit === 'respawn' ? 'base_setup' : 'warmup',
     shootPhases: ['live'],
-    phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
+    phaseDurationMs(gs) {
+      return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
+        : gs.phase === 'warmup' ? gs.timings.warmupMs
+        : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
+    },
     initState(gs) {
       gs.modeState = {
         owners: Object.fromEntries(gs.zones.map(z => [z.id, null])), // team letter, or userId in ffa
         capProgress: {},   // zid -> { key, ms } (key: team letter, or userId in ffa)
         teamScore: { a: 0, b: 0 },  // team variant only
         playerScore: {},            // ffa variant only: userId -> score (seconds held)
+        ...(gs.cfg.onHit === 'respawn' ? {
+          bases: gs.cfg.teamVariant === 'ffa'
+            ? Object.fromEntries(Object.values(gs.players).map(p => [p.userId, null]))
+            : { a: null, b: null },
+          lives: Object.fromEntries(Object.values(gs.players).map(p => [p.userId, gs.cfg.livesPerPlayer])),
+        } : {}),
       };
     },
     canShoot() { return null; },
@@ -347,11 +392,19 @@ const MODES = {
       return gs.cfg.teamVariant === 'ffa' ? c.userId !== shooter.userId : c.team !== shooter.team;
     },
     applyHit(gs, shooter, target, verdict, t) {
-      applyFreeze(gs, target, shooter.userId, t);
+      resolveCombatHit(gs, target, shooter.userId, t);
       shooter.score += 5;
     },
     tick(gs, t, dtMs) {
       const ms = gs.modeState;
+      if (gs.phase === 'base_setup') {
+        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) transitionFromBaseSetup(gs, t);
+        return;
+      }
+      if (gs.phase === 'warmup') {
+        if (t - gs.phaseStartTime >= gs.timings.warmupMs) transitionFromWarmup(gs, t);
+        return;
+      }
       if (gs.phase !== 'live') return;
       const ffa = gs.cfg.teamVariant === 'ffa';
       // Zone capture + scoring — presentKeys is either the ≤1 team dwelling
@@ -419,6 +472,9 @@ const MODES = {
                 pct: Math.min(100, Math.round(100 * ms.capProgress[z.id].ms / gs.timings.captureDwellMs)) }
             : null,
         })),
+        onHit: gs.cfg.onHit,
+        ...(ms.lives ? { lives: ms.lives, livesPerPlayer: gs.cfg.livesPerPlayer } : {}),
+        ...(ms.bases ? { bases: ms.bases } : {}),
       };
     },
     isOpponentPair(gs, a, b) {
@@ -451,6 +507,10 @@ const MODES = {
         flags: Object.fromEntries(keys.map(k =>
           [k, { state: 'home', carrier: null, lat: null, lon: null, droppedAt: null, pickupProg: null }])),
         captures: Object.fromEntries(keys.map(k => [k, 0])),
+        // Only meaningful when cfg.onHit === 'respawn' (see resolveCombatHit)
+        // — always allocated regardless, same convention Deathmatch already
+        // used before onHit was generalized to all 4 combat modes.
+        lives: Object.fromEntries(Object.values(gs.players).map(p => [p.userId, gs.cfg.livesPerPlayer])),
       };
     },
     canShoot() { return null; },
@@ -458,7 +518,7 @@ const MODES = {
       return gs.cfg.teamVariant === 'ffa' ? c.userId !== shooter.userId : c.team !== shooter.team;
     },
     applyHit(gs, shooter, target, verdict, t) {
-      applyFreeze(gs, target, shooter.userId, t);
+      resolveCombatHit(gs, target, shooter.userId, t);
       shooter.score += 5;
       // Carrier hit → flag drops on the spot
       for (const [fk, flag] of Object.entries(gs.modeState.flags)) {
@@ -471,34 +531,7 @@ const MODES = {
       const ms = gs.modeState;
       const ffa = gs.cfg.teamVariant === 'ffa';
       if (gs.phase === 'base_setup') {
-        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) {
-          if (ffa) {
-            // No captains in ffa — every player who hasn't placed their own
-            // base yet falls back to their own current position.
-            Object.values(gs.players).forEach((p, i) => {
-              if (!ms.bases[p.userId]) {
-                const pos = p.lastAccepted || fieldCentroid(gs.polygon, i * 0.1 - 0.3);
-                ms.bases[p.userId] = { lat: pos.lat, lon: pos.lon };
-                pushEvent(gs, 'base_set', { userId: p.userId, auto: true });
-              }
-            });
-          } else {
-            // Timeout: unset bases fall back to the captain's current position
-            for (const tm of ['a', 'b']) {
-              if (!ms.bases[tm]) {
-                const cap = gs.players[gs.captains[tm]];
-                const pos = cap?.lastAccepted
-                  || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
-                ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
-                pushEvent(gs, 'base_set', { team: tm, auto: true });
-              }
-            }
-          }
-          gs.phase = 'live';
-          gs.phaseStartTime = t;
-          pushEvent(gs, 'phase_change', { phase: 'live' });
-          applySpawnCheckpoint(gs, t);
-        }
+        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) transitionFromBaseSetup(gs, t);
         return;
       }
       if (gs.phase !== 'live') return;
@@ -635,6 +668,8 @@ const MODES = {
         targetCaptures: gs.cfg.targetCaptures,
         bases: ms.bases,
         zoneRadiusM: gs.timings.zoneRadiusM,
+        onHit: gs.cfg.onHit,
+        ...(gs.cfg.onHit === 'respawn' ? { lives: ms.lives, livesPerPlayer: gs.cfg.livesPerPlayer } : {}),
         flags: Object.keys(ms.flags).map(key => {
           const f = ms.flags[key];
           return {
@@ -681,15 +716,30 @@ const MODES = {
   // zone reactivates and the cycle continues until the time limit (true).
   seek_destroy: {
     usesTeams: true,
-    initialPhase: () => 'live',
+    // No base concept to the mode itself (targets are host/random-placed
+    // zones, not spawns) — only needed when 'respawn' is chosen (somewhere
+    // to revive). Freeze needs no base, but still gets a "Warmup" phase 1
+    // instead of dropping straight into 'live' with zero prep time —
+    // previously this mode had NO phase 1 at all regardless of onHit.
+    initialPhase: (cfg) => cfg.onHit === 'respawn' ? 'base_setup' : 'warmup',
     shootPhases: ['live'],
-    phaseDurationMs(gs) { return gs.phase === 'live' ? gs.cfg.gameDurationMs : 0; },
+    phaseDurationMs(gs) {
+      return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
+        : gs.phase === 'warmup' ? gs.timings.warmupMs
+        : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
+    },
     initState(gs) {
       gs.modeState = {
         activeIndex: 0,
         destroyed: gs.zones.map(() => false),
         captureProg: null, // { team, ms } (instant) or { uid, team, ms } (defuse arm progress)
         armed: null,       // { armedAt, explodeAt, defuseProg } (defuse variant only)
+        ...(gs.cfg.onHit === 'respawn' ? {
+          bases: gs.cfg.teamVariant === 'ffa'
+            ? Object.fromEntries(Object.values(gs.players).map(p => [p.userId, null]))
+            : { a: null, b: null },
+          lives: Object.fromEntries(Object.values(gs.players).map(p => [p.userId, gs.cfg.livesPerPlayer])),
+        } : {}),
       };
     },
     canShoot() { return null; },
@@ -697,7 +747,7 @@ const MODES = {
       return gs.cfg.teamVariant === 'ffa' ? c.userId !== shooter.userId : c.team !== shooter.team;
     },
     applyHit(gs, shooter, target, verdict, t) {
-      applyFreeze(gs, target, shooter.userId, t);
+      resolveCombatHit(gs, target, shooter.userId, t);
       shooter.score += 5;
     },
     // Destroys the currently active zone, credits `scoringUids` (may be
@@ -731,6 +781,14 @@ const MODES = {
     },
     tick(gs, t, dtMs) {
       const ms = gs.modeState;
+      if (gs.phase === 'base_setup') {
+        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) transitionFromBaseSetup(gs, t);
+        return;
+      }
+      if (gs.phase === 'warmup') {
+        if (t - gs.phaseStartTime >= gs.timings.warmupMs) transitionFromWarmup(gs, t);
+        return;
+      }
       if (gs.phase !== 'live') return;
       const ffa = gs.cfg.teamVariant === 'ffa';
       const zone = gs.zones[ms.activeIndex];
@@ -837,6 +895,9 @@ const MODES = {
           defusePct: ms.armed.defuseProg
             ? Math.min(100, Math.round(100 * ms.armed.defuseProg.ms / gs.timings.defuseDwellMs)) : 0,
         } : null,
+        onHit: gs.cfg.onHit,
+        ...(ms.lives ? { lives: ms.lives, livesPerPlayer: gs.cfg.livesPerPlayer } : {}),
+        ...(ms.bases ? { bases: ms.bases } : {}),
       };
     },
     isOpponentPair(gs, a, b) {
@@ -847,27 +908,35 @@ const MODES = {
 
   // ── DEATHMATCH ────────────────────────────────────────────
   // Team vs team, no objective besides frags. Two on-hit consequences
-  // (cfg.deathmatchOnHit, host-configurable): 'respawn' — lose a life,
-  // 'downed' until the base/respawn checkpoint (see applySpawnCheckpoint/
-  // tickSpawnRespawn) revives it, eliminated at 0 lives; or 'freeze' — the
-  // plain team-mode freeze mechanic, no lives lost at all. Reuses the exact
-  // same base_setup phase as CTF (captain places a base, see
-  // actionArSetBase) since the respawn variant needs somewhere to revive.
+  // (cfg.onHit, host-configurable, see resolveCombatHit): 'respawn' — lose a
+  // life, 'downed' until the base/respawn checkpoint (see
+  // applySpawnCheckpoint/tickSpawnRespawn) revives it, eliminated at 0
+  // lives (Deathmatch's default) — or 'freeze' — the plain team-mode freeze
+  // mechanic, no lives lost at all. 'respawn' reuses the exact same
+  // base_setup phase as CTF (captain places a base, see actionArSetBase)
+  // since it needs somewhere to revive; 'freeze' needs no base at all, so
+  // phase 1 is the base-less 'warmup' prep phase instead (shared with
+  // Domination/Seek&Destroy's freeze path).
   deathmatch: {
     usesTeams: true,
-    initialPhase: () => 'base_setup',
+    initialPhase: (cfg) => cfg.onHit === 'respawn' ? 'base_setup' : 'warmup',
     shootPhases: ['live'],
     phaseDurationMs(gs) {
       return gs.phase === 'base_setup' ? gs.timings.baseSettingMs
+        : gs.phase === 'warmup' ? gs.timings.warmupMs
         : gs.phase === 'live' ? gs.cfg.gameDurationMs : 0;
     },
     initState(gs) {
       gs.modeState = {
         // Team mode: bases keyed 'a'/'b', captain-placed. Ffa: bases keyed
         // by userId, every player places their own (see tick's base_setup).
-        bases: gs.cfg.teamVariant === 'ffa'
-          ? Object.fromEntries(Object.values(gs.players).map(p => [p.userId, null]))
-          : { a: null, b: null },
+        // Only allocated when 'respawn' is chosen — 'freeze' has nothing to
+        // check players into, and skips base_setup entirely (see initialPhase).
+        ...(gs.cfg.onHit === 'respawn' ? {
+          bases: gs.cfg.teamVariant === 'ffa'
+            ? Object.fromEntries(Object.values(gs.players).map(p => [p.userId, null]))
+            : { a: null, b: null },
+        } : {}),
         lives: Object.fromEntries(Object.values(gs.players).map(p => [p.userId, gs.cfg.livesPerPlayer])),
       };
     },
@@ -880,26 +949,11 @@ const MODES = {
     },
     applyHit(gs, shooter, target, verdict, t) {
       shooter.score += 10;
-      if (gs.cfg.deathmatchOnHit === 'respawn') {
-        const ms = gs.modeState;
-        const remaining = Math.max(0, (ms.lives[target.userId] ?? gs.cfg.livesPerPlayer) - 1);
-        ms.lives[target.userId] = remaining;
-        if (remaining <= 0) {
-          target.status = 'found'; // eliminated — out for the rest of the match
-          pushEvent(gs, 'player_eliminated', { userId: target.userId, byUserId: shooter.userId });
-          this.checkWin(gs);
-        } else {
-          target.status = 'downed';
-          target.spawnDwellMs = 0;
-          pushEvent(gs, 'player_downed', { userId: target.userId, byUserId: shooter.userId, livesRemaining: remaining });
-        }
-      } else {
-        applyFreeze(gs, target, shooter.userId, t);
-      }
+      if (resolveCombatHit(gs, target, shooter.userId, t) === 'eliminated') this.checkWin(gs);
     },
     checkWin(gs) {
       if (gs.cfg.teamVariant === 'ffa') {
-        // Last player standing wins — only reachable under deathmatchOnHit
+        // Last player standing wins — only reachable under cfg.onHit
         // 'respawn' (the only variant that ever sets status='found' here,
         // same asymmetry as team mode's checkWin/'freeze' comment below).
         const alive = Object.values(gs.players).filter(p => p.status !== 'found');
@@ -919,34 +973,11 @@ const MODES = {
       const ms = gs.modeState;
       const ffa = gs.cfg.teamVariant === 'ffa';
       if (gs.phase === 'base_setup') {
-        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) {
-          if (ffa) {
-            // No captains in ffa — every player who hasn't placed their own
-            // base yet falls back to their own current position (spread out
-            // a little if that's unavailable too, so they don't all stack).
-            Object.values(gs.players).forEach((p, i) => {
-              if (!ms.bases[p.userId]) {
-                const pos = p.lastAccepted || fieldCentroid(gs.polygon, i * 0.1 - 0.3);
-                ms.bases[p.userId] = { lat: pos.lat, lon: pos.lon };
-                pushEvent(gs, 'base_set', { userId: p.userId, auto: true });
-              }
-            });
-          } else {
-            for (const tm of ['a', 'b']) {
-              if (!ms.bases[tm]) {
-                const cap = gs.players[gs.captains[tm]];
-                const pos = cap?.lastAccepted
-                  || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
-                ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
-                pushEvent(gs, 'base_set', { team: tm, auto: true });
-              }
-            }
-          }
-          gs.phase = 'live';
-          gs.phaseStartTime = t;
-          pushEvent(gs, 'phase_change', { phase: 'live' });
-          applySpawnCheckpoint(gs, t);
-        }
+        if (t - gs.phaseStartTime >= gs.timings.baseSettingMs) transitionFromBaseSetup(gs, t);
+        return;
+      }
+      if (gs.phase === 'warmup') {
+        if (t - gs.phaseStartTime >= gs.timings.warmupMs) transitionFromWarmup(gs, t);
         return;
       }
       if (gs.phase !== 'live') return;
@@ -956,7 +987,7 @@ const MODES = {
         // comparison would always tie there.
         if (ffa) {
           const entries = Object.values(gs.players).map(p =>
-            [p.userId, gs.cfg.deathmatchOnHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score]);
+            [p.userId, gs.cfg.onHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score]);
           if (!entries.length) return endGame(gs, 'draw');
           entries.sort((a, b) => b[1] - a[1]);
           const leaders = entries.filter(([, sc]) => sc === entries[0][1]);
@@ -965,7 +996,7 @@ const MODES = {
           const sums = { a: 0, b: 0 };
           for (const p of Object.values(gs.players)) {
             if (!p.team) continue;
-            sums[p.team] += gs.cfg.deathmatchOnHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score;
+            sums[p.team] += gs.cfg.onHit === 'respawn' ? (ms.lives[p.userId] ?? 0) : p.score;
           }
           endGame(gs, sums.a > sums.b ? 'team_a' : sums.b > sums.a ? 'team_b' : 'draw');
         }
@@ -976,7 +1007,7 @@ const MODES = {
       return {
         lives: gs.modeState.lives,
         livesPerPlayer: gs.cfg.livesPerPlayer,
-        deathmatchOnHit: gs.cfg.deathmatchOnHit,
+        onHit: gs.cfg.onHit,
         bases: gs.modeState.bases,
       };
     },
@@ -1001,16 +1032,61 @@ function fieldCentroid(polygon, offsetFrac = 0) {
   return { lat: lat + offsetFrac * 0.0005, lon };
 }
 
+// Shared 'base_setup' -> 'live' transition (CTF always; Domination/
+// Seek&Destroy/Deathmatch only when cfg.onHit === 'respawn', see each mode's
+// initialPhase): auto-places any base a captain/player never set (falls
+// back to their current position, or the field centroid if that's
+// unavailable too), then hands off to the live phase and marks anyone not
+// standing in their own base as needing to spawn in (applySpawnCheckpoint).
+function transitionFromBaseSetup(gs, t) {
+  const ms = gs.modeState;
+  const ffa = gs.cfg.teamVariant === 'ffa';
+  if (ffa) {
+    // No captains in ffa — every player who hasn't placed their own base
+    // yet falls back to their own current position.
+    Object.values(gs.players).forEach((p, i) => {
+      if (!ms.bases[p.userId]) {
+        const pos = p.lastAccepted || fieldCentroid(gs.polygon, i * 0.1 - 0.3);
+        ms.bases[p.userId] = { lat: pos.lat, lon: pos.lon };
+        pushEvent(gs, 'base_set', { userId: p.userId, auto: true });
+      }
+    });
+  } else {
+    for (const tm of ['a', 'b']) {
+      if (!ms.bases[tm]) {
+        const cap = gs.players[gs.captains[tm]];
+        const pos = cap?.lastAccepted || fieldCentroid(gs.polygon, tm === 'a' ? -0.25 : 0.25);
+        ms.bases[tm] = { lat: pos.lat, lon: pos.lon };
+        pushEvent(gs, 'base_set', { team: tm, auto: true });
+      }
+    }
+  }
+  gs.phase = 'live';
+  gs.phaseStartTime = t;
+  pushEvent(gs, 'phase_change', { phase: 'live' });
+  applySpawnCheckpoint(gs, t);
+}
+
+// Shared 'warmup' -> 'live' transition (Domination/Seek&Destroy/Deathmatch
+// when cfg.onHit === 'freeze') — a plain prep timer, no base to place and
+// nobody to check into a spawn checkpoint (freeze needs neither).
+function transitionFromWarmup(gs, t) {
+  gs.phase = 'live';
+  gs.phaseStartTime = t;
+  pushEvent(gs, 'phase_change', { phase: 'live' });
+}
+
 // ═══════════════════════════════════════════════════════════
-//  BASE/RESPAWN CHECKPOINT (any mode with team bases — CTF, Deathmatch)
+//  BASE/RESPAWN CHECKPOINT (any mode with team bases — CTF always;
+//  Domination/Seek&Destroy/Deathmatch when cfg.onHit === 'respawn')
 // ═══════════════════════════════════════════════════════════
 // Generic, mode-agnostic primitive: modes that store bases in
-// gs.modeState.bases[team] (CTF, Deathmatch) can call applySpawnCheckpoint()
-// at the exact moment their own setup phase ends. tickSpawnRespawn() then
-// runs every core tick regardless of mode — for modes with no
-// gs.modeState.bases at all (domination, seek_destroy/Zerstören,
-// hide_and_seek incl. its ffa/the_ship variants), every player's `team` is either
-// null or `gs.modeState.bases` is absent, so both functions are no-ops.
+// gs.modeState.bases[team] can call applySpawnCheckpoint() at the exact
+// moment their own setup phase ends (see transitionFromBaseSetup above).
+// tickSpawnRespawn() then runs every core tick regardless of mode — for
+// modes/configs with no gs.modeState.bases at all (freeze-mode Domination/
+// Seek&Destroy/Deathmatch, hide_and_seek incl. its ffa/the_ship variants),
+// `gs.modeState.bases` is absent, so both functions are no-ops.
 // Bases are keyed by team letter in team mode, by userId in the ffa variant
 // (every player places their own base instead of a team captain placing a
 // shared one) — same gs.modeState.bases map either way.
@@ -1063,8 +1139,49 @@ function tickSpawnRespawn(gs, t, dtMs) {
 // ═══════════════════════════════════════════════════════════
 //  SESSION CREATION
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+//  MATCH-SIMULATION (debug-only — see packages/arops-shared/src/simScript.ts
+//  for the fixed, non-configurable snippet definitions this drives; the
+//  mobile Match-Simulation screen imports the SAME module to predict
+//  expected outcomes, so the two can never silently drift apart).
+// ═══════════════════════════════════════════════════════════
+// A snippet only ever supplies `subMode`/`classes`/`teams`/`zones`/
+// `hitConfig`/`onHit`/`destroyVariant` — every other ar_settings field
+// (polygon, simulation, simSnippetKey) passes through unchanged, so the
+// rest of createAropsGame's normal parsing below runs completely unaware
+// this is a simulation, exactly like a host manually configuring the same
+// values from the Lobby UI would.
+function applySimOverrides(ar, players) {
+  const scenario = shared.SIM_SCENARIOS.find(s => s.key === ar.simSnippetKey);
+  if (!scenario) return ar;
+  const origin = fieldCentroid(ar.polygon || []);
+  const tester = players.find(p => !p.isBot);
+  const classes = tester ? { [tester.userId]: scenario.testerClass } : {};
+  const teams = (tester && scenario.testerTeam) ? { [tester.userId]: scenario.testerTeam } : {};
+  for (const b of scenario.bots) {
+    classes[b.id] = b.class;
+    if (b.team) teams[b.id] = b.team;
+  }
+  const zones = (scenario.zones || []).map(z => shared.destinationPoint(origin, z.bearingDeg, z.distanceM));
+  return {
+    ...ar,
+    subMode: scenario.subMode,
+    classes, teams, zones,
+    teamVariant: 'team',
+    ...(scenario.onHit ? { onHit: scenario.onHit } : {}),
+    ...(scenario.hitConfig ? { hitConfig: scenario.hitConfig } : {}),
+    // Bypasses platform.js's 5s floor on client-sent timings entirely (this
+    // writes directly into the internal ar object before createAropsGame's
+    // own parsing, which has no such floor) — lets a whole freeze/capture
+    // cycle fit inside a scenario that's only 1-10s long in total.
+    ...(scenario.timings ? { timings: scenario.timings } : {}),
+    debugMode: true, // ground-truth visibility — the tester must see real bot positions
+  };
+}
+
 function createAropsGame(sessionId, players, workshopConfig) {
-  const ar = workshopConfig?.ar_settings || {};
+  let ar = workshopConfig?.ar_settings || {};
+  if (ar.simulation === true) ar = applySimOverrides(ar, players);
   const polygon = ar.polygon || [];
   const subMode = MODES[ar.subMode] ? ar.subMode : 'hide_and_seek';
   const mode = MODES[subMode];
@@ -1100,6 +1217,28 @@ function createAropsGame(sessionId, players, workshopConfig) {
     // stuck at the fixed DEFAULTS value regardless of field/match size
     // while every other perk cooldown did scale.
     cfg.revealTrapCooldownMs = auto.revealTrapCooldownMs;
+    // Perk effect durations — previously fixed constants, never field-scaled
+    // regardless of match size. All share the same value ("Dauer ist analog
+    // Radar" — same anchor points as radarCooldownMs above).
+    cfg.radarDurationMs = auto.perkDurationMs;
+    cfg.cloakDurationMs = auto.perkDurationMs;
+    cfg.fakeMarkerDurationMs = auto.perkDurationMs;
+    cfg.aufscheuchenDurationMs = auto.perkDurationMs;
+    cfg.revealTrapDurationMs = auto.perkDurationMs;
+    // Passive "opponent nearby" sensor (tickCore, sets me.proximityAlert
+    // every tick for every player) — same "opponent within range" concept
+    // the Drone perk's own alert already uses (see actionArUsePerk's
+    // 'drone' branch, shared.scaleDroneRangeM), reused here for the exact
+    // same reason: DEFAULTS' flat 40m stayed fixed regardless of field size,
+    // so on anything bigger than a small field this basically never fired —
+    // reported as "the passive alert never shows, only the Drone perk's
+    // does" (the perk's own range happened to scale, this one didn't).
+    cfg.proximityRangeM = shared.scaleDroneRangeM(areaM2);
+    // Respawn-variant lives (Domination/CTF/Seek&Destroy/Deathmatch) —
+    // meaningless under 'freeze' but harmless to set either way, same
+    // "always compute, only some modes read it" convention as livesPerPlayer
+    // in DEFAULTS/deathmatch already used before onHit was generalized.
+    cfg.livesPerPlayer = auto.livesPerPlayer;
   }
   for (const k of Object.keys(DEFAULTS)) {
     if (typeof ar[k] === 'number') cfg[k] = ar[k];
@@ -1107,16 +1246,21 @@ function createAropsGame(sessionId, players, workshopConfig) {
   cfg.autoScale = autoScale;
   cfg.foundMode = ['seeker', 'freeze'].includes(ar.foundMode) ? ar.foundMode : 'spectator';
   cfg.debugMode = ar.debugMode === true;
+  cfg.simulation = ar.simulation === true;
   // Hide & Seek variant: 'classic' (default, seeker/hider roles), 'ffa'
   // ("Jeder gegen jeden" — no teams/roles, permanent elimination) or
   // 'the_ship' (secret assassin-chain — no roles). All three are variants,
   // not separate modes — same subMode either way, see MODES.hide_and_seek.
   cfg.hsVariant = ['ffa', 'the_ship'].includes(ar.hsVariant) ? ar.hsVariant : 'classic';
-  // Deathmatch: on-hit consequence — 'respawn' (lose a life, downed until
-  // the base/respawn checkpoint dwell revives it) is the mode's identity;
-  // 'freeze' reuses the plain team-mode freeze mechanic instead (no lives
-  // lost at all, closer to Domination/CTF's hit consequence).
-  cfg.deathmatchOnHit = ar.deathmatchOnHit === 'freeze' ? 'freeze' : 'respawn';
+  // On-hit consequence for all 4 combat modes (Domination, CTF,
+  // Seek&Destroy, Deathmatch) — see resolveCombatHit. Default preserves each
+  // mode's original, pre-toggle behavior so existing matches/tests aren't
+  // silently changed by adding the option: Deathmatch always defaulted to
+  // 'respawn' (its identity), the other three always unconditionally froze
+  // on hit, so 'freeze' stays their default unless the host opts into
+  // 'respawn' instead.
+  const defaultOnHit = subMode === 'deathmatch' ? 'respawn' : 'freeze';
+  cfg.onHit = ['freeze', 'respawn'].includes(ar.onHit) ? ar.onHit : defaultOnHit;
   // Zerstören: 'instant' (either team captures the active target, default)
   // vs 'defuse' (attacker-arms/defender-defuses, mirrors the old
   // single-bomb-site mechanic but generalized to a rotating target list).
@@ -1240,7 +1384,7 @@ function createAropsGame(sessionId, players, workshopConfig) {
     // addition to (not instead of) the existing GPS/compass cone check.
     irIds: (ar.irIds && typeof ar.irIds === 'object') ? { ...ar.irIds } : {},
     players: playerState,
-    phase: mode.initialPhase(),
+    phase: mode.initialPhase(cfg),
     phaseStartTime: now(),
     gameOver: false, _gameOverWin: false, winner: null,
     events: [], _eventSeq: 0,
@@ -1254,8 +1398,26 @@ function createAropsGame(sessionId, players, workshopConfig) {
     _lastModeTick: now(),
     _hasBots: Object.values(playerState).some(p => p.isBot),
     _lastBotStep: 0,
+    _simSnippet: cfg.simulation ? shared.SIM_SCENARIOS.find(s => s.key === ar.simSnippetKey) || null : null,
+    _simOrigin: cfg.simulation ? fieldCentroid(polygon) : null,
+    _simStartAt: now(),
+    _simTesterId: cfg.simulation ? (players.find(p => !p.isBot)?.userId || null) : null,
+    _simShotsDone: new Set(),
+    _lastSimBotStep: 0,
   };
   if (mode.initState) mode.initState(gs);
+  // Simulation scenarios are only ever 1-10s long in total — the normal
+  // real-match warmup/base_setup prep phase (tens of seconds, see each
+  // mode's initialPhase/phaseDurationMs) would completely dominate that
+  // budget for no benefit (nobody needs prep time against a scripted bot).
+  // Skip straight to 'live' using the same transition functions a real
+  // match reaches on its own once the timer elapses — both already
+  // tolerate running before any player telemetry exists (bases fall back
+  // to the field centroid). Never applies outside cfg.simulation.
+  if (cfg.simulation) {
+    if (gs.phase === 'warmup') transitionFromWarmup(gs, now());
+    else if (gs.phase === 'base_setup') transitionFromBaseSetup(gs, now());
+  }
   return gs;
 }
 
@@ -1817,6 +1979,70 @@ function tickBots(gs, t) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  MATCH-SIMULATION BOT DRIVER (replaces tickBots when gs.cfg.simulation —
+//  see applySimOverrides above and packages/arops-shared/src/simScript.ts).
+//  Bots walk their scripted route at the same brisk-walk pace tickBots
+//  already uses (gradual steps, not a teleport — a big instant jump would
+//  trip the same anti-spoof plausibility check a real client is subject
+//  to), and fire their own scripted shots (tester-fired shots are driven by
+//  the mobile Match-Simulation screen itself, not here).
+// ═══════════════════════════════════════════════════════════
+const SIM_BOT_STEP_MS = 1200;
+const SIM_BOT_SPEED_MPS = 1.3;
+
+function activeSimWaypoint(route, elapsedMs) {
+  let active = route[0];
+  for (const w of route) {
+    if (w.tMs <= elapsedMs) active = w; else break;
+  }
+  return active;
+}
+
+function tickSimBots(gs, t) {
+  const snippet = gs._simSnippet;
+  if (!snippet) return;
+  if (gs._lastSimBotStep && t - gs._lastSimBotStep < SIM_BOT_STEP_MS) return;
+  gs._lastSimBotStep = t;
+  const elapsed = t - gs._simStartAt;
+  const stepM = (SIM_BOT_STEP_MS / 1000) * SIM_BOT_SPEED_MPS;
+
+  for (const botScript of snippet.bots) {
+    const p = gs.players[botScript.id];
+    if (!p || p.status !== 'alive') continue;
+    const wp = activeSimWaypoint(botScript.route, elapsed);
+    const dest = shared.destinationPoint(gs._simOrigin, wp.bearingDeg, wp.distanceM);
+    if (!p.lastAccepted) {
+      actionArTelemetry(gs, p.userId, {
+        sample: { lat: dest.lat, lon: dest.lon, ts: t, accuracyM: 3, headingDeg: 0 },
+      });
+      continue;
+    }
+    const distToDest = shared.haversineMeters(p.lastAccepted, dest);
+    const headingDeg = shared.bearingDeg(p.lastAccepted, dest);
+    const next = distToDest <= stepM ? dest : shared.destinationPoint(p.lastAccepted, headingDeg, stepM);
+    actionArTelemetry(gs, p.userId, {
+      sample: { lat: next.lat, lon: next.lon, ts: t, accuracyM: 3, headingDeg },
+    });
+  }
+
+  for (let i = 0; i < snippet.shoots.length; i++) {
+    const beat = snippet.shoots[i];
+    if (beat.shooterId === 'tester' || elapsed < beat.tMs || gs._simShotsDone.has(i)) continue;
+    gs._simShotsDone.add(i);
+    const shooterId = beat.shooterId;
+    const targetId = beat.targetId === 'tester' ? gs._simTesterId : beat.targetId;
+    const shooter = gs.players[shooterId];
+    const target = gs.players[targetId];
+    if (!shooter || !target || !shooter.lastAccepted || !target.lastAccepted) continue;
+    const headingDeg = shared.bearingDeg(shooter.lastAccepted, target.lastAccepted);
+    actionArHitAttempt(gs, shooterId, {
+      sample: { lat: shooter.lastAccepted.lat, lon: shooter.lastAccepted.lon, ts: t, accuracyM: 3, headingDeg },
+      targetId,
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  TICK (core: geofence exposure + proximity, then mode logic)
 // ═══════════════════════════════════════════════════════════
 function tickArops(gs) {
@@ -1842,7 +2068,7 @@ function tickArops(gs) {
   mode.tick(gs, t, dtMs);
   if (gs.gameOver) return;
 
-  tickBots(gs, t);
+  if (gs.cfg.simulation) tickSimBots(gs, t); else tickBots(gs, t);
 
   // Proximity warner (active shoot phases only)
   for (const p of Object.values(gs.players)) {
@@ -1962,6 +2188,7 @@ function getAropsSnapshot(gs, userId) {
       plantDwellMs: gs.timings.plantDwellMs,
       defuseDwellMs: gs.timings.defuseDwellMs,
       zoneRadiusM: gs.timings.zoneRadiusM,
+      radarDurationMs: gs.cfg.radarDurationMs,
     },
     me: me ? {
       role: me.role, team: me.team, class: me.class, status: me.status, score: me.score,

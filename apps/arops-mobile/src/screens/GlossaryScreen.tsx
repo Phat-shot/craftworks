@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { GAME_MODE_PROFILES, PLAYER_TYPE_PROFILES, GLOSSARY } from '@craftworks/arops-shared';
 import Icon, { IconName } from '../components/Icon';
+import { useTheme, ThemeTokens } from '../theme';
 
 // Read-only reference screen — pure display of the Steckbrief "database"
 // (packages/arops-shared/src/profiles.ts), no gameplay logic. Reachable as a
@@ -20,16 +21,18 @@ const CLASS_ICON: Record<string, IconName> = {
 function ExpandCard({ icon, title, subtitle, children }: {
   icon: IconName; title: string; subtitle: string; children: React.ReactNode;
 }) {
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
   const [open, setOpen] = useState(false);
   return (
     <View style={st.card}>
       <TouchableOpacity style={st.cardHeader} onPress={() => setOpen(o => !o)}>
-        <Icon name={icon} size={18} color="#f0c840" />
+        <Icon name={icon} size={18} color={theme.accent} />
         <View style={{ flex: 1 }}>
           <Text style={st.cardTitle}>{title}</Text>
           <Text style={st.cardSubtitle} numberOfLines={open ? undefined : 2}>{subtitle}</Text>
         </View>
-        <Icon name={open ? 'chevronUp' : 'chevronDown'} size={16} color="#807050" />
+        <Icon name={open ? 'chevronUp' : 'chevronDown'} size={16} color={theme.text3} />
       </TouchableOpacity>
       {open && <View style={st.cardBody}>{children}</View>}
     </View>
@@ -37,6 +40,8 @@ function ExpandCard({ icon, title, subtitle, children }: {
 }
 
 export default function GlossaryScreen({ onBack }: { onBack: () => void }) {
+  const theme = useTheme();
+  const st = useMemo(() => makeStyles(theme), [theme]);
   const [tab, setTab] = useState<Tab>('modes');
   const modes = Object.values(GAME_MODE_PROFILES);
   const classes = Object.values(PLAYER_TYPE_PROFILES);
@@ -45,9 +50,9 @@ export default function GlossaryScreen({ onBack }: { onBack: () => void }) {
     <View style={st.wrap}>
       <View style={st.header}>
         <TouchableOpacity onPress={onBack} style={st.backBtn}>
-          <Icon name="arrowRight" size={18} color="#c0a0f0" style={{ transform: [{ rotate: '180deg' }] }} />
+          <Icon name="arrowRight" size={18} color={theme.text2} style={{ transform: [{ rotate: '180deg' }] }} />
         </TouchableOpacity>
-        <Icon name="book" size={18} color="#f0c840" />
+        <Icon name="book" size={18} color={theme.accent} />
         <Text style={st.headerTitle}>Glossar</Text>
       </View>
 
@@ -120,43 +125,45 @@ export default function GlossaryScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-const st = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0a0810' },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 14, paddingTop: 20 },
-  backBtn: { padding: 4, marginRight: 2 },
-  headerTitle: { color: '#f0c840', fontSize: 17, fontWeight: '900' },
-  tabRow: { flexDirection: 'row', gap: 6, paddingHorizontal: 14, marginBottom: 4 },
-  tabBtn: {
-    flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
-    backgroundColor: 'rgba(40,32,64,.6)', borderWidth: 1, borderColor: '#2a2040',
-  },
-  tabBtnActive: { borderColor: '#f0c840', backgroundColor: 'rgba(240,200,64,.15)' },
-  tabTxt: { color: '#c0a0f0', fontSize: 12, fontWeight: '700' },
-  tabTxtActive: { color: '#f0c840' },
-  card: {
-    backgroundColor: '#141020', borderRadius: 12, borderWidth: 1, borderColor: '#2a2040',
-    marginBottom: 10, overflow: 'hidden',
-  },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12 },
-  cardTitle: { color: '#f0f0f0', fontSize: 14, fontWeight: '800' },
-  cardSubtitle: { color: '#a090c0', fontSize: 12, marginTop: 2 },
-  cardBody: { paddingHorizontal: 12, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#241c38' },
-  longText: { color: '#c0b8d0', fontSize: 12, lineHeight: 18, marginTop: 10 },
-  sectionLabel: { color: '#f0c840', fontSize: 11, fontWeight: '800', marginBottom: 6 },
-  subRow: { marginBottom: 6 },
-  subName: { color: '#e0d0f0', fontSize: 12, fontWeight: '700' },
-  subDesc: { color: '#a090c0', fontSize: 11, lineHeight: 16 },
-  paramRow: { marginBottom: 6 },
-  paramName: { color: '#e0d0f0', fontSize: 12, fontWeight: '700' },
-  paramUnit: { color: '#807050', fontWeight: '400' },
-  paramDesc: { color: '#a090c0', fontSize: 11, lineHeight: 16 },
-  statRow: { flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' },
-  statLabel: { color: '#807050', fontSize: 12, fontWeight: '700' },
-  statValue: { color: '#e0d0f0', fontSize: 12, flexShrink: 1 },
-  termRow: {
-    backgroundColor: '#141020', borderRadius: 10, borderWidth: 1, borderColor: '#2a2040',
-    padding: 12, marginBottom: 8,
-  },
-  termName: { color: '#f0c840', fontSize: 13, fontWeight: '800', marginBottom: 4 },
-  termDef: { color: '#c0b8d0', fontSize: 12, lineHeight: 17 },
-});
+function makeStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    wrap: { flex: 1, backgroundColor: theme.bg },
+    header: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 14, paddingTop: 20 },
+    backBtn: { padding: 4, marginRight: 2 },
+    headerTitle: { color: theme.accent, fontSize: 17, fontWeight: '900' },
+    tabRow: { flexDirection: 'row', gap: 6, paddingHorizontal: 14, marginBottom: 4 },
+    tabBtn: {
+      flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+      backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
+    },
+    tabBtnActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg2 },
+    tabTxt: { color: theme.text2, fontSize: 12, fontWeight: '700' },
+    tabTxtActive: { color: theme.accent },
+    card: {
+      backgroundColor: theme.bg2, borderRadius: 12, borderWidth: 1, borderColor: theme.border,
+      marginBottom: 10, overflow: 'hidden',
+    },
+    cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12 },
+    cardTitle: { color: theme.text, fontSize: 14, fontWeight: '800' },
+    cardSubtitle: { color: theme.text2, fontSize: 12, marginTop: 2 },
+    cardBody: { paddingHorizontal: 12, paddingBottom: 12, borderTopWidth: 1, borderTopColor: theme.border },
+    longText: { color: theme.text2, fontSize: 12, lineHeight: 18, marginTop: 10 },
+    sectionLabel: { color: theme.accent, fontSize: 11, fontWeight: '800', marginBottom: 6 },
+    subRow: { marginBottom: 6 },
+    subName: { color: theme.text, fontSize: 12, fontWeight: '700' },
+    subDesc: { color: theme.text2, fontSize: 11, lineHeight: 16 },
+    paramRow: { marginBottom: 6 },
+    paramName: { color: theme.text, fontSize: 12, fontWeight: '700' },
+    paramUnit: { color: theme.text3, fontWeight: '400' },
+    paramDesc: { color: theme.text2, fontSize: 11, lineHeight: 16 },
+    statRow: { flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' },
+    statLabel: { color: theme.text3, fontSize: 12, fontWeight: '700' },
+    statValue: { color: theme.text, fontSize: 12, flexShrink: 1 },
+    termRow: {
+      backgroundColor: theme.bg2, borderRadius: 10, borderWidth: 1, borderColor: theme.border,
+      padding: 12, marginBottom: 8,
+    },
+    termName: { color: theme.accent, fontSize: 13, fontWeight: '800', marginBottom: 4 },
+    termDef: { color: theme.text2, fontSize: 12, lineHeight: 17 },
+  });
+}

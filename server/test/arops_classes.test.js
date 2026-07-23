@@ -33,6 +33,14 @@ function tel(gs, uid, pos, over = {}) {
     sample: { lat: pos.lat, lon: pos.lon, ts: TS, accuracyM: 5, headingDeg: null, ...over },
   });
 }
+// Domination defaults to 'freeze' onHit (unchanged pre-existing default),
+// which now gets a base-less "Warmup" phase 1 before 'live' instead of
+// starting directly in it — see MODES' initialPhase in arops.js. Same helper
+// as arops_modes.test.js.
+function skipWarmup(gs) {
+  gs.phaseStartTime = Date.now() - (gs.timings.warmupMs + 100);
+  tick(gs, 100);
+}
 function shootAt(gs, uid, targetId, over = {}) {
   TS += 1100;
   return arops.actionArHitAttempt(gs, uid, {
@@ -44,7 +52,7 @@ const FAST = {
   captureDwellMs: 300, flagPickupDwellMs: 300, flagReturnMs: 800,
   plantDwellMs: 300, defuseDwellMs: 300, bombTimerMs: 2000,
   freezeMs: 1000, freezeExtensionMs: 500, freezeMoveToleranceM: 15,
-  baseSettingMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
+  baseSettingMs: 500, warmupMs: 500, minBaseSeparationM: 50, zoneRadiusM: 15,
   revealTrapRadiusM: 20,
 };
 const Z1 = shared.destinationPoint(MUC, 90, 100);
@@ -158,7 +166,7 @@ console.log('\n═══ Cross-mode class perk access ═══');
     { ar_settings: { polygon: FIELD, subMode: 'domination', zones: [Z1, Z2],
       timings: FAST, targetScore: 10, gameDurationMs: 600_000,
       classes: { A1: 'sniper', B1: 'bomber' } } });
-  tick(gs, 10);
+  skipWarmup(gs);
   tel(gs, 'A1', MUC);
 
   check('Sniper can use fake_marker outside hide_and_seek (domination)', () => {
@@ -221,7 +229,7 @@ console.log('\n═══ Reveal-Trap lifecycle ═══');
       // any unset class, so leaving B1's out would make it Scout too and
       // defeat the point of this test (it used to rely on "unset = classless").
       classes: { A1: 'scout', B1: 'sniper' }, revealTrapCooldownMs: 500, revealTrapDurationMs: 5000, revealTrapRevealMs: 3000 } });
-  tick(gs, 10);
+  skipWarmup(gs);
   tel(gs, 'A1', MUC);
 
   check('non-Scout cannot place a reveal trap', () => {
