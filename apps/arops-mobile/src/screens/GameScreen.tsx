@@ -421,6 +421,10 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const trapCdTotalRef = useRef(0);
   const cloakActiveTotalRef = useRef(0);
   const fakeActiveTotalRef = useRef(0);
+  // Guards against a long-press-to-drop gesture also firing the item
+  // slot's plain onPress (use-item) right after — TouchableOpacity fires
+  // onPress on release regardless of whether onLongPress already fired.
+  const itemLongPressRef = useRef(false);
   const cdFraction = (remainingMs: number, totalRef: { current: number }) => {
     if (remainingMs > totalRef.current) totalRef.current = remainingMs;
     if (remainingMs <= 0) { totalRef.current = 0; return 0; }
@@ -665,6 +669,12 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // (no cooldown/role check server-side, see actionArUseItem).
   const useItem = () =>
     socket.emit('game:action', { sessionId, action: 'ar_use_item', data: {} });
+  // Long-press on the item slot: drop instead of use — server places it
+  // ITEM_DROP_DISTANCE_M behind the player's heading (see actionArDropItem)
+  // so it isn't immediately re-picked-up, then renders as the same "loot
+  // crate" map marker any other dropped item uses.
+  const dropItem = () =>
+    socket.emit('game:action', { sessionId, action: 'ar_drop_item', data: {} });
   // Team ping (map tap, see onMapPress) — silently no-op for teamless modes
   // (no me.team means no teammates to ping; the server would reject it with
   // 'no_team' anyway, but checking client-side avoids a pointless round-trip).
@@ -1529,9 +1539,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </ShapeSource>
       )}
       {itemsGeoJSON.features.length > 0 && (
+        // "Loot crate" marker — shared by elimination-drops and a
+        // voluntary long-press drop alike (both just push onto gs.items
+        // server-side), amber/gold so it reads as treasure rather than
+        // blending into the perk-purple UI chrome.
         <ShapeSource id="items" shape={itemsGeoJSON as any}>
           <CircleLayer id="itemDots" style={{
-            circleRadius: 9, circleColor: '#c0a0f0', circleOpacity: 0.85,
+            circleRadius: 10, circleColor: '#e0a030', circleOpacity: 0.9,
             circleStrokeWidth: 2, circleStrokeColor: '#ffffff',
           }} />
         </ShapeSource>
@@ -1847,15 +1861,27 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   const heldItem = snap?.me?.heldItem ?? null;
   const ITEM_ICON: Record<string, IconName> = { cloak: 'ghost', fake_marker: 'mask', reveal_trap: 'trap' };
   const itemSlotBtn = (
-    <TouchableOpacity key="item" style={[st.radarBtn, st.btnRow]} onPress={useItem}
+    <TouchableOpacity key="item" style={[st.radarBtn, st.btnRow]}
+      onPress={() => {
+        if (itemLongPressRef.current) { itemLongPressRef.current = false; return; }
+        useItem();
+      }}
+      onLongPress={() => { itemLongPressRef.current = true; dropItem(); }}
       disabled={!heldItem || !shootPhase}>
       <Icon name={heldItem ? ITEM_ICON[heldItem.perkId] : 'checkboxBlank'} size={15}
         color={heldItem ? '#c0a0f0' : theme.text3} />
       <Text style={st.actTxt}>{heldItem ? 'Item' : '–'}</Text>
     </TouchableOpacity>
   );
-  const perkLeft = [radarBtn];
-  const perkRight = [classPerkBtn, itemSlotBtn];
+  // Action bar, left to right: Item | Perk | Cam (Schuss) | Radar |
+  // Settings — a single flat row instead of the old symmetric
+  // Radar|Schuss|Perk split with Settings floating separately above it.
+  const settingsBtn = (
+    <TouchableOpacity key="settings" style={[st.radarBtn, st.settingsBtn, viewPopupOpen && st.modeBtnActive]}
+      onPress={() => setViewPopupOpen(o => !o)}>
+      <Icon name="settings" size={18} color={viewPopupOpen ? theme.accent : theme.text2} />
+    </TouchableOpacity>
+  );
 
   // Status-bar center — priority: an active capture (continuous) > a fresh
   // hit/got-hit event (5s pulse) > revive prompt (toggles with the default
@@ -2185,17 +2211,7 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         </TouchableOpacity>
       )}
 
-      {/* Floating settings toggle — pulled out of the bottom bar so that bar
-          can stay exactly Perk1 | Schuss | Perk2, symmetric. Sits directly
-          above the action bar (measured height, see bottomBarH) instead of
-          floating over the map/overlapping the bar's own buttons. */}
-      <TouchableOpacity
-        style={[st.settingsFab, { bottom: bottomBarH + 8 }, viewPopupOpen && st.modeBtnActive]}
-        onPress={() => setViewPopupOpen(o => !o)}>
-        <Icon name="settings" size={20} color={viewPopupOpen ? theme.accent : theme.text2} />
-      </TouchableOpacity>
-
-      {/* Bottom bar: Perk1 | Schuss | Perk2 */}
+      {/* Bottom bar: Item | Perk | Cam | Radar | Settings, one flat row. */}
       <View style={st.bottomBar} onLayout={e => {
         // Guard against redundant updates — onLayout can fire again after the
         // resulting re-render even when the height didn't meaningfully
@@ -2210,9 +2226,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           </TouchableOpacity>
         )}
         <View style={st.bottomRow}>
-          <View style={st.bottomSide}>{perkLeft}</View>
-          <View style={st.bottomCenter}>{centerButton}</View>
-          <View style={st.bottomSide}>{perkRight}</View>
+          <View style={st.bottomItem}>{itemSlotBtn}</View>
+          <View style={st.bottomItem}>{classPerkBtn}</View>
+          <View style={st.bottomItem}>{centerButton}</View>
+          <View style={st.bottomItem}>{radarBtn}</View>
+          <View style={st.bottomItem}>{settingsBtn}</View>
         </View>
       </View>
     </View>
@@ -2321,9 +2339,8 @@ function makeStyles(theme: ThemeTokens) {
     borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center',
   },
   modeBtnActive: { borderColor: theme.borderStrong, backgroundColor: theme.bg2 },
-  bottomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
-  bottomSide: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
-  bottomCenter: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  bottomRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10 },
+  bottomItem: { alignItems: 'center', justifyContent: 'center' },
   btnRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   radarBtn: {
     backgroundColor: theme.bg3, borderWidth: 2, borderColor: theme.border,
@@ -2331,13 +2348,7 @@ function makeStyles(theme: ThemeTokens) {
   },
   actTxt: { color: theme.text2, fontWeight: '800', fontSize: 14 },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
-  settingsFab: {
-    // `bottom` here is just a fallback for the first render before bottomBarH
-    // is measured — the actual value is always overridden inline (bottomBarH + 8).
-    position: 'absolute', right: 14, bottom: 108, width: 42, height: 38, borderRadius: 8,
-    backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border,
-    alignItems: 'center', justifyContent: 'center', zIndex: 20,
-  },
+  settingsBtn: { paddingHorizontal: 13, paddingVertical: 13 },
   recenterBtn: {
     position: 'absolute', right: 14, bottom: 70, width: 46, height: 46, borderRadius: 23,
     backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent,

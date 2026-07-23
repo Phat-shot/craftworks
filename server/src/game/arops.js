@@ -2110,6 +2110,38 @@ function actionArUseItem(gs, userId) {
   return { ok: false, err: 'unknown_item' };
 }
 
+/**
+ * Voluntarily drop a held item (long-press on the item slot, client-side)
+ * instead of using it — dropped ITEM_DROP_DISTANCE_M behind the player's
+ * current heading (or a random bearing without a compass fix) rather than
+ * right at their feet, so tickArops's own pickup loop (instant on presence
+ * within ITEM_PICKUP_RADIUS_M, see there) doesn't immediately re-collect
+ * it the very next tick. Renders as the same "loot crate" marker as any
+ * other gs.items entry (dropEliminatedPerkItem's elimination-drops use the
+ * identical array/shape) — client-side map layer needs no special case.
+ */
+const ITEM_DROP_DISTANCE_M = 20; // comfortably > ITEM_PICKUP_RADIUS_M (10m)
+function actionArDropItem(gs, userId) {
+  const mode = MODES[gs.subMode];
+  const p = gs.players[userId];
+  if (!p) return { ok: false, err: 'not_in_game' };
+  if (gs.gameOver) return { ok: false, err: 'game_over' };
+  if (p.status === 'downed') return { ok: false, err: 'downed' };
+  if (!mode.shootPhases.includes(gs.phase)) return { ok: false, err: 'wrong_phase' };
+  if (!p.heldItem) return { ok: false, err: 'no_item' };
+  if (!p.lastAccepted) return { ok: false, err: 'no_position' };
+  const t = now();
+  const bearing = typeof p.lastAccepted.headingDeg === 'number'
+    ? (p.lastAccepted.headingDeg + 180) % 360
+    : Math.random() * 360;
+  const dropPos = shared.destinationPoint(p.lastAccepted, bearing, ITEM_DROP_DISTANCE_M);
+  const perkId = p.heldItem.perkId;
+  gs.items.push({ id: `item_${++gs._itemSeq}`, perkId, lat: dropPos.lat, lon: dropPos.lon, droppedAt: t });
+  p.heldItem = null;
+  pushEvent(gs, 'item_dropped', { userId, perkId });
+  return { ok: true };
+}
+
 // ═══════════════════════════════════════════════════════════
 //  BOTS (debug/testing only — added via LobbyScreen's "+ Bot" button,
 //  never persisted to the users table; see socket.js lobby:ar_update).
@@ -2533,6 +2565,6 @@ function getAropsSnapshot(gs, userId) {
 
 module.exports = {
   createAropsGame, tickArops, getAropsSnapshot,
-  actionArTelemetry, actionArHitAttempt, actionArUsePerk, actionArUseItem, actionArSetBase,
+  actionArTelemetry, actionArHitAttempt, actionArUsePerk, actionArUseItem, actionArDropItem, actionArSetBase,
   ARO_DEFAULTS: DEFAULTS,
 };

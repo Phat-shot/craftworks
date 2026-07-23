@@ -159,5 +159,54 @@ console.log('\n═══ USE ═══');
   });
 }
 
+console.log('\n═══ VOLUNTARY DROP ═══');
+{
+  check('dropping places the item on the map, behind the player\'s heading, and clears the held slot', () => {
+    const { gs, baseA } = setupDeathmatch('item_drop');
+    gs.players.A1.heldItem = { perkId: 'cloak', pickedUpAt: Date.now() };
+    tel(gs, 'A1', baseA, { headingDeg: 0 }); // facing due north -> drop lands south
+    const before = gs.items.length;
+    const r = arops.actionArDropItem(gs, 'A1');
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(gs.players.A1.heldItem, null, 'slot cleared');
+    assert.equal(gs.items.length, before + 1);
+    const dropped = gs.items[gs.items.length - 1];
+    assert.equal(dropped.perkId, 'cloak');
+    const dist = shared.haversineMeters(gs.players.A1.lastAccepted, dropped);
+    assert.ok(dist >= 19 && dist <= 21, `expected ~20m away, got ${dist}`);
+    const brg = shared.bearingDeg(gs.players.A1.lastAccepted, dropped);
+    assert.ok(brg > 170 && brg < 190, `expected dropped roughly south (180°) of a north-facing player, got ${brg}`);
+  });
+
+  check('the drop distance exceeds the pickup radius — the dropper does not immediately re-collect their own item', () => {
+    const { gs, baseA } = setupDeathmatch('item_drop_no_repickup');
+    gs.players.A1.heldItem = { perkId: 'fake_marker', pickedUpAt: Date.now() };
+    tel(gs, 'A1', baseA, { headingDeg: 90 });
+    arops.actionArDropItem(gs, 'A1');
+    assert.equal(gs.players.A1.heldItem, null);
+    tick(gs, 200); // tickArops's own pickup loop runs here
+    assert.equal(gs.players.A1.heldItem, null, 'still empty-handed — dropped item was out of pickup range');
+    assert.equal(gs.items.length, 1, 'item still sitting on the map, unpicked');
+  });
+
+  check('without a compass fix (headingDeg null), drop still lands a safe distance away', () => {
+    const { gs, baseA } = setupDeathmatch('item_drop_no_heading');
+    gs.players.A1.heldItem = { perkId: 'reveal_trap', pickedUpAt: Date.now() };
+    tel(gs, 'A1', baseA); // default tel() heading is null
+    const r = arops.actionArDropItem(gs, 'A1');
+    assert.equal(r.ok, true);
+    const dropped = gs.items[gs.items.length - 1];
+    const dist = shared.haversineMeters(gs.players.A1.lastAccepted, dropped);
+    assert.ok(dist >= 19 && dist <= 21, `expected ~20m away regardless of bearing, got ${dist}`);
+  });
+
+  check('dropping with no held item is rejected', () => {
+    const { gs } = setupDeathmatch('item_drop_none');
+    const r = arops.actionArDropItem(gs, 'A1');
+    assert.equal(r.ok, false);
+    assert.equal(r.err, 'no_item');
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
