@@ -392,6 +392,16 @@ export async function createArLobby(name: string): Promise<{ lobbyId: string; co
   return { lobbyId: data.id, code: data.code };
 }
 
+export interface PlayableHuntScenario { id: string; title: string; poi_count: number; progress_mode?: string | null; }
+
+/** Lobby-side "pick a scenario" list for the Schnitzeljagd AR-Ops mode —
+ *  any host can pick any scenario with at least one POI (not owner-scoped,
+ *  unlike the creator/editor's own scenario list). */
+export async function fetchPlayableHuntScenarios(): Promise<PlayableHuntScenario[]> {
+  try { return await req('/hunt/scenarios/playable', undefined, 'GET'); }
+  catch { return []; }
+}
+
 /** Host-only: QR data-URL + full join link for the lobby. */
 export async function fetchLobbyQr(lobbyId: string): Promise<{ qr: string; code: string; url: string } | null> {
   try { const d = await req(`/lobbies/${lobbyId}/qr`, undefined, 'GET'); return { qr: d.qr, code: d.code, url: d.url }; }

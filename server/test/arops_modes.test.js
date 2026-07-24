@@ -1919,5 +1919,104 @@ console.log('\n═══ IR MODE ═══');
   });
 }
 
+// ═══ SCHNITZELJAGD (Schnitzeljagd/hunt.js hosted as a real arops.js mode) ═══
+console.log('\n═══ SCHNITZELJAGD ═══');
+{
+  // hunt.js's createHuntRun needs already-loaded DB rows — the socket layer
+  // (lobby:start) normally loads these before gameManager.create, see
+  // ar._huntPreloaded in createAropsGame. Tests bypass that DB seam the same
+  // way every other mode's tests bypass socket/game.js entirely: feed the
+  // rows straight into ar_settings.
+  const poi = (id, orderIndex, bearingDeg, distanceM, extra = {}) => {
+    const p = shared.destinationPoint(MUC, bearingDeg, distanceM);
+    return { id, order_index: orderIndex, lat: p.lat, lon: p.lon, radius_m: 15, poi_type: 'base', ...extra };
+  };
+  const mkHunt = (players, pois, progressMode = 'individual') => createGame(
+    'hunt' + Math.random(), players,
+    {
+      ar_settings: {
+        polygon: FIELD, subMode: 'schnitzeljagd', gameDurationMs: 600_000,
+        _huntPreloaded: { scenario: { id: 'sc1', config: { progressMode } }, pois, routes: [] },
+      },
+    }
+  );
+
+  check('arrival at a sequential group\'s only POI advances the track to the next group', () => {
+    const p1 = poi('p1', 0, 0, 30);
+    const p2 = poi('p2', 1, 90, 30);
+    const gs = mkHunt([{ userId: 'A', username: 'A' }], [p1, p2]);
+    const track = gs.modeState.run.progress['A'];
+    assert.equal(track.groupIdx, 0);
+    tel(gs, 'A', p1);
+    tick(gs, 100);
+    assert.equal(gs.modeState.run.progress['A'].groupIdx, 1, 'should have advanced past group 0');
+  });
+
+  check('a parallel group (2 POIs, same order_index) shows both as current at once', () => {
+    const p1 = poi('p1', 0, 0, 30);
+    const p2 = poi('p2', 0, 90, 30); // same order_index -> parallel group
+    const gs = mkHunt([{ userId: 'A', username: 'A' }], [p1, p2]);
+    const snap = arops.getAropsSnapshot(gs, 'A');
+    assert.equal(snap.huntCurrentPois.length, 2, 'both POIs of a parallel group must be current at once');
+    const ids = snap.huntCurrentPois.map(x => x.id).sort();
+    assert.deepEqual(ids, ['p1', 'p2']);
+  });
+
+  check('snapshot never leaks another track\'s progress; isOpponentPair stays false cross-team', () => {
+    const p1 = poi('p1', 0, 0, 30);
+    const p2 = poi('p2', 1, 90, 30);
+    const gs = mkHunt(
+      [{ userId: 'A1', username: 'A1' }, { userId: 'A2', username: 'A2' }, { userId: 'B1', username: 'B1' }],
+      [p1, p2], 'teams'
+    );
+    // createAropsGame's own alternating team assignment (idx % 2) puts
+    // A1/B1 on team a and A2 on team b by default — pin explicit teams via
+    // ar_settings.teams instead of relying on that, for clarity here.
+    gs.players['A1'].team = 'a'; gs.players['A2'].team = 'a'; gs.players['B1'].team = 'b';
+    // Rebuild the run's tracks for the corrected team assignment (mkHunt
+    // already built one off the alternating default before this override).
+    gs.modeState.run.progress = {};
+    require('../src/game/hunt').startProgressTrack(gs.modeState.run, 'a');
+    require('../src/game/hunt').startProgressTrack(gs.modeState.run, 'b');
+
+    tel(gs, 'A1', p1);
+    // Team b's own player, standing somewhere that isn't any POI — just
+    // establishes a revealed position without accidentally also completing
+    // team b's p1 (which would defeat the point of this test).
+    tel(gs, 'B1', shared.destinationPoint(MUC, 200, 20));
+    tick(gs, 100); // team a arrives at p1 -> advances to group 1 (p2); team b untouched
+
+    const snapA = arops.getAropsSnapshot(gs, 'A1');
+    const snapB = arops.getAropsSnapshot(gs, 'B1');
+    assert.deepEqual(snapA.huntCurrentPois.map(x => x.id), ['p2'], 'team a should be on p2 now');
+    assert.deepEqual(snapB.huntCurrentPois.map(x => x.id), ['p1'], 'team b must still be on p1, unaffected by team a');
+
+    assert.notEqual(snapA.players.find(x => x.userId === 'B1').lat, undefined,
+      'cross-team position must stay visible (cooperative mode, isOpponentPair always false)');
+  });
+
+  check('a completed POI stays present (flagged) across a group boundary', () => {
+    const p1 = poi('p1', 0, 0, 30);
+    const p2 = poi('p2', 1, 90, 30);
+    const gs = mkHunt([{ userId: 'A', username: 'A' }], [p1, p2]);
+    tel(gs, 'A', p1);
+    tick(gs, 100); // completes group 0 (p1), advances to group 1 (p2)
+    const snap = arops.getAropsSnapshot(gs, 'A');
+    assert.deepEqual(snap.huntCompletedPois.map(x => x.id), ['p1']);
+    assert.deepEqual(snap.huntCurrentPois.map(x => x.id), ['p2']);
+  });
+
+  check('full-run completion ends the game; a later tick is a no-op', () => {
+    const p1 = poi('p1', 0, 0, 30);
+    const gs = mkHunt([{ userId: 'A', username: 'A' }], [p1]);
+    tel(gs, 'A', p1);
+    tick(gs, 100); // only group -> run ends
+    assert.equal(gs.gameOver, true);
+    assert.equal(gs.winner, 'complete');
+    tick(gs, 100); // must not throw or change anything once already over
+    assert.equal(gs.gameOver, true);
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

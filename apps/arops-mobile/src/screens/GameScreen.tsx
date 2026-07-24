@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Animated, TextInput } from 'react-native';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
 import {
   destinationPoint, DEFAULT_HIT_CONFIG, hitToleranceDeg, haversineMeters, bearingDeg, angleDeltaDeg,
@@ -112,6 +112,25 @@ interface Snap {
   capture?: { team?: 'a'|'b'; userId?: string; pct: number } | null;
   armed?: { explodeAt: number; defusePct: number } | null;
   events: { seq: number; type: string; userId?: string; byUserId?: string; winner?: string }[];
+  // Schnitzeljagd — see arops.js's MODES.schnitzeljagd.snapshotExtras. Only
+  // ever the VIEWER'S OWN progress-track: huntCurrentPois is the current
+  // group's POI(s) (plural only for a genuine parallel group — never
+  // upcoming/not-yet-current POIs, those simply aren't sent at all), and
+  // huntCompletedPois is this track's own finished POIs so far (kept across
+  // group-boundary advances even though hunt.js itself resets its own
+  // per-group completedPoiIds).
+  huntRunId?: string;
+  huntGroupIdx?: number;
+  huntGroupCount?: number;
+  huntCompletedAt?: number | null;
+  huntRouteDeviation?: boolean;
+  huntLegDeadlineAt?: number | null;
+  huntCurrentPois?: {
+    id: string; name: string; lat: number; lon: number; radiusM: number;
+    type: 'puzzle' | 'target' | 'capture' | 'base' | 'carry_from' | 'carry_to';
+    arrivedAt: number | null; taskDeadlineAt: number | null;
+  }[];
+  huntCompletedPois?: { id: string; name: string; lat: number; lon: number; radiusM: number; type: string }[];
 }
 
 interface RadarContact { userId: string; lat: number; lon: number; ageMs: number; }
@@ -437,6 +456,9 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     return totalRef.current > 0 ? remainingMs / totalRef.current : 0;
   };
   const [lastResult, setLastResult] = useState<Toast | null>(null);
+  // Schnitzeljagd puzzle-answer inputs, keyed by POI id — only ever holds
+  // entries for the current group's puzzle POIs (see huntPanel below).
+  const [huntAnswers, setHuntAnswers] = useState<Record<string, string>>({});
   // Bumped once per fired shot — ShockwaveEffect replays its animation
   // whenever this changes (see its own doc comment). 0 = "never fired yet".
   const [shotEffectKey, setShotEffectKey] = useState(0);
@@ -638,6 +660,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       } else if (r.action === 'ar_set_base') {
         setLastResult(r.ok ? { icon: 'flag', text: 'Base gesetzt!' } : (ERR_DE[r.err] || { icon: 'close', text: r.err }));
         setTimeout(() => setLastResult(null), 4000);
+      } else if (r.action === 'ar_hunt_puzzle_answer') {
+        setLastResult(!r.ok ? { icon: 'close', text: r.err || 'Fehler' }
+          : r.correct ? { icon: 'checkCircle', text: 'Richtig!' } : { icon: 'close', text: 'Leider falsch' });
+        setTimeout(() => setLastResult(null), 4000);
+      } else if (r.action === 'ar_hunt_confirm_task') {
+        setLastResult(r.ok ? { icon: 'checkCircle', text: 'Erledigt!' } : (ERR_DE[r.err] || { icon: 'close', text: r.err }));
+        setTimeout(() => setLastResult(null), 4000);
       }
     };
     socket.on('game:ar_tick', onTick);
@@ -694,6 +723,11 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
       sessionId, action: 'ar_set_base',
       data: lat !== undefined ? { lat, lon } : {},
     });
+
+  const submitHuntPuzzleAnswer = (poiId: string, answer: string) =>
+    socket.emit('game:action', { sessionId, action: 'ar_hunt_puzzle_answer', data: { poiId, answer } });
+  const confirmHuntTask = (poiId: string) =>
+    socket.emit('game:action', { sessionId, action: 'ar_hunt_confirm_task', data: { poiId } });
 
   // ── Geo layers ────────────────────────────────────────────
   const center: [number, number] = useMemo(() => {
@@ -1018,8 +1052,21 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         if (b) ents.push({ id: 'base_' + key, lat: b.lat, lon: b.lon, radiusM: snap.zoneRadiusM || 15, color: colorForKey(key) });
       }
     }
+    // Schnitzeljagd: completed POIs first (grayed out, drawn underneath),
+    // then the current group's — plural only for a genuine parallel group.
+    // No separate "upcoming" entry ever exists here at all (the server only
+    // ever sends the viewer's own current+completed POIs, see Snap above),
+    // which is exactly what satisfies "only the current target, no marker
+    // for upcoming ones" without any client-side filtering needed.
+    for (const p of snap?.huntCompletedPois || []) {
+      ents.push({ id: 'hdone_' + p.id, lat: p.lat, lon: p.lon, radiusM: p.radiusM, color: '#605850' });
+    }
+    for (const p of snap?.huntCurrentPois || []) {
+      ents.push({ id: 'hcur_' + p.id, lat: p.lat, lon: p.lon, radiusM: p.radiusM, color: '#f0c840' });
+    }
     return ents;
-  }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.targets), JSON.stringify(snap?.bases), snap?.zoneRadiusM]);
+  }, [JSON.stringify(snap?.zones), JSON.stringify(snap?.targets), JSON.stringify(snap?.bases), snap?.zoneRadiusM,
+      JSON.stringify(snap?.huntCurrentPois), JSON.stringify(snap?.huntCompletedPois)]);
 
   const zonesGeoJSON = useMemo(() => ({
     type: 'FeatureCollection' as const,
@@ -1199,9 +1246,16 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
   // phase (see server's shootPhases)" — broke for the ffa variant of those
   // modes (no team assigned, but still 'live'/'base_setup', never H&S's
   // 'seeking'). subMode is the actual signal, independent of team.
-  const isTeamCapableMode = snap?.subMode !== 'hide_and_seek';
+  // Schnitzeljagd has no shooting/combat mechanic at all (MODES.schnitzeljagd's
+  // shootPhases is empty server-side) — it still runs its whole match in the
+  // 'live' phase though, so without this it would fall into
+  // isTeamCapableMode's "phase==='live'" branch and the shutter/radar/class-
+  // perk buttons would show up (and be tappable, just always server-rejected)
+  // for a mode that has none of those.
+  const isHunt = snap?.subMode === 'schnitzeljagd';
+  const isTeamCapableMode = snap?.subMode !== 'hide_and_seek' && !isHunt;
   const shootPhase = isTeamCapableMode ? snap?.phase === 'live' : snap?.phase === 'seeking';
-  const canShoot = shootPhase && snap?.me?.status === 'alive'
+  const canShoot = !isHunt && shootPhase && snap?.me?.status === 'alive'
     && (snap?.me?.frozenRemainingMs ?? 0) <= 0
     && (isTeamCapableMode || isSeeker);
   const radarCd = snap?.me?.radarCooldownRemainingMs ?? 0;
@@ -1283,8 +1337,13 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
         : `A ${snap?.captures?.a ?? 0} : ${snap?.captures?.b ?? 0} B · Ziel ${snap?.targetCaptures}`)
     : snap?.subMode === 'seek_destroy'
     ? zerstorenLine()
+    : snap?.subMode === 'schnitzeljagd'
+    ? `Ziel ${(snap.huntGroupIdx ?? 0) + 1} von ${snap.huntGroupCount ?? '?'}`
     : null;
-  const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag' : snap?.subMode === 'seek_destroy' ? 'bomb' : 'target';
+  const scoreIcon: IconName = snap?.subMode === 'ctf' ? 'flag'
+    : snap?.subMode === 'seek_destroy' ? 'bomb'
+    : snap?.subMode === 'schnitzeljagd' ? 'flagCheckered'
+    : 'target';
   // Status-bar center default — reuses scoreLine for the 3 modes it already
   // covers (own score vs. opponent, team mode; own alone, ffa), adds
   // Deathmatch's own kills-based reading on top (scoreLine itself stays
@@ -1899,6 +1958,57 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
     </TouchableOpacity>
   );
 
+  // Schnitzeljagd task panel — replaces the whole shoot/radar/perk/item row
+  // (none of that applies, see canShoot/isHunt above) with one card per
+  // current-group POI (plural only for a genuine parallel group). Modeled
+  // on the retired HuntPlayScreen's per-poi_type action logic: 'puzzle'
+  // needs a submitted answer, 'target'/'capture' needs an explicit confirm
+  // (only once arrived — mirrors hunt.js's own not_at_poi gate), the
+  // arrival-only types ('base'/'carry_from'/'carry_to') auto-complete
+  // server-side on arrival, nothing to submit here at all.
+  const huntPanel = isHunt && (
+    <View style={st.huntPanel}>
+      {(snap?.huntCurrentPois || []).map(p => {
+        const arrived = !!p.arrivedAt;
+        if (p.type === 'puzzle') {
+          return (
+            <View key={p.id} style={st.huntCard}>
+              <Text style={st.huntCardTitle} numberOfLines={1}>{p.name}</Text>
+              <TextInput
+                style={st.huntInput}
+                placeholder={arrived ? 'Antwort…' : 'Erst hinlaufen…'}
+                placeholderTextColor={theme.text3}
+                editable={arrived}
+                value={huntAnswers[p.id] || ''}
+                onChangeText={t => setHuntAnswers(a => ({ ...a, [p.id]: t }))}
+              />
+              <TouchableOpacity style={st.huntBtn} disabled={!arrived || !huntAnswers[p.id]}
+                onPress={() => submitHuntPuzzleAnswer(p.id, huntAnswers[p.id] || '')}>
+                <Text style={st.huntBtnTxt}>Antworten</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+        if (p.type === 'target' || p.type === 'capture') {
+          return (
+            <View key={p.id} style={st.huntCard}>
+              <Text style={st.huntCardTitle} numberOfLines={1}>{p.name}</Text>
+              <TouchableOpacity style={st.huntBtn} disabled={!arrived} onPress={() => confirmHuntTask(p.id)}>
+                <Text style={st.huntBtnTxt}>{arrived ? 'Bestätigen' : 'Erst hinlaufen…'}</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+        return (
+          <View key={p.id} style={st.huntCard}>
+            <Text style={st.huntCardTitle} numberOfLines={1}>{p.name}</Text>
+            <Text style={st.huntCardHint}>{arrived ? 'Erledigt' : 'Automatisch bei Ankunft'}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+
   // Status-bar center — priority: an active capture (continuous) > a fresh
   // hit/got-hit event (5s pulse) > revive prompt (toggles with the default
   // every 5s while needed) > the normal default (own score vs. opponent's,
@@ -1988,13 +2098,18 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
           </Text>
         </View>
       )}
-      {snap?.me?.geofence === 'warning' && (
+      {/* Schnitzeljagd's field is a synthesized bounding box around the
+          scenario's own POIs, never a real playfield boundary a host drew —
+          a real walking route between POIs can easily bow outside it, so
+          the geofence warning here would just be a false alarm, not a rule
+          violation (nothing in MODES.schnitzeljagd enforces this boundary). */}
+      {snap?.subMode !== 'schnitzeljagd' && snap?.me?.geofence === 'warning' && (
         <View style={st.geoWarn}>
           <Icon name="boundary" size={12} color="#100" />
           <Text style={st.geoTxt}>Spielfeldrand!</Text>
         </View>
       )}
-      {snap?.me?.geofence === 'outside' && (
+      {snap?.subMode !== 'schnitzeljagd' && snap?.me?.geofence === 'outside' && (
         <View style={st.geoOut}>
           <Icon name="alertOctagon" size={12} color="#100" />
           <Text style={st.geoTxt}>AUSSERHALB — zurück ins Feld!</Text>
@@ -2241,13 +2356,22 @@ export default function GameScreen({ sessionId, onExit, watchSync }: {
             <Text style={st.baseTxt}>Base HIER setzen</Text>
           </TouchableOpacity>
         )}
-        <View style={st.bottomRow}>
-          <View style={st.bottomItem}>{itemSlotBtn}</View>
-          <View style={st.bottomItem}>{classPerkBtn}</View>
-          <View style={st.bottomItem}>{centerButton}</View>
-          <View style={st.bottomItem}>{radarBtn}</View>
-          <View style={st.bottomItem}>{settingsBtn}</View>
-        </View>
+        {isHunt ? (
+          <>
+            {huntPanel}
+            <View style={st.bottomRow}>
+              <View style={st.bottomItem}>{settingsBtn}</View>
+            </View>
+          </>
+        ) : (
+          <View style={st.bottomRow}>
+            <View style={st.bottomItem}>{itemSlotBtn}</View>
+            <View style={st.bottomItem}>{classPerkBtn}</View>
+            <View style={st.bottomItem}>{centerButton}</View>
+            <View style={st.bottomItem}>{radarBtn}</View>
+            <View style={st.bottomItem}>{settingsBtn}</View>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -2365,6 +2489,22 @@ function makeStyles(theme: ThemeTokens) {
   actTxt: { color: theme.text2, fontWeight: '800', fontSize: 14 },
   baseBtnRow: { marginHorizontal: 16, marginBottom: 8, justifyContent: 'center' },
   settingsBtn: { paddingHorizontal: 13, paddingVertical: 13 },
+  huntPanel: { paddingHorizontal: 10, marginBottom: 8, gap: 8 },
+  huntCard: {
+    backgroundColor: theme.bg3, borderWidth: 2, borderColor: theme.border,
+    borderRadius: 12, padding: 10, gap: 6,
+  },
+  huntCardTitle: { color: theme.text, fontWeight: '800', fontSize: 13 },
+  huntCardHint: { color: theme.text3, fontSize: 12 },
+  huntInput: {
+    backgroundColor: theme.bg2, borderWidth: 1, borderColor: theme.border, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 8, color: theme.text, fontSize: 14,
+  },
+  huntBtn: {
+    backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent,
+    borderRadius: 8, paddingVertical: 9, alignItems: 'center',
+  },
+  huntBtnTxt: { color: theme.accent, fontWeight: '800', fontSize: 13 },
   recenterBtn: {
     position: 'absolute', right: 14, bottom: 70, width: 46, height: 46, borderRadius: 23,
     backgroundColor: theme.bg2, borderWidth: 2, borderColor: theme.accent,

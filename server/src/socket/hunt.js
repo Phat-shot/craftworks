@@ -413,4 +413,4 @@ function registerHuntSandboxHandlers(io, socket, db) {
   });
 }
 
-module.exports = { registerHuntSandboxHandlers };
+module.exports = { registerHuntSandboxHandlers, loadScenarioRows };

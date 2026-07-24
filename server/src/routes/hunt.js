@@ -138,6 +138,29 @@ router.get('/scenarios', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'db_error' }); }
 });
 
+// GET /api/hunt/scenarios/playable — the lobby-side "pick a scenario to run"
+// list for the Schnitzeljagd AR-Ops mode (see socket/game.js's lobby:start
+// preflight). Deliberately NOT owner/admin-scoped like /scenarios above —
+// any host needs to be able to pick any scenario with at least one POI, not
+// just their own — and deliberately minimal fields, no pois/routes/full
+// config leak, just enough for a picker list. Must stay registered BEFORE
+// /scenarios/:id below, or Express would try (and fail) to match "playable"
+// as that route's :id param instead.
+router.get('/scenarios/playable', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await req.db.query(`
+      SELECT s.id, s.title, COUNT(p.id)::int AS poi_count,
+        s.config->>'progressMode' AS progress_mode
+      FROM hunt_scenarios s
+      LEFT JOIN hunt_pois p ON p.scenario_id = s.id
+      GROUP BY s.id
+      HAVING COUNT(p.id) > 0
+      ORDER BY s.updated_at DESC
+    `);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: 'db_error' }); }
+});
+
 // GET /api/hunt/scenarios/:id — full detail (pois ordered, routes)
 router.get('/scenarios/:id', requireAuth, async (req, res) => {
   try {

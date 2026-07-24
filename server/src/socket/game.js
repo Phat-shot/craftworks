@@ -9,6 +9,8 @@ const { RACES } = require('../game/towers');
 const aropsShared = require('@craftworks/arops-shared');
 const { BUILTIN_MAPS: BUILTIN_MAP_LIST } = require('../game/data/maps');
 const { effectiveArSettings } = require('./platform');
+const { loadScenarioRows } = require('./hunt');
+const { nanoid } = require('nanoid');
 
 // Enrich TA workshopConfig with server-side sequences (never sent through client)
 function enrichTaConfig(wc) {
@@ -116,6 +118,63 @@ function registerGameHandlers(io, socket, db) {
     // AR Ops preflight: playfield + roles must be complete before start
     if (lobby.game_mode === 'ar_ops') {
       const ar = await effectiveArSettings(db, lobbyId, lobby.workshop_map_config?.ar_settings);
+
+      if (ar.subMode === 'schnitzeljagd') {
+        // Schnitzeljagd's lobby has no polygon-drawing step (see
+        // LobbyScreen's rudimentary team-formation-only branch for this
+        // mode) — everything else this mode needs comes from a
+        // pre-authored scenario instead, loaded here (main thread; the
+        // worker thread that actually runs the match has no DB access at
+        // all, see createAropsGame's ar._huntPreloaded).
+        if (!ar.huntScenarioId) return socket.emit('error', { code: 'ar_no_hunt_scenario' });
+        const { rows: scRows } = await db.query('SELECT * FROM hunt_scenarios WHERE id=$1', [ar.huntScenarioId]);
+        const scenario = scRows[0];
+        if (!scenario) return socket.emit('error', { code: 'ar_hunt_scenario_not_found' });
+        const { pois, routes } = await loadScenarioRows(db, ar.huntScenarioId);
+        if (!pois.length) return socket.emit('error', { code: 'ar_hunt_scenario_empty' });
+
+        // Synthesize a field polygon from the POIs' bounding box, padded
+        // generously — a real walking route between POIs rarely follows a
+        // straight line, and unlike every other mode this boundary is never
+        // gameplay-enforced here (no geofence-based hit/scoring logic reads
+        // it in MODES.schnitzeljagd) — it exists purely so validatePolygon/
+        // telemetry have something to compare against.
+        const lats = pois.map(p => p.lat), lons = pois.map(p => p.lon);
+        const PAD_M = 120;
+        const latPad = PAD_M / 111_320;
+        const lonPad = PAD_M / (111_320 * Math.cos((lats[0] || 0) * Math.PI / 180));
+        let south = Math.min(...lats) - latPad, north = Math.max(...lats) + latPad;
+        let west = Math.min(...lons) - lonPad, east = Math.max(...lons) + lonPad;
+        // Floor a tightly-clustered scenario to a minimum ~30x30m box so it
+        // still clears validatePolygon's area minimum.
+        const MIN_HALF_DEG = 15 / 111_320;
+        if (north - south < MIN_HALF_DEG * 2) { const c = (north + south) / 2; south = c - MIN_HALF_DEG; north = c + MIN_HALF_DEG; }
+        if (east - west < MIN_HALF_DEG * 2) { const c = (east + west) / 2; west = c - MIN_HALF_DEG; east = c + MIN_HALF_DEG; }
+        ar.polygon = [{ lat: north, lon: west }, { lat: north, lon: east }, { lat: south, lon: east }, { lat: south, lon: west }];
+
+        // A hunt_sessions row is normally the "scan a code" entry point —
+        // this path never shows a code (joining happens through the
+        // ordinary lobby instead), but hunt_sessions.scenario_id/code are
+        // required NOT NULL/UNIQUE, so generate an internal-only code
+        // purely to satisfy that shape (nanoid(8), same convention
+        // routes/hunt.js's own genSessionCode uses for real scan codes).
+        const { rows: hsRows } = await db.query(
+          `INSERT INTO hunt_sessions (scenario_id, code, max_users) VALUES ($1,$2,NULL) RETURNING id`,
+          [ar.huntScenarioId, nanoid(8).toUpperCase()]
+        );
+        ar._huntSessionId = hsRows[0].id;
+        ar._huntPreloaded = { scenario, pois, routes };
+
+        // Real hunt_runs row, correctly linked to the lobby for the first
+        // time — hunt_runs.lobby_id's own schema comment anticipated this
+        // exact path but nothing wrote it before now (the old join-by-code
+        // path never goes through an ordinary lobby at all).
+        await db.query(
+          `INSERT INTO hunt_runs (session_id, lobby_id, progress_mode) VALUES ($1,$2,$3)`,
+          [ar._huntSessionId, lobbyId, scenario.config?.progressMode || 'shared']
+        ).catch(e => console.error('[lobby:start] hunt_runs insert:', e.message)); // best-effort, never blocks starting the match
+      }
+
       lobby.workshop_map_config = { ...(lobby.workshop_map_config || {}), ar_settings: ar };
       const polyCheck = ar?.polygon ? aropsShared.validatePolygon(ar.polygon) : { ok: false, errors: ['too_few_points'] };
       if (!polyCheck.ok) {

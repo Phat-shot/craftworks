@@ -28,6 +28,7 @@
 //  now, not yet a behavior source — see that file's own header comment.
 // ═══════════════════════════════════════════════════════════
 const shared = require('@craftworks/arops-shared');
+const hunt = require('./hunt');
 
 const BUFFER_CAP = 40;
 const EVENT_CAP = 50;
@@ -224,6 +225,14 @@ function teamHasEnoughForCapture(gs, team, pres) {
     ? Object.values(gs.players).filter(p => p.team === team).length
     : gs.cfg.teamCaptureSize;
   return pres.byTeam[team].length >= Math.max(1, need);
+}
+
+/** Which hunt.js progress-track key a given player belongs to, per the
+ *  run's own progressMode ('shared'|'teams'|'individual' — mirrors
+ *  hunt.js's own progressKeysFor). */
+function huntTrackKeyFor(gs, p) {
+  const pm = gs.modeState.run.progressMode;
+  return pm === 'shared' ? 'shared' : pm === 'teams' ? p.team : p.userId;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1123,6 +1132,102 @@ const MODES = {
     revealPosition() { return false; },
   },
 
+  // ── SCHNITZELJAGD ("Hunt") ─────────────────────────────────
+  // A pre-authored scavenger-hunt scenario (POIs/routes loaded before the
+  // session even starts, see socket/game.js's lobby:start preflight — the
+  // worker thread itself has no DB access) hosted on hunt.js's own pure
+  // state machine (gs.modeState.run). No shooting, no prep phase — the
+  // scenario dictates everything, so play starts immediately. Cooperative,
+  // not adversarial: nobody is anybody's "opponent" here (isOpponentPair
+  // always false), so every player sees every other player's position
+  // unconditionally — correct for a scavenger hunt, and means no new
+  // fog-of-war code is needed. See snapshotExtras for how a viewer only
+  // ever learns about their OWN progress track's current/completed POIs,
+  // never another team's/player's.
+  schnitzeljagd: {
+    usesTeams: false,
+    initialPhase: () => 'live',
+    shootPhases: [],
+    phaseDurationMs(gs) {
+      // No fixed match clock — hunt.js ends the run itself (run.endedAt)
+      // once every track finishes, which calls endGame() from tick() below
+      // well before this ceiling; it only exists so the client's countdown
+      // never shows something nonsensical if a run somehow never finishes.
+      return gs.cfg.gameDurationMs;
+    },
+    initState(gs) {
+      const hs = gs._huntScenarioData;
+      gs.modeState = {
+        run: hunt.createHuntRun({
+          runId: hs.runId, scenario: hs.scenario, pois: hs.pois, routes: hs.routes,
+          players: Object.values(gs.players).map(p => ({ userId: p.userId, team: p.team })),
+          progressMode: hs.progressMode,
+        }),
+      };
+    },
+    // shootPhases is empty, so actionArHitAttempt's own phase gate always
+    // rejects before ever reaching these — defensive stubs only.
+    canShoot() { return 'wrong_mode'; },
+    targetFilter() { return false; },
+    applyHit() {},
+    tick(gs, t) {
+      const run = gs.modeState.run;
+      if (run.endedAt) return; // already ended this tick cycle — endGame() below only fires once
+      const samplesByKey = {};
+      for (const p of Object.values(gs.players)) {
+        if (!p.lastAccepted) continue;
+        const key = huntTrackKeyFor(gs, p);
+        hunt.checkArrival(run, key, p.lastAccepted);
+        samplesByKey[key] = p.lastAccepted;
+      }
+      hunt.tickHunt(run, samplesByKey);
+      // No win/lose side in a cooperative scavenger hunt — 'complete' isn't
+      // one of the team_a/team_b/player_x/draw strings any other mode uses,
+      // but nothing else special-cases the winner string, so a new one is safe.
+      if (run.endedAt) endGame(gs, 'complete');
+    },
+    onGameEnd() {},
+    snapshotExtras(gs, me) {
+      if (!me) return {};
+      const run = gs.modeState.run;
+      const key = huntTrackKeyFor(gs, me);
+      const track = run.progress[key];
+      if (!track) return {};
+      const group = run.groups[track.groupIdx] || null;
+      return {
+        huntRunId: run.runId,
+        huntGroupIdx: track.groupIdx,
+        huntGroupCount: run.groups.length,
+        huntCompletedAt: track.completedAt,
+        huntRouteDeviation: track.routeDeviation,
+        huntLegDeadlineAt: track.legDeadlineAt,
+        // Only THIS track's current group — never another team's/player's
+        // track, so the client never even receives another track's
+        // coordinates. Plural naturally only for a genuine parallel group.
+        huntCurrentPois: (group?.pois || []).map(p => ({
+          id: p.id, name: p.name, lat: p.lat, lon: p.lon, radiusM: p.radius_m,
+          type: p.poi_type,
+          arrivedAt: track.poiState[p.id]?.arrivedAt ?? null,
+          taskDeadlineAt: track.poiState[p.id]?.taskDeadlineAt ?? null,
+        })),
+        // Completed-so-far POIs for THIS track's whole run (not just the
+        // current group, which hunt.js's advanceGroup clears its own
+        // completedPoiIds for) — lets the client keep rendering past POIs
+        // grayed-out instead of losing them the instant the group advances.
+        huntCompletedPois: gs._huntAllPois.filter(p =>
+          track.groupIdx > gs._huntGroupIdxByPoiId[p.id] ||
+          (track.groupIdx === gs._huntGroupIdxByPoiId[p.id] && track.completedPoiIds.includes(p.id))
+        ).map(p => ({ id: p.id, name: p.name, lat: p.lat, lon: p.lon, radiusM: p.radius_m, type: p.poi_type })),
+      };
+    },
+    // Cooperative, not adversarial — see file-level comment above. Always
+    // false regardless of progressMode; getAropsSnapshot's reveal gate
+    // (`me && !isOpponent`) then always passes, exposing every player's
+    // position to every other player unconditionally, which is correct
+    // here (no hidden-role mechanic exists in a scavenger hunt).
+    isOpponentPair() { return false; },
+  },
+
 };
 
 function dropFlag(gs, flagTeam, carrier, t) {
@@ -1586,7 +1691,29 @@ function createAropsGame(sessionId, players, workshopConfig) {
     _simShotsDone: new Set(),
     _lastSimBotStep: 0,
   };
+  if (subMode === 'schnitzeljagd') {
+    // hunt.js's createHuntRun needs already-loaded scenario/POI/route rows
+    // (it's deliberately DB-free) — the worker thread that runs this
+    // function has no DB access at all, so the socket layer (lobby:start)
+    // loads them on the main thread beforehand and stashes them here.
+    const pre = ar._huntPreloaded;
+    if (!pre) throw new Error('hunt_scenario_not_preloaded');
+    gs._huntScenarioData = {
+      runId: sessionId, scenario: pre.scenario, pois: pre.pois, routes: pre.routes,
+      progressMode: pre.scenario.config?.progressMode || 'shared',
+    };
+  }
   if (mode.initState) mode.initState(gs);
+  if (subMode === 'schnitzeljagd') {
+    // Precomputed once here (not per-tick/per-snapshot) since a run's POI
+    // set/grouping never changes after creation — see snapshotExtras'
+    // huntCompletedPois, the one place gs.modeState.run's own state isn't
+    // a direct passthrough (hunt.js clears completedPoiIds on group advance).
+    gs._huntAllPois = gs.modeState.run.groups.flatMap(g => g.pois);
+    gs._huntGroupIdxByPoiId = Object.fromEntries(
+      gs.modeState.run.groups.flatMap((g, i) => g.pois.map(p => [p.id, i]))
+    );
+  }
   // Simulation scenarios are only ever 1-10s long in total — the normal
   // real-match warmup/base_setup prep phase (tens of seconds, see each
   // mode's initialPhase/phaseDurationMs) would completely dominate that
@@ -2156,6 +2283,24 @@ function actionArDropItem(gs, userId) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  SCHNITZELJAGD actions — thin guards delegating straight to hunt.js's own
+//  pure functions (see MODES.schnitzeljagd.tick for how samples feed in).
+// ═══════════════════════════════════════════════════════════
+function actionArHuntPuzzleAnswer(gs, userId, data) {
+  if (gs.subMode !== 'schnitzeljagd') return { ok: false, err: 'wrong_mode' };
+  const p = gs.players[userId];
+  if (!p) return { ok: false, err: 'not_in_game' };
+  return hunt.submitPuzzleAnswer(gs.modeState.run, huntTrackKeyFor(gs, p), data?.poiId, data?.answer);
+}
+
+function actionArHuntConfirmTask(gs, userId, data) {
+  if (gs.subMode !== 'schnitzeljagd') return { ok: false, err: 'wrong_mode' };
+  const p = gs.players[userId];
+  if (!p) return { ok: false, err: 'not_in_game' };
+  return hunt.confirmTask(gs.modeState.run, huntTrackKeyFor(gs, p), data?.poiId);
+}
+
+// ═══════════════════════════════════════════════════════════
 //  BOTS (debug/testing only — added via LobbyScreen's "+ Bot" button,
 //  never persisted to the users table; see socket.js lobby:ar_update).
 //  Movement is fed through actionArTelemetry like a real client, so
@@ -2579,5 +2724,6 @@ function getAropsSnapshot(gs, userId) {
 module.exports = {
   createAropsGame, tickArops, getAropsSnapshot,
   actionArTelemetry, actionArHitAttempt, actionArUsePerk, actionArUseItem, actionArDropItem, actionArSetBase,
+  actionArHuntPuzzleAnswer, actionArHuntConfirmTask,
   ARO_DEFAULTS: DEFAULTS,
 };

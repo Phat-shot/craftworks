@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Modal, ActivityIndicator, Alert } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { MapView, Camera, ShapeSource, FillLayer, LineLayer, CircleLayer } from '@maplibre/maplibre-react-native';
-import { getSocket, getUser, fetchLobbyQr, saveLastPosition, getDebugEnabled } from '../api';
+import { getSocket, getUser, fetchLobbyQr, saveLastPosition, getDebugEnabled, fetchPlayableHuntScenarios, PlayableHuntScenario } from '../api';
 import Icon, { IconName } from '../components/Icon';
 import ComicMapLayers, { ComicFeature } from '../components/ComicMapLayers';
 import { OSM_STYLE, OSM_STYLE_DARK, blankMapStyle } from '../mapStyle';
@@ -76,6 +76,12 @@ interface ArSettings {
   // test-only, not host-facing.
   timings?: { freezeMs?: number | null; baseSettingMs?: number | null };
   autoScale?: boolean;
+  // Schnitzeljagd: which pre-authored scenario this lobby will run — the
+  // only lobby-side setting this mode has (see server's socket/game.js
+  // lobby:start preflight, which loads the scenario's POIs/routes and
+  // synthesizes a field polygon from them; there's no polygon-drawing step
+  // for this mode at all).
+  huntScenarioId?: string;
 }
 
 const RANGE_PRESETS = [30, 50, 75, 100];
@@ -87,6 +93,7 @@ const SUB_MODES: { id: string; icon: IconName; label: string }[] = [
   { id: 'ctf', icon: 'flag', label: 'CtF' },
   { id: 'seek_destroy', icon: 'bomb', label: 'Bomb' },
   { id: 'deathmatch', icon: 'skull', label: 'DM' },
+  { id: 'schnitzeljagd', icon: 'flagCheckered', label: 'Hunt' },
 ];
 const NEEDS_ZONES: Record<string, number> = { domination: 2, seek_destroy: 1 };
 // Modes with real team assignment — hide_and_seek (all 3 variants: classic,
@@ -116,6 +123,9 @@ const START_ERR: Record<string, string> = {
   not_in_lobby: 'Nicht in der Lobby',
   wrong_mode: 'Falscher Modus',
   ar_update_failed: 'Einstellung konnte nicht gespeichert werden',
+  ar_no_hunt_scenario: 'Szenario auswählen',
+  ar_hunt_scenario_not_found: 'Szenario nicht gefunden',
+  ar_hunt_scenario_empty: 'Szenario hat keine Stationen',
 };
 // Applied once when Debug-Mode is switched on — host can still retune via the
 // normal pickers afterward, nothing here is locked in.
@@ -181,6 +191,11 @@ export default function LobbyScreen({
   const debugEnabled = useMemo(() => getDebugEnabled(), []);
   const [comicMapLoading, setComicMapLoading] = useState(false);
   const [comicMapErr, setComicMapErr] = useState('');
+  // Schnitzeljagd scenario picker (host-only) — fetched once, not gated on
+  // isHunt/isHost so switching into the mode never shows an empty flash
+  // while a request is still in flight.
+  const [huntScenarios, setHuntScenarios] = useState<PlayableHuntScenario[]>([]);
+  useEffect(() => { fetchPlayableHuntScenarios().then(setHuntScenarios); }, []);
   // GPS/compass acquisition — adopted from GameScreen's own useTelemetry()
   // hook instead of this screen's former ~180-line bespoke retry/watchdog
   // implementation (see git history for that version's own hard-won fixes,
@@ -310,6 +325,7 @@ export default function LobbyScreen({
   const polygon = ar.polygon || [];
   const zones = ar.zones || [];
   const subMode = ar.subMode || 'hide_and_seek';
+  const isHunt = subMode === 'schnitzeljagd';
   const teamMode = TEAM_MODES.includes(subMode);
   const hsVariant = ['ffa', 'the_ship'].includes(ar.hsVariant || '') ? ar.hsVariant! : 'classic';
   // ffa/The Ship have no roles at all (not seeker/hider, not team) —
@@ -327,6 +343,13 @@ export default function LobbyScreen({
   const bots = ar.bots || [];
   const debugMode = ar.debugMode || false;
   const hitTrackingMode = ar.hitTrackingMode || 'compass';
+  const selectedHuntScenario = huntScenarios.find(s => s.id === ar.huntScenarioId);
+  // Schnitzeljagd only needs team formation when its chosen scenario was
+  // authored with progressMode==='teams' (see hunt_scenarios.config) —
+  // reuses the exact same toggleTeam/teamOf roster UI every other team
+  // mode already has, just gated open for this one extra case.
+  const huntTeams = isHunt && selectedHuntScenario?.progress_mode === 'teams';
+  const showTeamToggle = (teamMode && teamVariant === 'team') || huntTeams;
   // Bots are display-only overlay from ar_settings — never touch the real
   // socket-driven `members` state, which tracks actual joined players.
   const displayMembers = useMemo(
@@ -797,12 +820,42 @@ export default function LobbyScreen({
       )}
       <View style={st.divider} />
 
-      {isHost && (
+      {/* Schnitzeljagd: no polygon to draw at all — the field comes from
+          the chosen scenario's own POIs (server synthesizes a bounding-box
+          playfield at match start, see socket/game.js's lobby:start). The
+          lobby here is deliberately rudimentary: pick a scenario, form
+          teams if the scenario needs them, nothing else. */}
+      {isHunt && (
+        <View style={st.rowBtns}>
+          <Text style={st.section}>Szenario</Text>
+        </View>
+      )}
+      {isHunt && huntScenarios.length === 0 && (
+        <View style={st.hintRow}>
+          <Icon name="hourglass" size={12} color={theme.text3} />
+          <Text style={st.hint}>Keine Szenarien vorhanden — im Web-Editor eines anlegen</Text>
+        </View>
+      )}
+      {isHunt && huntScenarios.map(s => (
+        <TouchableOpacity key={s.id} disabled={!isHost}
+          style={[st.rowBtns, st.smallBtnRow, ar.huntScenarioId === s.id && st.smallBtnActive]}
+          onPress={() => emitUpdate({ huntScenarioId: s.id })}>
+          <Icon name="flagCheckered" size={14} color={ar.huntScenarioId === s.id ? theme.accent : theme.text2} />
+          <Text style={[st.smallTxt, ar.huntScenarioId === s.id && st.smallTxtActive]}>
+            {s.title} ({s.poi_count} Stationen{s.progress_mode === 'teams' ? ', Teams' : ''})
+          </Text>
+        </TouchableOpacity>
+      ))}
+      {isHunt && <View style={st.divider} />}
+
+      {isHost && !isHunt && (
         <Text style={st.hostHint}>
           Auf die Karte tippen: {tapMode === 'zones' ? 'Zone setzen' : 'Wegpunkt setzen'} — Punkte der Reihe nach im Kreis
         </Text>
       )}
 
+      {!isHunt && (
+      <>
       <View style={st.mapBox}>
         <MapView style={{ flex: 1 }} mapStyle={mapStyle as any} onPress={onMapPress}>
           {/* key changes force MapLibre to re-apply defaultSettings: once when
@@ -870,8 +923,9 @@ export default function LobbyScreen({
           <Text style={st.hint}>Der Host zeichnet das Spielfeld…</Text>
         </View>
       )}
+      </>)}
 
-      {isHost && (
+      {isHost && !isHunt && (
         <>
           <View style={st.rowBtns}>
             {/* Just 2 correction buttons instead of separate undo/clear per
@@ -1035,7 +1089,7 @@ export default function LobbyScreen({
       <View style={st.sectionRow}>
         <Icon name="people" size={13} color={theme.text} />
         <Text style={st.section}>
-          Spieler {isHost ? ((teamMode && teamVariant === 'team') ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
+          Spieler {isHost ? (showTeamToggle ? '(Team antippen)' : rolesApply ? '(Rolle antippen)' : '') : ''}
         </Text>
       </View>
     </View>
@@ -1043,22 +1097,24 @@ export default function LobbyScreen({
 
   const footer = (
     <View>
-      {me && displayMembers.length > 0 && ((teamMode && teamVariant === 'team') || rolesApply) && (
+      {me && displayMembers.length > 0 && (showTeamToggle || rolesApply) && (
         <View style={st.roleRow}>
-          <Icon name={teamMode ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
-            size={14} color={teamMode ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : theme.text} />
+          <Icon name={showTeamToggle ? 'circle' : (roleOf(me.id) === 'seeker' ? 'flashlight' : 'ghost')}
+            size={14} color={showTeamToggle ? (teamOf(me.id) === 'a' ? '#40a0ff' : '#ff5050') : theme.text} />
           <Text style={st.role}>
-            {teamMode
+            {showTeamToggle
               ? `Dein Team: ${teamOf(me.id) === 'a' ? 'A' : 'B'}`
               : `Deine Rolle: ${roleOf(me.id) === 'seeker' ? 'Seeker' : 'Hider'}`}
           </Text>
         </View>
       )}
-      {me && displayMembers.length > 0 && !(teamMode && teamVariant === 'team') && !rolesApply && (
+      {me && displayMembers.length > 0 && !showTeamToggle && !rolesApply && (
         <View style={st.roleRow}>
-          <Icon name={hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color={theme.text} />
+          <Icon name={isHunt ? 'flagCheckered' : hsVariant === 'the_ship' ? 'mask' : 'crosshair'} size={14} color={theme.text} />
           <Text style={st.role}>
-            {hsVariant === 'the_ship'
+            {isHunt
+              ? 'Gemeinsam — alle sehen dieselben Stationen'
+              : hsVariant === 'the_ship'
               ? 'Dein Ziel wird nur dir angezeigt, sobald das Spiel startet'
               : teamMode && teamVariant === 'ffa'
               ? 'Jeder gegen jeden — jeder spielt für sich, keine Teams'
@@ -1101,7 +1157,7 @@ export default function LobbyScreen({
           <View style={st.row}>
             {item.isBot && <Icon name="robot" size={13} color={theme.text3} />}
             <Text style={st.name}>{item.username}</Text>
-            {(teamMode && teamVariant === 'team') ? (
+            {showTeamToggle ? (
               <TouchableOpacity disabled={!isHost} style={st.roleTagRow} onPress={() => toggleTeam(item.id)}>
                 <Icon name="circle" size={11} color={teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050'} />
                 <Text style={[st.roleTag, { color: teamOf(item.id) === 'a' ? '#40a0ff' : '#ff5050' }]}>
@@ -1121,23 +1177,27 @@ export default function LobbyScreen({
               </TouchableOpacity>
             )}
             {/* Klasse (scout/sniper/bomber) — additiv zu Rolle/Team, jeder
-                Modus, optional. Tap zum Durchschalten wie IR-ID oben;
-                Long-Press zeigt die Steckbrief-Kurzbeschreibung (Tooltip-
-                Pattern für Touch-Geräte, siehe AR-Ops-Modi-Plan Phase 7). */}
-            <TouchableOpacity disabled={!isHost} style={st.roleTagRow}
-              onPress={() => cycleClass(item.id)}
-              onLongPress={() => {
-                const cls = classOf(item.id);
-                Alert.alert(
-                  cls ? PLAYER_TYPE_PROFILES[cls].name : 'Keine Klasse',
-                  cls ? PLAYER_TYPE_PROFILES[cls].shortDescription : 'Standard-Schusswerte, kein Klassen-Perk.'
-                );
-              }}>
-              <Icon name="shieldAccount" size={12} color={classOf(item.id) ? theme.accent : theme.text3} />
-              <Text style={[st.roleTag, classOf(item.id) && { color: theme.accent }]}>
-                {classOf(item.id) ? PLAYER_TYPE_PROFILES[classOf(item.id)!].name : '–'}
-              </Text>
-            </TouchableOpacity>
+                Kampfmodus, optional. Nicht bei Schnitzeljagd (kein Kampf,
+                keine Klassen-Perks — siehe MODES.schnitzeljagd in arops.js).
+                Tap zum Durchschalten wie IR-ID oben; Long-Press zeigt die
+                Steckbrief-Kurzbeschreibung (Tooltip-Pattern für Touch-
+                Geräte, siehe AR-Ops-Modi-Plan Phase 7). */}
+            {!isHunt && (
+              <TouchableOpacity disabled={!isHost} style={st.roleTagRow}
+                onPress={() => cycleClass(item.id)}
+                onLongPress={() => {
+                  const cls = classOf(item.id);
+                  Alert.alert(
+                    cls ? PLAYER_TYPE_PROFILES[cls].name : 'Keine Klasse',
+                    cls ? PLAYER_TYPE_PROFILES[cls].shortDescription : 'Standard-Schusswerte, kein Klassen-Perk.'
+                  );
+                }}>
+                <Icon name="shieldAccount" size={12} color={classOf(item.id) ? theme.accent : theme.text3} />
+                <Text style={[st.roleTag, classOf(item.id) && { color: theme.accent }]}>
+                  {classOf(item.id) ? PLAYER_TYPE_PROFILES[classOf(item.id)!].name : '–'}
+                </Text>
+              </TouchableOpacity>
+            )}
             <Icon name={item.ready ? 'checkCircle' : 'checkboxBlank'} size={14}
               color={item.ready ? '#80ff40' : theme.text3} style={{ marginLeft: 8 }} />
             {isHost && item.isBot && (

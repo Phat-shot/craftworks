@@ -84,7 +84,7 @@ rechnen mit exakt demselben Code (Hit-Validierung, Geofence, Zonen-Timing).
   Spielfelds (Straßenraster, Gebäude, Wasser/Rasen/Wald) — rein lokal und
   deterministisch aus dem gezeichneten Polygon abgeleitet, kein externer
   Dienst, kein Foto, keine Satellitendaten
-- Testabdeckung: 151 Tests (29 Lifecycle + 110 Modi + 12 Comic-Map), laufen
+- Testabdeckung: 156 Tests (29 Lifecycle + 115 Modi + 12 Comic-Map), laufen
   bei jedem relevanten Umbau als Regressionsanker (`server/test/arops_*.test.js`)
 
 ### RTS „Spirale“
@@ -262,7 +262,7 @@ server {
 │   └── db/schema.sql            PostgreSQL-Schema (auto-init)
 ├── server/test/
 │   ├── arops_lifecycle.test.js  29 Tests
-│   ├── arops_modes.test.js      110 Tests
+│   ├── arops_modes.test.js      115 Tests
 │   └── comic_map.test.js        12 Tests
 ├── client/src/
 │   ├── pages/                   Login, Home, Chat, Friends, Lobby, Workshop,

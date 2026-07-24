@@ -84,6 +84,8 @@ function handleAction({ action, userId, data, reqId }) {
     case 'ar_use_item':     result = arops.actionArUseItem(gs, userId); break;
     case 'ar_drop_item':    result = arops.actionArDropItem(gs, userId); break;
     case 'ar_set_base':     result = arops.actionArSetBase(gs, userId, data); break;
+    case 'ar_hunt_puzzle_answer': result = arops.actionArHuntPuzzleAnswer(gs, userId, data); break;
+    case 'ar_hunt_confirm_task':  result = arops.actionArHuntConfirmTask(gs, userId, data); break;
     default: result = { ok:false, err:'unknown_action' };
   }
   parentPort.postMessage({ type: 'action_result', reqId, result });
