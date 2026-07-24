@@ -44,8 +44,40 @@ services:
       SMTP_PASS:          ${SMTP_PASS:-}
       SMTP_FROM:          ${SMTP_FROM:-noreply@localhost}
       HASH_SALT:          ${HASH_SALT}
+      # Reached over compose's own default network by container name — see
+      # server/src/game/comic_map.js. Comic-map generation degrades to the
+      # procedural fallback if this is unset/unreachable, never blocks the
+      # lobby flow (see that file's header). If test/prod run as separate
+      # standalone containers instead of this compose file (see CLAUDE.md),
+      # point this at the shared overpass container over a shared Docker
+      # network instead (e.g. http://overpass:80/api/interpreter).
+      OVERPASS_URL:       ${OVERPASS_URL:-http://overpass/api/interpreter}
     volumes:
       - ./uploads:/app/uploads
+
+  # Self-hosted Overpass API — real building/road/water/vegetation data for
+  # the comic map, fed from a DACH-region (Germany+Austria+Switzerland)
+  # extract instead of the public, rate-limited overpass-api.de — no
+  # external dependency, no shared cache to go stale (see
+  # server/src/game/comic_map.js and CLAUDE.md's deployment section). First
+  # start imports ./data/osm-extract/dach-latest.osm.pbf (fetch it once via
+  # scripts/update-overpass-data.sh before first `docker compose up`) —
+  # budget real time (tens of minutes+) and disk (~25-30GB) for that
+  # import. No OVERPASS_DIFF_URL — deliberately no live diff-replication,
+  # see scripts/update-overpass-data.sh for the periodic full-refresh
+  # instead. Shared by both :test and :latest if they run on this same
+  # host — one instance, one dataset, half the disk/RAM/maintenance of
+  # running it per-environment.
+  overpass:
+    image: wiktorn/overpass-api:latest
+    container_name: platform_overpass
+    restart: unless-stopped
+    volumes:
+      - ./data/osm-extract:/download
+      - ./data/overpass-db:/db
+    environment:
+      OVERPASS_META:        "no"
+      OVERPASS_PLANET_URL:  file:///download/dach-latest.osm.pbf
 
 # No named volumes — data is in ./data next to this file
 # Uploads persist in ./uploads next to this file

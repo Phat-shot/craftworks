@@ -69,6 +69,24 @@ cd apps/arops-mobile && npm run sync-shared
   Container auf eigenem Port laufen lassen (eigene DATABASE_URL verwenden, nie die Prod-DB!),
   Endpoint `https://dev.srz.one`
 - **Prod**: `:latest` nach Merge auf main, Endpoint `https://arops.srz.one`
+- **Comic-Map / Overpass**: `server/src/game/comic_map.js` holt echte Gebäude/
+  Straßen/Wasser-Daten von einem selbst gehosteten Overpass-Container
+  (`wiktorn/overpass-api`, DACH-Extrakt via Geofabrik, siehe
+  `scripts/update-overpass-data.sh`) — fällt bei Nichterreichbarkeit/
+  Timeout/leerem Ergebnis automatisch auf den lokalen prozeduralen
+  Generator zurück (nie ein Blocker für den Lobby-Flow). **Eine
+  gemeinsame Instanz für Test + Prod** (Kartendaten müssen nicht pro
+  Umgebung getrennt sein) — laufen test/prod als eigene Container auf
+  demselben Host (statt via `docker-compose.yml`), beide über ein
+  gemeinsames Docker-Netzwerk mit dem Overpass-Container verbinden
+  (`docker network create craftworks-net`, alle drei Container mit
+  `--network craftworks-net`) und `OVERPASS_URL=http://overpass:80/api/interpreter`
+  setzen. Erst-Import: `scripts/update-overpass-data.sh` einmal laufen
+  lassen (lädt `dach-latest.osm.pbf`, ~5.8GB, danach Import — Minuten bis
+  Stunden je nach Host, ~25-30GB Plattenplatz einplanen), danach
+  monatlich per Cron für frische Daten (keine Live-Diff-Replikation,
+  bewusst — siehe Skript-Kommentar). Lokale Entwicklung: `overpass` ist
+  bereits Teil von `docker-compose.local.yml`
 - **App-Backend-Endpoint ist ein Build-Time-Env-Var** (`SERVER_URL`, ausgewertet in
   `apps/arops-mobile/app.config.js` → `expo-constants`, siehe `src/config.ts`) —
   gesetzt vom Branch im GitHub-Workflow "APK Build" (test → dev.srz.one,

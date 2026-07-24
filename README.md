@@ -80,11 +80,14 @@ rechnen mit exakt demselben Code (Hit-Validierung, Geofence, Zonen-Timing).
   Spieler), Solo-Testing ohne zweiten Spieler, Live-Overlay mit Distanz/
   Schusskegel pro Gegner — host-only, nie Default, hebt die Privacy-Regel
   ausschließlich für diese Sessions auf
-- **Comic-Karte**: prozedural generierte, comicartige Kartendarstellung des
-  Spielfelds (Straßenraster, Gebäude, Wasser/Rasen/Wald) — rein lokal und
-  deterministisch aus dem gezeichneten Polygon abgeleitet, kein externer
-  Dienst, kein Foto, keine Satellitendaten
-- Testabdeckung: 156 Tests (29 Lifecycle + 115 Modi + 12 Comic-Map), laufen
+- **Comic-Karte**: comicartige Kartendarstellung des Spielfelds (Gebäude,
+  Straßen, Wasser/Rasen/Wald) — echte OpenStreetMap-Daten von einem selbst
+  gehosteten, lokalen Overpass-Dienst (DACH-Extrakt, kein öffentlicher
+  Dienst, kein Rate-Limit), mit einem rein lokalen prozeduralen Generator
+  als automatischem Fallback, falls dieser Dienst gerade nicht erreichbar
+  ist — nie ein Blocker für den Lobby-Flow. Kein Foto, keine
+  Satellitendaten
+- Testabdeckung: 179 Tests (29 Lifecycle + 115 Modi + 35 Comic-Map), laufen
   bei jedem relevanten Umbau als Regressionsanker (`server/test/arops_*.test.js`)
 
 ### RTS „Spirale“
@@ -251,7 +254,7 @@ server {
 │   │                             games, legal, brands, workshop*)
 │   ├── game/
 │   │   ├── arops.js             AR-Ops-Engine (Haupt-Thread)
-│   │   ├── comic_map.js         Prozedural generierte Comic-Karte (kein externer Dienst)
+│   │   ├── comic_map.js         Comic-Karte: echte Daten (lokaler Overpass) + prozeduraler Fallback
 │   │   ├── engine.js            RTS-Engine (td/vs/ta/pve, ein File)
 │   │   ├── towers.js            Tower-/Block-Definitionen
 │   │   ├── data/factions.js     Generals-Fraktionen (USA/China/GLA)
@@ -263,7 +266,7 @@ server {
 ├── server/test/
 │   ├── arops_lifecycle.test.js  29 Tests
 │   ├── arops_modes.test.js      115 Tests
-│   └── comic_map.test.js        12 Tests
+│   └── comic_map.test.js        35 Tests
 ├── client/src/
 │   ├── pages/                   Login, Home, Chat, Friends, Lobby, Workshop,
 │   │                             Brands, MapSelect, Legal, …

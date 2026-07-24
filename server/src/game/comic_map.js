@@ -1,18 +1,111 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════
-//  AR OPS — "Comic map": procedurally generated toy-town overlay
-//  (buildings/roads/paths/forest/water/grass) for the host-drawn field.
-//  Fully local, deterministic, no network, no DB. Replaces the previous
-//  OpenStreetMap Overpass-based fetch+cache, which could get permanently
-//  stuck serving a stale, sparse dataset for any field drawn inside an
-//  old, much larger field's cached bounding box (that older fetch got
-//  capped at a fixed feature count and cached under an expanded bbox
-//  that any smaller later field would keep matching forever). Pure
-//  geometry only, no socket/DB deps, so this stays trivially unit-testable.
+//  AR OPS — "Comic map": real building/road/vegetation footprints for the
+//  host-drawn field, fetched from a self-hosted LOCAL Overpass API
+//  instance (own container, own DACH-region OSM extract — no external
+//  rate limit, no shared public infra to protect, see CLAUDE.md's
+//  deployment section). Falls back to a fully local, deterministic
+//  PROCEDURAL generator (toy-town streets/buildings/vegetation, see
+//  generateComicMapFeatures below) whenever the local Overpass instance is
+//  unreachable/still importing/timed out, or a genuinely unmapped area
+//  returns nothing — the host always gets *something*, real data is just
+//  always tried first (see getComicMapFeatures, the actual entry point).
+//
+//  Deliberately NO cache: every request queries its own tight bbox fresh.
+//  The previous (pre-procedural-rewrite) design cached a bbox EXPANDED
+//  well beyond what was requested so nearby future lobbies could reuse
+//  it — that's exactly what once got permanently stuck serving a stale,
+//  truncated dataset to any smaller field drawn inside an old, much
+//  larger field's cached area. Not caching at all removes that whole bug
+//  class rather than trying to patch it — a local, unrate-limited
+//  instance doesn't need the reuse-across-lobbies optimization that
+//  caching existed for in the first place.
 // ═══════════════════════════════════════════════════════════
 const { toLocalXY, destinationPoint, polygonAreaM2 } = require('@craftworks/arops-shared');
 
+// Internal Docker network hostname of the self-hosted Overpass container
+// (see CLAUDE.md) — overridable for local dev / alternate deployments.
+const OVERPASS_URL = process.env.OVERPASS_URL || 'http://overpass/api/interpreter';
+// A local instance should answer fast — fail over to the procedural
+// fallback quickly rather than making a host wait on a slow/stuck request.
+const OVERPASS_TIMEOUT_MS = 8_000;
+// Client-payload/render-performance guard only now — NOT a rate-limit
+// workaround (no external limit left to protect), and never cached
+// truncated (see header), so a re-request for the same area just
+// deterministically truncates the same way again rather than going stale.
+const COMIC_MAP_MAX_FEATURES = 1200;
+
 const round6 = v => Math.round(v * 1e6) / 1e6;
+
+function comicFeatureType(tags) {
+  if (!tags) return null;
+  if (tags.building) return 'building';
+  if (tags.natural === 'water') return 'water';
+  if (tags.natural === 'wood' || tags.landuse === 'forest') return 'forest';
+  if (tags.landuse === 'grass' || tags.leisure === 'park') return 'grass';
+  if (tags.highway) {
+    return ['footway', 'path', 'track', 'pedestrian', 'steps'].includes(tags.highway) ? 'path' : 'road';
+  }
+  return null;
+}
+
+/** Pure: raw Overpass `elements` -> slim {type, points}[] for clients (no OSM tags). */
+function reduceOverpassElements(elements) {
+  const out = [];
+  for (const el of elements || []) {
+    if (out.length >= COMIC_MAP_MAX_FEATURES) break;
+    const type = comicFeatureType(el?.tags);
+    if (!type || !Array.isArray(el.geometry)) continue;
+    const points = el.geometry
+      .filter(p => p && Number.isFinite(p.lat) && Number.isFinite(p.lon))
+      .map(p => ({ lat: round6(p.lat), lon: round6(p.lon) }));
+    if (points.length < 2) continue;
+    out.push({ type, points });
+  }
+  return out;
+}
+
+/** Bounding box (with small padding) covering all polygon points — always
+ *  the TIGHT bbox for exactly what was requested, no expansion-for-reuse
+ *  (see file header on why that specifically caused the original bug). */
+function polygonBbox(polygon, paddingDeg = 0.0005) {
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const p of polygon) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon;
+    if (p.lon > maxLon) maxLon = p.lon;
+  }
+  return { south: minLat - paddingDeg, west: minLon - paddingDeg, north: maxLat + paddingDeg, east: maxLon + paddingDeg };
+}
+
+/** Fetch buildings/paths/vegetation for the field's own (tight) bounding
+ *  box from the self-hosted local Overpass instance. Never called
+ *  directly by the socket layer — see getComicMapFeatures below, which
+ *  wraps this with the procedural fallback and never lets a failure here
+ *  propagate up to break the lobby flow. */
+async function fetchRealComicMapFeatures(polygon) {
+  const bbox = polygonBbox(polygon);
+  const bboxStr = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
+  const query = `[out:json][timeout:15];(` +
+    `way["building"](${bboxStr});` +
+    `way["highway"](${bboxStr});` +
+    `way["natural"="wood"](${bboxStr});` +
+    `way["natural"="water"](${bboxStr});` +
+    `way["landuse"="forest"](${bboxStr});` +
+    `way["landuse"="grass"](${bboxStr});` +
+    `way["leisure"="park"](${bboxStr});` +
+    `);out geom;`;
+  const res = await fetch(OVERPASS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(query),
+    signal: AbortSignal.timeout(OVERPASS_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`overpass_http_${res.status}`);
+  const data = await res.json();
+  return reduceOverpassElements(data.elements);
+}
 
 /** FNV-1a 32-bit hash over the polygon's own coordinates (fixed-precision
  *  formatting avoids float-representation nondeterminism) — the default
@@ -295,7 +388,28 @@ function generateComicMapFeatures(polygon, opts = {}) {
   return features;
 }
 
+/** Main entry point for lobby:generate_comic_map — tries real local OSM
+ *  data first, falls back to the deterministic procedural generator on
+ *  any failure (unreachable/timeout/non-2xx) or an empty result (a
+ *  genuinely unmapped area). Never throws — matches this module's "nice-
+ *  to-have visual, never a gameplay dependency" invariant even more
+ *  thoroughly than the original Overpass-only design ever did. */
+async function getComicMapFeatures(polygon, opts = {}) {
+  try {
+    const real = await fetchRealComicMapFeatures(polygon);
+    if (real.length > 0) return real;
+  } catch (e) {
+    console.warn('[comic_map] local Overpass fetch failed, falling back to procedural:', e.message);
+  }
+  return generateComicMapFeatures(polygon, opts);
+}
+
 module.exports = {
   polygonSeed,
   generateComicMapFeatures,
+  comicFeatureType,
+  reduceOverpassElements,
+  polygonBbox,
+  fetchRealComicMapFeatures,
+  getComicMapFeatures,
 };

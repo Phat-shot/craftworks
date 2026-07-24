@@ -40,6 +40,32 @@ services:
       SMTP_PASS:          ""
       SMTP_FROM:          noreply@localhost
       HASH_SALT:          local_salt_changeme
+      # Reached over compose's own default network by container name — see
+      # server/src/game/comic_map.js. Comic-map generation degrades to the
+      # procedural fallback if this is unset/unreachable, never blocks the
+      # lobby flow (see that file's header).
+      OVERPASS_URL:       http://overpass/api/interpreter
+
+  # Self-hosted Overpass API — real building/road/water/vegetation data for
+  # the comic map (see server/src/game/comic_map.js and CLAUDE.md's
+  # deployment section), fed from a DACH-region (Germany+Austria+
+  # Switzerland) extract instead of the public, rate-limited overpass-api.de
+  # — no external dependency, no shared cache to go stale. First start
+  # imports scripts/osm-extract/dach-latest.osm.pbf (fetch it once via
+  # scripts/update-overpass-data.sh before first `docker compose up`) —
+  # budget real time (tens of minutes+) and disk (~25-30GB) for that import.
+  # No OVERPASS_DIFF_URL — deliberately no live diff-replication, see
+  # scripts/update-overpass-data.sh for the periodic full-refresh instead.
+  overpass:
+    image: wiktorn/overpass-api:latest
+    restart: unless-stopped
+    volumes:
+      - ./data/osm-extract:/download
+      - overpass_db_local:/db
+    environment:
+      OVERPASS_META:        "no"
+      OVERPASS_PLANET_URL:  file:///download/dach-latest.osm.pbf
 
 volumes:
   pgdata_local:
+  overpass_db_local:

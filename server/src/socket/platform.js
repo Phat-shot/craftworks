@@ -6,7 +6,7 @@
 // keine Änderung an der eigentlichen Domain-Logik.
 const { RACES } = require('../game/towers');
 const aropsShared = require('@craftworks/arops-shared');
-const { generateComicMapFeatures } = require('../game/comic_map');
+const { getComicMapFeatures } = require('../game/comic_map');
 const users = require('../repositories/users');
 
 // Füllt fehlende AR-Ops-Rollen/Teams für alle aktuellen Mitglieder auf, damit
@@ -406,8 +406,9 @@ function registerPlatformHandlers(io, socket, db) {
     }
   });
 
-  // ── AR OPS: host generates the "comic map" (procedurally generated toy-
-  // town overlay for the field, see game/comic_map.js) ──
+  // ── AR OPS: host generates the "comic map" (real OSM data from a local
+  // self-hosted Overpass instance, procedural toy-town fallback if that's
+  // unavailable — see game/comic_map.js) ──
   socket.on('lobby:generate_comic_map', async ({ lobbyId, reqId, polygon: clientPolygon }) => {
     try {
       const { rows } = await db.query('SELECT host_id, game_mode, workshop_map_config FROM lobbies WHERE id=$1', [lobbyId]);
@@ -436,7 +437,7 @@ function registerPlatformHandlers(io, socket, db) {
         return socket.emit('lobby:comic_map_error', { reqId, err: 'invalid_polygon' });
       }
 
-      const features = generateComicMapFeatures(polygon);
+      const features = await getComicMapFeatures(polygon);
       const comicMap = { features, polygonSnapshot: JSON.stringify(polygon), fetchedAt: Date.now() };
       const next = { ...ar, comicMap };
       const cfg = { ...(rows[0].workshop_map_config || {}), game_mode: 'ar_ops', ar_settings: next };

@@ -1,17 +1,40 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════
-//  Comic-map generation — pure, synchronous, deterministic (no
-//  network, no DB). See src/game/comic_map.js's header for why.
+//  Comic-map generation — real-OSM-data-first with a pure/synchronous/
+//  deterministic procedural fallback. See src/game/comic_map.js's header
+//  for the design. No live network call in these tests — the Overpass-
+//  path tests mock `fetch` (getComicMapFeatures's own fallback logic is
+//  exactly what's under test there, not the real self-hosted instance).
 //  Run: node server/test/comic_map.test.js
 // ═══════════════════════════════════════════════════════════
 const assert = require('assert');
-const { generateComicMapFeatures, polygonSeed } = require('../src/game/comic_map');
+const {
+  generateComicMapFeatures, polygonSeed,
+  comicFeatureType, reduceOverpassElements, polygonBbox, getComicMapFeatures,
+} = require('../src/game/comic_map');
 
 let passed = 0, failed = 0;
 function check(name, fn) {
   try { fn(); passed++; console.log('  ✓ ' + name); }
   catch (e) { failed++; console.error('  ✗ ' + name + ' — ' + e.message); }
 }
+async function checkAsync(name, fn) {
+  try { await fn(); passed++; console.log('  ✓ ' + name); }
+  catch (e) { failed++; console.error('  ✗ ' + name + ' — ' + e.message); }
+}
+/** Temporarily replaces global.fetch for the duration of `fn`, always
+ *  restoring it afterward (even on failure) — no real network call ever
+ *  happens in these tests. */
+async function withMockedFetch(impl, fn) {
+  const original = global.fetch;
+  global.fetch = impl;
+  try { await fn(); } finally { global.fetch = original; }
+}
+const fakeRes = (elements, status = 200) => ({
+  ok: status >= 200 && status < 300, status,
+  json: async () => ({ elements }),
+});
+const way = (tags, geometry) => ({ type: 'way', id: Math.random(), tags, geometry });
 
 /** Axis-aligned square polygon, `halfSizeDeg` degrees from center to edge. */
 function square(lat, lon, halfSizeDeg) {
@@ -24,6 +47,89 @@ function square(lat, lon, halfSizeDeg) {
 }
 
 const TYPES = new Set(['building', 'road', 'path', 'forest', 'water', 'grass']);
+
+console.log('\n═══ comicFeatureType ═══');
+check('building tag → building', () => {
+  assert.equal(comicFeatureType({ building: 'yes' }), 'building');
+});
+check('highway=footway → path', () => {
+  assert.equal(comicFeatureType({ highway: 'footway' }), 'path');
+});
+check('highway=primary → road', () => {
+  assert.equal(comicFeatureType({ highway: 'primary' }), 'road');
+});
+check('natural=wood → forest', () => {
+  assert.equal(comicFeatureType({ natural: 'wood' }), 'forest');
+});
+check('landuse=forest → forest', () => {
+  assert.equal(comicFeatureType({ landuse: 'forest' }), 'forest');
+});
+check('natural=water → water', () => {
+  assert.equal(comicFeatureType({ natural: 'water' }), 'water');
+});
+check('landuse=grass → grass', () => {
+  assert.equal(comicFeatureType({ landuse: 'grass' }), 'grass');
+});
+check('leisure=park → grass', () => {
+  assert.equal(comicFeatureType({ leisure: 'park' }), 'grass');
+});
+check('unrelated tags → null (excluded)', () => {
+  assert.equal(comicFeatureType({ amenity: 'cafe' }), null);
+});
+check('no tags → null', () => {
+  assert.equal(comicFeatureType(undefined), null);
+});
+
+console.log('\n═══ reduceOverpassElements ═══');
+check('reduces a building way to {type, points}', () => {
+  const els = [way({ building: 'yes' }, [{ lat: 48.1362395, lon: 11.5769961 }, { lat: 48.1363, lon: 11.5771 }])];
+  const out = reduceOverpassElements(els);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].type, 'building');
+  assert.equal(out[0].points.length, 2);
+});
+check('coordinates rounded to 6 decimals', () => {
+  const els = [way({ building: 'yes' }, [{ lat: 48.123456789, lon: 11.987654321 }, { lat: 48.1, lon: 11.9 }])];
+  const out = reduceOverpassElements(els);
+  assert.equal(out[0].points[0].lat, 48.123457);
+  assert.equal(out[0].points[0].lon, 11.987654);
+});
+check('elements without a recognized tag are excluded', () => {
+  const els = [way({ amenity: 'cafe' }, [{ lat: 1, lon: 1 }, { lat: 2, lon: 2 }])];
+  assert.equal(reduceOverpassElements(els).length, 0);
+});
+check('elements with fewer than 2 valid points are excluded', () => {
+  const els = [
+    way({ building: 'yes' }, [{ lat: 1, lon: 1 }]),
+    way({ building: 'yes' }, []),
+    way({ building: 'yes' }, null),
+  ];
+  assert.equal(reduceOverpassElements(els).length, 0);
+});
+check('invalid lat/lon entries inside geometry are filtered out, not the whole way', () => {
+  const els = [way({ building: 'yes' }, [{ lat: 1, lon: 1 }, { lat: NaN, lon: 2 }, { lat: 3, lon: 3 }])];
+  const out = reduceOverpassElements(els);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].points.length, 2);
+});
+check('caps output at COMIC_MAP_MAX_FEATURES', () => {
+  const els = Array.from({ length: 1300 }, () => way({ building: 'yes' }, [{ lat: 1, lon: 1 }, { lat: 2, lon: 2 }]));
+  assert.equal(reduceOverpassElements(els).length, 1200);
+});
+check('empty/undefined elements → empty array, no throw', () => {
+  assert.deepEqual(reduceOverpassElements([]), []);
+  assert.deepEqual(reduceOverpassElements(undefined), []);
+});
+
+console.log('\n═══ polygonBbox ═══');
+check('computes min/max with padding', () => {
+  const poly = [{ lat: 48.10, lon: 11.50 }, { lat: 48.14, lon: 11.58 }, { lat: 48.12, lon: 11.55 }];
+  const bbox = polygonBbox(poly, 0.001);
+  assert.ok(Math.abs(bbox.south - (48.10 - 0.001)) < 1e-9);
+  assert.ok(Math.abs(bbox.north - (48.14 + 0.001)) < 1e-9);
+  assert.ok(Math.abs(bbox.west - (11.50 - 0.001)) < 1e-9);
+  assert.ok(Math.abs(bbox.east - (11.58 + 0.001)) < 1e-9);
+});
 
 console.log('\n═══ determinism ═══');
 check('same polygon -> byte-identical output', () => {
@@ -123,5 +229,45 @@ check('a mid-sized field includes buildings, some vegetation/water, and roads/pa
   assert.ok(types.has('road') || types.has('path'));
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+(async () => {
+  console.log('\n═══ getComicMapFeatures (real-data-first, procedural fallback — mocked fetch) ═══');
+  await checkAsync('real Overpass data is used as-is when the fetch succeeds', async () => {
+    const poly = square(48.2, 16.3, 0.001);
+    const realElements = [way({ building: 'yes' }, [{ lat: 48.2001, lon: 16.3001 }, { lat: 48.2002, lon: 16.3002 }])];
+    await withMockedFetch(async () => fakeRes(realElements), async () => {
+      const features = await getComicMapFeatures(poly);
+      assert.equal(features.length, 1);
+      assert.equal(features[0].type, 'building');
+    });
+  });
+  await checkAsync('falls back to the procedural generator when fetch throws', async () => {
+    const poly = square(48.2, 16.3, 0.001);
+    await withMockedFetch(async () => { throw new Error('network_down'); }, async () => {
+      const features = await getComicMapFeatures(poly);
+      assert.deepEqual(features, generateComicMapFeatures(poly));
+    });
+  });
+  await checkAsync('falls back to the procedural generator on a non-2xx response', async () => {
+    const poly = square(48.2, 16.3, 0.001);
+    await withMockedFetch(async () => fakeRes([], 503), async () => {
+      const features = await getComicMapFeatures(poly);
+      assert.deepEqual(features, generateComicMapFeatures(poly));
+    });
+  });
+  await checkAsync('falls back to the procedural generator when Overpass returns no elements (unmapped area)', async () => {
+    const poly = square(48.2, 16.3, 0.001);
+    await withMockedFetch(async () => fakeRes([]), async () => {
+      const features = await getComicMapFeatures(poly);
+      assert.deepEqual(features, generateComicMapFeatures(poly));
+    });
+  });
+  await checkAsync('never throws even if fetch is completely broken', async () => {
+    const poly = square(48.2, 16.3, 0.001);
+    await withMockedFetch(() => { throw new TypeError('fetch is not defined'); }, async () => {
+      await getComicMapFeatures(poly); // must not reject
+    });
+  });
+
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+})();
