@@ -80,11 +80,12 @@ rechnen mit exakt demselben Code (Hit-Validierung, Geofence, Zonen-Timing).
   Spieler), Solo-Testing ohne zweiten Spieler, Live-Overlay mit Distanz/
   Schusskegel pro Gegner — host-only, nie Default, hebt die Privacy-Regel
   ausschließlich für diese Sessions auf
-- **Comic-Karte**: aus echten OpenStreetMap-Daten (Overpass API) generierte,
-  comicartige Kartendarstellung des realen Spielfelds — kein Foto, keine
-  Satellitendaten, aber ein greifbares Abbild der echten Umgebung
-- Testabdeckung: 92 Tests (29 Lifecycle + 45 Modi + 18 Comic-Map), laufen bei
-  jedem relevanten Umbau als Regressionsanker (`server/test/arops_*.test.js`)
+- **Comic-Karte**: prozedural generierte, comicartige Kartendarstellung des
+  Spielfelds (Straßenraster, Gebäude, Wasser/Rasen/Wald) — rein lokal und
+  deterministisch aus dem gezeichneten Polygon abgeleitet, kein externer
+  Dienst, kein Foto, keine Satellitendaten
+- Testabdeckung: 151 Tests (29 Lifecycle + 110 Modi + 12 Comic-Map), laufen
+  bei jedem relevanten Umbau als Regressionsanker (`server/test/arops_*.test.js`)
 
 ### RTS „Spirale“
 
@@ -250,7 +251,7 @@ server {
 │   │                             games, legal, brands, workshop*)
 │   ├── game/
 │   │   ├── arops.js             AR-Ops-Engine (Haupt-Thread)
-│   │   ├── comic_map.js         Overpass-API-Anbindung für die Comic-Karte
+│   │   ├── comic_map.js         Prozedural generierte Comic-Karte (kein externer Dienst)
 │   │   ├── engine.js            RTS-Engine (td/vs/ta/pve, ein File)
 │   │   ├── towers.js            Tower-/Block-Definitionen
 │   │   ├── data/factions.js     Generals-Fraktionen (USA/China/GLA)
@@ -261,8 +262,8 @@ server {
 │   └── db/schema.sql            PostgreSQL-Schema (auto-init)
 ├── server/test/
 │   ├── arops_lifecycle.test.js  29 Tests
-│   ├── arops_modes.test.js      45 Tests
-│   └── comic_map.test.js        18 Tests
+│   ├── arops_modes.test.js      110 Tests
+│   └── comic_map.test.js        12 Tests
 ├── client/src/
 │   ├── pages/                   Login, Home, Chat, Friends, Lobby, Workshop,
 │   │                             Brands, MapSelect, Legal, …

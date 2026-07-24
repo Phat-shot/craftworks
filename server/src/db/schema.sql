@@ -494,24 +494,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FAL
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_creator BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ═══════════════════════════════════════════════════════════════
--- AR OPS: server-side comic-map area cache (see server/src/game/comic_map.js)
--- Each row is one Overpass fetch, deliberately covering a LARGER bbox than
--- the field that triggered it, so nearby future lobbies (same park/field,
--- reused across matches) are served from here instead of re-querying the
--- shared, rate-limited public Overpass API.
--- ═══════════════════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS comic_map_cache (
-  id         SERIAL PRIMARY KEY,
-  south      DOUBLE PRECISION NOT NULL,
-  west       DOUBLE PRECISION NOT NULL,
-  north      DOUBLE PRECISION NOT NULL,
-  east       DOUBLE PRECISION NOT NULL,
-  features   JSONB NOT NULL,
-  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_comic_map_cache_bounds ON comic_map_cache(south, west, north, east);
-
--- ═══════════════════════════════════════════════════════════════
 -- SCHNITZELJAGD ("Hunt"): PC-built POI/route scavenger-hunt scenarios,
 -- played via reusable, time-limited scan codes. Foundation only (schema +
 -- minimal server-side state machine, see server/src/game/hunt.js) — no

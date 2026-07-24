@@ -14,10 +14,7 @@ interface ComicMap { features: ComicFeature[]; polygonSnapshot: string; fetchedA
 const COMIC_MAP_ERR_DE: Record<string, string> = {
   not_host: 'Nur der Host kann das', wrong_mode: 'Falscher Modus',
   no_polygon: 'Erst das Spielfeld zeichnen', invalid_polygon: 'Spielfeld ungültig',
-  lobby_not_found: 'Lobby nicht gefunden', fetch_failed: 'Abruf fehlgeschlagen — später erneut versuchen',
-  rate_limited: 'OpenStreetMap ist gerade überlastet (kostenloser Dienst) — kurz warten und erneut versuchen',
-  timeout: 'Zeitüberschreitung beim Abruf — erneut versuchen',
-  network_error: 'Server konnte OpenStreetMap nicht erreichen — kein Problem der App',
+  lobby_not_found: 'Lobby nicht gefunden', generation_failed: 'Erzeugung fehlgeschlagen — erneut versuchen',
 };
 
 interface Member { id: string; username: string; ready: boolean; }
@@ -249,12 +246,10 @@ export default function LobbyScreen({
       setComicMapLoading(false);
       setAr(a => ({ ...a, comicMap }));
     };
-    const onComicMapError = ({ reqId, err, remainingMs }: any) => {
+    const onComicMapError = ({ reqId, err }: any) => {
       if (reqId !== comicMapReqRef.current) return;
       setComicMapLoading(false);
-      setComicMapErr(err === 'cooldown'
-        ? `Bitte ${Math.ceil((remainingMs ?? 0) / 1000)}s warten`
-        : (COMIC_MAP_ERR_DE[err] || 'Fehler beim Generieren'));
+      setComicMapErr(COMIC_MAP_ERR_DE[err] || 'Fehler beim Generieren');
       setTimeout(() => setComicMapErr(''), 5000);
     };
 
@@ -436,7 +431,6 @@ export default function LobbyScreen({
     emitUpdate(next ? { debugMode: true, ...DEBUG_COOLDOWNS } : { debugMode: false });
   };
 
-  const comicMapStale = !!ar.comicMap && ar.comicMap.polygonSnapshot !== JSON.stringify(polygon);
   const generateComicMap = () => {
     if (polygon.length < 3 || polyErrs.length > 0 || comicMapLoading) return;
     const reqId = Math.random().toString(36).slice(2);
@@ -453,19 +447,21 @@ export default function LobbyScreen({
     getSocket().emit('lobby:generate_comic_map', { lobbyId, reqId, polygon });
   };
 
-  // Once the field becomes valid, auto-generate the comic map a single time
-  // if the host never has (manual "generate"/"regenerate" button still
-  // covers every later case — staleness after edits, retry after failure).
-  // No extra fallback needed on failure: GameScreen already falls back to
-  // plain OSM tiles whenever no comic map exists (see hasComicMap there).
-  const autoGenTriedRef = useRef(false);
+  // Generation is now a fully local, instant computation on the server (no
+  // external service, no rate limit to respect) — auto-(re)generate any
+  // time the host's polygon changes and is valid, debounced so dragging a
+  // point around doesn't fire a request per pixel. Skips re-requesting for
+  // a polygon that's already reflected in the current comic map. No extra
+  // fallback needed on failure: GameScreen already falls back to plain OSM
+  // tiles whenever no comic map exists (see hasComicMap there); the manual
+  // retry button below still covers a one-off socket hiccup.
   useEffect(() => {
-    if (!isHost || autoGenTriedRef.current) return;
-    if (polygon.length >= 3 && polyErrs.length === 0 && !ar.comicMap && !comicMapLoading) {
-      autoGenTriedRef.current = true;
-      generateComicMap();
-    }
-  }, [isHost, polygon.length, polyErrs.length, ar.comicMap, comicMapLoading]);
+    if (!isHost) return;
+    if (polygon.length < 3 || polyErrs.length > 0) return;
+    if (ar.comicMap?.polygonSnapshot === JSON.stringify(polygon)) return;
+    const t = setTimeout(() => generateComicMap(), 400);
+    return () => clearTimeout(t);
+  }, [isHost, polygon, polyErrs.length, ar.comicMap?.polygonSnapshot, comicMapLoading]);
 
   const toggleReady = () => {
     const next = !ready;
@@ -858,17 +854,6 @@ export default function LobbyScreen({
             <Camera defaultSettings={{ centerCoordinate: center, zoomLevel: 14.5 }} />
             <ComicMapLayers features={ar.comicMap.features} />
           </MapView>
-          {comicMapStale ? (
-            <View style={st.comicStaleBadge}>
-              <Icon name="warning" size={11} color="#100" />
-              <Text style={st.comicStaleTxt}>veraltet</Text>
-            </View>
-          ) : (
-            <View style={[st.comicStaleBadge, st.comicCachedBadge]}>
-              <Icon name="checkCircle" size={11} color="#0a2010" />
-              <Text style={st.comicStaleTxt}>gecached</Text>
-            </View>
-          )}
         </View>
       )}
 
@@ -893,13 +878,11 @@ export default function LobbyScreen({
                 point type: "Schritt zurück" undoes whichever kind of point
                 (field/geofence or target/zone) was placed most recently,
                 "Papierkorb" clears everything at once but keeps the comic
-                map + viewport (see everHadFieldRef/clearAllPoints above) —
-                long-press forces a full regenerate regardless of staleness. */}
+                map + viewport (see everHadFieldRef/clearAllPoints above). */}
             <TouchableOpacity style={st.iconBtnLg} onPress={undoLastPoint} disabled={!polygon.length && !zones.length}>
               <Icon name="undo" size={19} color={theme.text2} />
             </TouchableOpacity>
             <TouchableOpacity style={st.iconBtnLg} onPress={clearAllPoints}
-              onLongPress={generateComicMap}
               disabled={!polygon.length && !zones.length}>
               <Icon name="trash" size={19} color={theme.text2} />
             </TouchableOpacity>
@@ -916,12 +899,9 @@ export default function LobbyScreen({
             )}
             <TouchableOpacity style={st.iconBtnLg} onPress={generateComicMap}
               disabled={polygon.length < 3 || polyErrs.length > 0 || comicMapLoading}>
-              {/* Reported: once a map already exists, this used to flip
-                  back to the 'palette' (first-generate) icon whenever it
-                  wasn't currently stale — reading as if a second, different
-                  tap was still needed to "really" refresh. Once any map
-                  exists at all, always show the refresh icon; onPress
-                  already regenerates unconditionally either way. */}
+              {/* The comic map now auto-(re)generates on every polygon
+                  change (see the effect above) — this button is only a
+                  manual-retry fallback for a one-off socket hiccup. */}
               {comicMapLoading ? <ActivityIndicator size="small" color={theme.text2} /> : (
                 <Icon name={ar.comicMap ? 'loop' : 'palette'} size={19} color={theme.text2} />
               )}
@@ -1213,14 +1193,6 @@ function makeStyles(theme: ThemeTokens) {
     hostHint: { color: theme.text3, fontSize: 11, marginBottom: 8 },
     mapBox: { height: 300, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
     comicPreviewBox: { height: 160, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
-    // Stale/cached status badges — semantic (warning-gold / ok-green),
-    // stays literal across themes same as everywhere else status color is used.
-    comicStaleBadge: {
-      position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
-      backgroundColor: '#f0c840', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
-    },
-    comicStaleTxt: { color: '#100', fontSize: 10, fontWeight: '800' },
-    comicCachedBadge: { backgroundColor: '#80e070' },
     rowBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' },
     smallBtn: { backgroundColor: theme.bg3, borderWidth: 1, borderColor: theme.border, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
     smallBtnRow: {

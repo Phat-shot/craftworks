@@ -6,13 +6,8 @@
 // keine Änderung an der eigentlichen Domain-Logik.
 const { RACES } = require('../game/towers');
 const aropsShared = require('@craftworks/arops-shared');
-const { COMIC_MAP_COOLDOWN_MS, getCachedOrFetchComicMapFeatures } = require('../game/comic_map');
+const { generateComicMapFeatures } = require('../game/comic_map');
 const users = require('../repositories/users');
-
-// Per-lobby Cooldown für Comic-Map-Regeneration — Module-Scope-Map, EINMAL
-// pro Serverprozess angelegt (nicht pro Verbindung), sonst würde jeder neue
-// Connect den Cooldown vergessen.
-const comicMapLastTry = new Map();
 
 // Füllt fehlende AR-Ops-Rollen/Teams für alle aktuellen Mitglieder auf, damit
 // jeder Client dieselbe Zuordnung rendert (kein lokales Raten nach Reihenfolge
@@ -411,7 +406,8 @@ function registerPlatformHandlers(io, socket, db) {
     }
   });
 
-  // ── AR OPS: host generates the "comic map" (real geodata for the field) ──
+  // ── AR OPS: host generates the "comic map" (procedurally generated toy-
+  // town overlay for the field, see game/comic_map.js) ──
   socket.on('lobby:generate_comic_map', async ({ lobbyId, reqId, polygon: clientPolygon }) => {
     try {
       const { rows } = await db.query('SELECT host_id, game_mode, workshop_map_config FROM lobbies WHERE id=$1', [lobbyId]);
@@ -440,14 +436,7 @@ function registerPlatformHandlers(io, socket, db) {
         return socket.emit('lobby:comic_map_error', { reqId, err: 'invalid_polygon' });
       }
 
-      const lastTry = comicMapLastTry.get(lobbyId) || 0;
-      const elapsed = Date.now() - lastTry;
-      if (elapsed < COMIC_MAP_COOLDOWN_MS) {
-        return socket.emit('lobby:comic_map_error', { reqId, err: 'cooldown', remainingMs: COMIC_MAP_COOLDOWN_MS - elapsed });
-      }
-      comicMapLastTry.set(lobbyId, Date.now());
-
-      const features = await getCachedOrFetchComicMapFeatures(db, polygon);
+      const features = generateComicMapFeatures(polygon);
       const comicMap = { features, polygonSnapshot: JSON.stringify(polygon), fetchedAt: Date.now() };
       const next = { ...ar, comicMap };
       const cfg = { ...(rows[0].workshop_map_config || {}), game_mode: 'ar_ops', ar_settings: next };
@@ -455,11 +444,7 @@ function registerPlatformHandlers(io, socket, db) {
       io.to(`lobby:${lobbyId}`).emit('lobby:comic_map_ready', { reqId, comicMap });
     } catch (e) {
       console.error('lobby:generate_comic_map error:', e.message);
-      const reason = e.message === 'overpass_rate_limited' ? 'rate_limited'
-        : e.message === 'overpass_timeout' ? 'timeout'
-        : e.message === 'overpass_network_error' ? 'network_error'
-        : 'fetch_failed';
-      socket.emit('lobby:comic_map_error', { reqId, err: reason });
+      socket.emit('lobby:comic_map_error', { reqId, err: 'generation_failed' });
     }
   });
 
